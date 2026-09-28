@@ -122,6 +122,9 @@ void MprisClient::query_player_properties(const char* service) {
     current_player_service_ = service;
     info_.active = true;
     info_.playing = (status && strcmp(status, "Playing") == 0);
+    info_.title.clear();
+    info_.artist.clear();
+    info_.art_url.clear();
     free(status);
 
     // Query Metadata
@@ -148,12 +151,13 @@ void MprisClient::query_player_properties(const char* service) {
                                 sd_bus_message_read(reply, "s", &t);
                                 if (t) info_.title = t;
                                 sd_bus_message_exit_container(reply);
+                            } else {
+                                sd_bus_message_skip(reply, "v");
                             }
                         } else if (strcmp(key, "xesam:artist") == 0) {
                             if (sd_bus_message_enter_container(reply, 'v', "as") >= 0) {
                                 if (sd_bus_message_enter_container(reply, 'a', "s") >= 0) {
                                     const char* a = nullptr;
-                                    info_.artist.clear();
                                     while (sd_bus_message_read(reply, "s", &a) > 0) {
                                         if (!info_.artist.empty()) info_.artist += ", ";
                                         info_.artist += a;
@@ -161,13 +165,20 @@ void MprisClient::query_player_properties(const char* service) {
                                     sd_bus_message_exit_container(reply);
                                 }
                                 sd_bus_message_exit_container(reply);
+                            } else {
+                                sd_bus_message_skip(reply, "v");
                             }
                         } else if (strcmp(key, "mpris:artUrl") == 0) {
                             const char* u = nullptr;
                             if (sd_bus_message_enter_container(reply, 'v', "s") >= 0) {
                                 sd_bus_message_read(reply, "s", &u);
-                                if (u) info_.art_url = u;
+                                if (u) {
+                                    info_.art_url = u;
+                                    std::cout << "[Island] Found artUrl: " << u << "\n";
+                                }
                                 sd_bus_message_exit_container(reply);
+                            } else {
+                                sd_bus_message_skip(reply, "v");
                             }
                         } else {
                             sd_bus_message_skip(reply, "v");

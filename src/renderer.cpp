@@ -36,9 +36,11 @@ cairo_surface_t* Renderer::load_image_scaled(const std::string& path_or_uri, int
     GError* err = nullptr;
     GdkPixbuf* pixbuf = gdk_pixbuf_new_from_file_at_scale(path.c_str(), target_w, target_h, FALSE, &err);
     if (!pixbuf) {
+        std::cerr << "[Island] Failed to load art (" << path << "): " << (err ? err->message : "unknown") << "\n";
         if (err) g_error_free(err);
         return nullptr;
     }
+    std::cout << "[Island] Loaded album art (" << target_w << "x" << target_h << ") for: " << path << "\n";
 
     int width = gdk_pixbuf_get_width(pixbuf);
     int height = gdk_pixbuf_get_height(pixbuf);
