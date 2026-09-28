@@ -1,0 +1,44 @@
+[
+{
+  "directory": "/home/leimsoto/Projects/niri-island/build",
+  "command": "/usr/bin/c++ -I/home/leimsoto/Projects/niri-island/build/generated -I/usr/include/cairo -I/usr/include/libpng16 -I/usr/include/freetype2 -I/usr/include/pixman-1 -I/usr/include/pango-1.0 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/harfbuzz -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/fribidi -I/home/leimsoto/Projects/niri-island/src -O3 -DNDEBUG -std=gnu++20 -O3 -Wall -Wextra -O2 -o CMakeFiles/niri-island.dir/src/main.cpp.o -c /home/leimsoto/Projects/niri-island/src/main.cpp",
+  "file": "/home/leimsoto/Projects/niri-island/src/main.cpp",
+  "output": "CMakeFiles/niri-island.dir/src/main.cpp.o"
+},
+{
+  "directory": "/home/leimsoto/Projects/niri-island/build",
+  "command": "/usr/bin/c++ -I/home/leimsoto/Projects/niri-island/build/generated -I/usr/include/cairo -I/usr/include/libpng16 -I/usr/include/freetype2 -I/usr/include/pixman-1 -I/usr/include/pango-1.0 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/harfbuzz -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/fribidi -I/home/leimsoto/Projects/niri-island/src -O3 -DNDEBUG -std=gnu++20 -O3 -Wall -Wextra -O2 -o CMakeFiles/niri-island.dir/src/wayland.cpp.o -c /home/leimsoto/Projects/niri-island/src/wayland.cpp",
+  "file": "/home/leimsoto/Projects/niri-island/src/wayland.cpp",
+  "output": "CMakeFiles/niri-island.dir/src/wayland.cpp.o"
+},
+{
+  "directory": "/home/leimsoto/Projects/niri-island/build",
+  "command": "/usr/bin/c++ -I/home/leimsoto/Projects/niri-island/build/generated -I/usr/include/cairo -I/usr/include/libpng16 -I/usr/include/freetype2 -I/usr/include/pixman-1 -I/usr/include/pango-1.0 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/harfbuzz -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/fribidi -I/home/leimsoto/Projects/niri-island/src -O3 -DNDEBUG -std=gnu++20 -O3 -Wall -Wextra -O2 -o CMakeFiles/niri-island.dir/src/renderer.cpp.o -c /home/leimsoto/Projects/niri-island/src/renderer.cpp",
+  "file": "/home/leimsoto/Projects/niri-island/src/renderer.cpp",
+  "output": "CMakeFiles/niri-island.dir/src/renderer.cpp.o"
+},
+{
+  "directory": "/home/leimsoto/Projects/niri-island/build",
+  "command": "/usr/bin/c++ -I/home/leimsoto/Projects/niri-island/build/generated -I/usr/include/cairo -I/usr/include/libpng16 -I/usr/include/freetype2 -I/usr/include/pixman-1 -I/usr/include/pango-1.0 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/harfbuzz -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/fribidi -I/home/leimsoto/Projects/niri-island/src -O3 -DNDEBUG -std=gnu++20 -O3 -Wall -Wextra -O2 -o CMakeFiles/niri-island.dir/src/mpris.cpp.o -c /home/leimsoto/Projects/niri-island/src/mpris.cpp",
+  "file": "/home/leimsoto/Projects/niri-island/src/mpris.cpp",
+  "output": "CMakeFiles/niri-island.dir/src/mpris.cpp.o"
+},
+{
+  "directory": "/home/leimsoto/Projects/niri-island/build",
+  "command": "/usr/bin/c++ -I/home/leimsoto/Projects/niri-island/build/generated -I/usr/include/cairo -I/usr/include/libpng16 -I/usr/include/freetype2 -I/usr/include/pixman-1 -I/usr/include/pango-1.0 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/harfbuzz -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/fribidi -I/home/leimsoto/Projects/niri-island/src -O3 -DNDEBUG -std=gnu++20 -O3 -Wall -Wextra -O2 -o CMakeFiles/niri-island.dir/src/island.cpp.o -c /home/leimsoto/Projects/niri-island/src/island.cpp",
+  "file": "/home/leimsoto/Projects/niri-island/src/island.cpp",
+  "output": "CMakeFiles/niri-island.dir/src/island.cpp.o"
+},
+{
+  "directory": "/home/leimsoto/Projects/niri-island/build",
+  "command": "/usr/bin/cc -I/home/leimsoto/Projects/niri-island/build/generated -I/usr/include/cairo -I/usr/include/libpng16 -I/usr/include/freetype2 -I/usr/include/pixman-1 -I/usr/include/pango-1.0 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/harfbuzz -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/fribidi -I/home/leimsoto/Projects/niri-island/src -O3 -DNDEBUG -O3 -Wall -Wextra -O2 -o CMakeFiles/niri-island.dir/generated/xdg-shell-protocol.c.o -c /home/leimsoto/Projects/niri-island/build/generated/xdg-shell-protocol.c",
+  "file": "/home/leimsoto/Projects/niri-island/build/generated/xdg-shell-protocol.c",
+  "output": "CMakeFiles/niri-island.dir/generated/xdg-shell-protocol.c.o"
+},
+{
+  "directory": "/home/leimsoto/Projects/niri-island/build",
+  "command": "/usr/bin/cc -I/home/leimsoto/Projects/niri-island/build/generated -I/usr/include/cairo -I/usr/include/libpng16 -I/usr/include/freetype2 -I/usr/include/pixman-1 -I/usr/include/pango-1.0 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/harfbuzz -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/fribidi -I/home/leimsoto/Projects/niri-island/src -O3 -DNDEBUG -O3 -Wall -Wextra -O2 -o CMakeFiles/niri-island.dir/generated/wlr-layer-shell-unstable-v1-protocol.c.o -c /home/leimsoto/Projects/niri-island/build/generated/wlr-layer-shell-unstable-v1-protocol.c",
+  "file": "/home/leimsoto/Projects/niri-island/build/generated/wlr-layer-shell-unstable-v1-protocol.c",
+  "output": "CMakeFiles/niri-island.dir/generated/wlr-layer-shell-unstable-v1-protocol.c.o"
+}
+]

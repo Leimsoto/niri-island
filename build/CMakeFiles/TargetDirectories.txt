@@ -1,0 +1,3 @@
+/home/leimsoto/Projects/niri-island/build/CMakeFiles/niri-island.dir
+/home/leimsoto/Projects/niri-island/build/CMakeFiles/edit_cache.dir
+/home/leimsoto/Projects/niri-island/build/CMakeFiles/rebuild_cache.dir
