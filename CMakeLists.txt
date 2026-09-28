@@ -17,6 +17,8 @@ pkg_check_modules(DEPS REQUIRED
     pangocairo
     gdk-pixbuf-2.0
     libsystemd
+    libpulse
+    libudev
 )
 
 pkg_get_variable(WAYLAND_SCANNER wayland-scanner wayland_scanner)
@@ -54,6 +56,7 @@ add_executable(niri-island
     src/wayland.cpp
     src/renderer.cpp
     src/mpris.cpp
+    src/osd.cpp
     src/island.cpp
     ${PROTO_SRCS}
 )

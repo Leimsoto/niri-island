@@ -1,8 +1,10 @@
 #include "renderer.hpp"
+#include "osd.hpp"
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <cmath>
 #include <ctime>
 #include <iostream>
+#include <algorithm>
 
 namespace island {
 
@@ -116,7 +118,7 @@ void Renderer::draw_rounded_rect(cairo_t* cr, double x, double y, double w, doub
     cairo_close_path(cr);
 }
 
-void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode, const MediaInfo& media, float anim_time) {
+void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode, const MediaInfo& media, const OsdState& osd, float anim_time) {
     update_art(media.art_url);
 
     double radius = std::min((double)height / 2.0, 22.0);
@@ -146,6 +148,9 @@ void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode, con
             break;
         case IslandMode::MusicExpanded:
             draw_music_expanded(cr, width, height, media, anim_time);
+            break;
+        case IslandMode::HudOSD:
+            draw_hud_osd(cr, width, height, osd);
             break;
     }
 
@@ -435,6 +440,99 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
 
     pango_font_description_free(btn_font);
     g_object_unref(btn_layout);
+}
+
+void Renderer::draw_hud_osd(cairo_t* cr, float w, float h, const OsdState& osd) {
+    // 1. Icon (Left)
+    const char* icon_str = "󰕾";
+    double r_color = 0.3, g_color = 0.82, b_color = 1.0;
+
+    if (osd.type == OsdType::Volume) {
+        if (osd.muted) {
+            icon_str = "󰝟";
+            r_color = 0.96; g_color = 0.4; b_color = 0.45;
+        } else if (osd.value < 0.01f) {
+            icon_str = "󰝟";
+            r_color = 0.65; g_color = 0.68; b_color = 0.75;
+        } else if (osd.value < 0.33f) {
+            icon_str = "󰕿";
+        } else if (osd.value < 0.66f) {
+            icon_str = "󰖀";
+        } else {
+            icon_str = "󰕾";
+        }
+    } else {
+        // Brightness
+        r_color = 1.0; g_color = 0.82; b_color = 0.25;
+        if (osd.value < 0.33f) {
+            icon_str = "󰃞";
+        } else if (osd.value < 0.66f) {
+            icon_str = "󰃝";
+        } else {
+            icon_str = "󰃠";
+        }
+    }
+
+    PangoLayout* icon_layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* icon_font = pango_font_description_from_string("JetBrainsMono Nerd Font 12");
+    pango_layout_set_font_description(icon_layout, icon_font);
+    pango_layout_set_text(icon_layout, icon_str, -1);
+
+    PangoRectangle icon_ink, icon_log;
+    pango_layout_get_pixel_extents(icon_layout, &icon_ink, &icon_log);
+    double icon_y = (h - icon_ink.height) / 2.0 - icon_ink.y;
+
+    cairo_move_to(cr, 13.0 - icon_ink.x, icon_y);
+    cairo_set_source_rgba(cr, r_color, g_color, b_color, 0.98);
+    pango_cairo_show_layout(cr, icon_layout);
+    pango_font_description_free(icon_font);
+    g_object_unref(icon_layout);
+
+    // 2. Value Text (Right)
+    std::string val_str;
+    if (osd.type == OsdType::Volume && osd.muted) {
+        val_str = "MUTE";
+    } else {
+        int pct = static_cast<int>(std::round(osd.value * 100.0f));
+        val_str = std::to_string(pct) + "%";
+    }
+
+    PangoLayout* val_layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* val_font = pango_font_description_from_string("Sans Bold 9.5");
+    pango_layout_set_font_description(val_layout, val_font);
+    pango_layout_set_text(val_layout, val_str.c_str(), -1);
+
+    PangoRectangle val_ink, val_log;
+    pango_layout_get_pixel_extents(val_layout, &val_ink, &val_log);
+    double val_y = (h - val_ink.height) / 2.0 - val_ink.y;
+    double val_x = w - 12.0 - val_ink.width - val_ink.x;
+
+    cairo_move_to(cr, val_x, val_y);
+    cairo_set_source_rgba(cr, 0.92, 0.94, 0.98, 0.95);
+    pango_cairo_show_layout(cr, val_layout);
+    pango_font_description_free(val_font);
+    g_object_unref(val_layout);
+
+    // 3. Fluid Progress Bar (Center)
+    float bar_x = 36.0f;
+    float bar_w = static_cast<float>(val_x) - bar_x - 10.0f;
+    if (bar_w < 20.0f) bar_w = 20.0f;
+    float bar_h = 7.0f;
+    float bar_y = (h - bar_h) / 2.0f;
+
+    // Track Background
+    draw_rounded_rect(cr, bar_x, bar_y, bar_w, bar_h, 3.5);
+    cairo_set_source_rgba(cr, 0.2, 0.22, 0.3, 0.85);
+    cairo_fill(cr);
+
+    // Active Fill
+    float fill_ratio = std::clamp(osd.value, 0.0f, 1.0f);
+    if (fill_ratio > 0.01f && (!osd.muted || osd.type == OsdType::Brightness)) {
+        float fill_w = std::max(7.0f, bar_w * fill_ratio);
+        draw_rounded_rect(cr, bar_x, bar_y, fill_w, bar_h, 3.5);
+        cairo_set_source_rgba(cr, r_color, g_color, b_color, 0.95);
+        cairo_fill(cr);
+    }
 }
 
 } // namespace island

@@ -3,6 +3,7 @@
 #include "wayland.hpp"
 #include "renderer.hpp"
 #include "mpris.hpp"
+#include "osd.hpp"
 #include "spring.hpp"
 #include <chrono>
 
@@ -19,6 +20,7 @@ public:
 private:
     WaylandContext wayland_;
     MprisClient mpris_;
+    OsdManager osd_;
     Renderer renderer_;
 
     Spring width_spring_;

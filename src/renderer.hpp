@@ -10,21 +10,25 @@ namespace island {
 enum class IslandMode {
     Idle,
     MusicCompact,
-    MusicExpanded
+    MusicExpanded,
+    HudOSD
 };
+
+struct OsdState;
 
 class Renderer {
 public:
     Renderer();
     ~Renderer();
 
-    void draw(cairo_t* cr, float width, float height, IslandMode mode, const MediaInfo& media, float anim_time);
+    void draw(cairo_t* cr, float width, float height, IslandMode mode, const MediaInfo& media, const OsdState& osd, float anim_time);
 
 private:
     void draw_rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r);
     void draw_idle(cairo_t* cr, float w, float h);
     void draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo& media, float anim_time);
     void draw_music_expanded(cairo_t* cr, float w, float h, const MediaInfo& media, float anim_time);
+    void draw_hud_osd(cairo_t* cr, float w, float h, const OsdState& osd);
 
     void update_art(const std::string& art_url);
     static cairo_surface_t* load_image_scaled(const std::string& path_or_uri, int target_w, int target_h);

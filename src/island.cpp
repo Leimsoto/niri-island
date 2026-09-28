@@ -35,7 +35,7 @@ bool IslandApp::init() {
     wayland_.create_surface(110, 32);
     last_frame_time_ = std::chrono::steady_clock::now();
 
-    // Set MPRIS callback before initializing MPRIS
+    // Set MPRIS callback
     mpris_.on_change = [this](const MediaInfo& info) {
         if (info.active) {
             std::cout << "[Island] Media: " << info.artist << " - " << info.title 
@@ -49,6 +49,22 @@ bool IslandApp::init() {
         std::cerr << "Failed to init MPRIS (continuing without media)\n";
     }
 
+    // Set OSD callback
+    osd_.on_osd_change = [this](const OsdState& state) {
+        if (state.type == OsdType::Volume) {
+            std::cout << "[Island] OSD Volume: " << static_cast<int>(std::round(state.value * 100))
+                      << "% (" << (state.muted ? "Muted" : "Active") << ")\n";
+        } else {
+            std::cout << "[Island] OSD Brightness: " << static_cast<int>(std::round(state.value * 100)) << "%\n";
+        }
+        update_target_dimensions();
+        wayland_.request_frame_callback();
+    };
+
+    if (!osd_.init()) {
+        std::cerr << "Failed to init OSD Manager\n";
+    }
+
     update_target_dimensions();
 
     // Kick off first frame
@@ -58,7 +74,11 @@ bool IslandApp::init() {
 }
 
 void IslandApp::update_target_dimensions() {
-    if (expanded_) {
+    if (osd_.is_active()) {
+        width_spring_.set_target(210.0f);
+        height_spring_.set_target(34.0f);
+        current_mode_ = IslandMode::HudOSD;
+    } else if (expanded_) {
         width_spring_.set_target(330.0f);
         height_spring_.set_target(115.0f);
         current_mode_ = IslandMode::MusicExpanded;
@@ -74,6 +94,8 @@ void IslandApp::update_target_dimensions() {
 }
 
 void IslandApp::on_hover(bool hovered) {
+    if (osd_.is_active()) return; // Don't interrupt active HUD
+
     if (hovered && mpris_.info().active) {
         expanded_ = true;
     } else if (!hovered) {
@@ -86,6 +108,8 @@ void IslandApp::on_hover(bool hovered) {
 void IslandApp::on_click(int button, int state, double x, double y) {
     // Only handle button press (state == 1), left click (button == 272 / BTN_LEFT in Linux evdev)
     if (state != 1 || button != 272) return;
+
+    if (osd_.is_active()) return;
 
     if (expanded_) {
         float cur_w = width_spring_.value;
@@ -117,6 +141,11 @@ void IslandApp::on_frame() {
 
     anim_time_ += dt;
 
+    // Check if HUD expired
+    if (current_mode_ == IslandMode::HudOSD && !osd_.is_active()) {
+        update_target_dimensions();
+    }
+
     bool animating_w = width_spring_.update(dt);
     bool animating_h = height_spring_.update(dt);
 
@@ -128,12 +157,12 @@ void IslandApp::on_frame() {
 
     cairo_t* cr = wayland_.get_cairo_context(cur_w, cur_h);
     if (cr) {
-        renderer_.draw(cr, cur_w, cur_h, current_mode_, mpris_.info(), anim_time_);
+        renderer_.draw(cr, cur_w, cur_h, current_mode_, mpris_.info(), osd_.state(), anim_time_);
         wayland_.commit_frame(cur_w, cur_h);
     }
 
-    // Continue frame loop if physics are moving or if audio equalizer is dancing
-    bool needs_next_frame = animating_w || animating_h || 
+    // Continue frame loop if physics are moving, or audio equalizer is dancing, or HUD is active
+    bool needs_next_frame = animating_w || animating_h || osd_.is_active() ||
                            (current_mode_ == IslandMode::MusicCompact && mpris_.info().playing);
 
     if (needs_next_frame) {
@@ -142,11 +171,18 @@ void IslandApp::on_frame() {
 }
 
 void IslandApp::run() {
-    struct pollfd fds[2];
+    struct pollfd fds[3];
+    int n_fds = 2;
     fds[0].fd = wayland_.get_fd();
     fds[0].events = POLLIN;
     fds[1].fd = mpris_.get_fd();
     fds[1].events = POLLIN;
+
+    if (osd_.get_udev_fd() >= 0) {
+        fds[2].fd = osd_.get_udev_fd();
+        fds[2].events = POLLIN;
+        n_fds = 3;
+    }
 
     while (running_) {
         // Prepare Wayland events
@@ -155,7 +191,8 @@ void IslandApp::run() {
         }
         wl_display_flush(wayland_.get_display());
 
-        int ret = poll(fds, 2, 500); // 500ms timeout for clock tick
+        int timeout = osd_.is_active() ? 50 : 500;
+        int ret = poll(fds, n_fds, timeout);
         if (ret < 0) {
             break;
         }
@@ -169,6 +206,16 @@ void IslandApp::run() {
 
         if (fds[1].revents & POLLIN) {
             mpris_.update();
+        }
+
+        if (n_fds == 3 && (fds[2].revents & POLLIN)) {
+            osd_.process_udev_events();
+        }
+
+        // Handle HUD timeout transition
+        if (current_mode_ == IslandMode::HudOSD && !osd_.is_active()) {
+            update_target_dimensions();
+            wayland_.request_frame_callback();
         }
 
         // If in Idle mode, request occasional redraw to update clock
