@@ -15,6 +15,7 @@ pkg_check_modules(DEPS REQUIRED
     wayland-scanner
     cairo
     pangocairo
+    gdk-pixbuf-2.0
     libsystemd
 )
 

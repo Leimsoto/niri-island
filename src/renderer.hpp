@@ -25,6 +25,13 @@ private:
     void draw_idle(cairo_t* cr, float w, float h);
     void draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo& media, float anim_time);
     void draw_music_expanded(cairo_t* cr, float w, float h, const MediaInfo& media, float anim_time);
+
+    void update_art(const std::string& art_url);
+    static cairo_surface_t* load_image_scaled(const std::string& path_or_uri, int target_w, int target_h);
+
+    std::string current_art_url_;
+    cairo_surface_t* art_surface_ = nullptr;       // 50x50 for expanded
+    cairo_surface_t* mini_art_surface_ = nullptr;  // 22x22 for compact
 };
 
 } // namespace island
