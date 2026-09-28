@@ -3,6 +3,7 @@
 #include <poll.h>
 #include <unistd.h>
 #include <algorithm>
+#include <cstring>
 
 namespace island {
 
@@ -25,6 +26,10 @@ bool IslandApp::init() {
 
     wayland_.on_click = [this](int button, int state, double x, double y) {
         on_click(button, state, x, y);
+    };
+
+    wayland_.on_motion = [this](double x, double y) {
+        on_motion(x, y);
     };
 
     wayland_.on_hover = [this](bool hovered) {
@@ -99,9 +104,13 @@ void IslandApp::update_target_dimensions() {
         width_spring_.set_target(210.0f);
         height_spring_.set_target(34.0f);
         current_mode_ = IslandMode::HudOSD;
+    } else if (in_control_center_) {
+        width_spring_.set_target(350.0f);
+        height_spring_.set_target(240.0f);
+        current_mode_ = IslandMode::ControlCenter;
     } else if (expanded_) {
         width_spring_.set_target(330.0f);
-        height_spring_.set_target(125.0f);
+        height_spring_.set_target(130.0f);
         current_mode_ = IslandMode::MusicExpanded;
     } else if (mpris_.info().active) {
         width_spring_.set_target(240.0f);
@@ -114,8 +123,65 @@ void IslandApp::update_target_dimensions() {
     }
 }
 
+void IslandApp::update_control_center_info() {
+    auto now = std::chrono::steady_clock::now();
+    float elapsed = std::chrono::duration<float>(now - last_cc_poll_time_).count();
+
+    // Always update instantaneous fields
+    cc_state_.volume = osd_.current_volume();
+    cc_state_.audio_muted = osd_.current_muted();
+    cc_state_.brightness = osd_.current_brightness();
+    cc_state_.battery_percent = osd_.current_battery_pct();
+    cc_state_.battery_charging = osd_.current_battery_charging();
+    cc_state_.media_active = mpris_.info().active;
+    cc_state_.dnd_enabled = notifications_.dnd();
+
+    if (elapsed < 3.0f && last_cc_poll_time_.time_since_epoch().count() != 0) {
+        return;
+    }
+    last_cc_poll_time_ = now;
+
+    // Wi-Fi Status & SSID
+    FILE* fp = popen("nmcli radio wifi 2>/dev/null", "r");
+    if (fp) {
+        char buf[32] = {0};
+        if (fgets(buf, sizeof(buf), fp)) {
+            cc_state_.wifi_enabled = (strstr(buf, "enabled") != nullptr);
+        }
+        pclose(fp);
+    }
+
+    if (cc_state_.wifi_enabled) {
+        FILE* fp_ssid = popen("nmcli -t -f active,ssid dev wifi 2>/dev/null | grep '^yes' | cut -d: -f2", "r");
+        if (fp_ssid) {
+            char buf[64] = {0};
+            if (fgets(buf, sizeof(buf), fp_ssid)) {
+                std::string s = buf;
+                while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+                cc_state_.wifi_ssid = s.empty() ? "Wi-Fi" : s;
+            } else {
+                cc_state_.wifi_ssid = "Wi-Fi";
+            }
+            pclose(fp_ssid);
+        }
+    } else {
+        cc_state_.wifi_ssid = "Wi-Fi";
+    }
+
+    // Bluetooth Status
+    FILE* fp_bt = popen("bluetoothctl show 2>/dev/null | grep 'Powered:'", "r");
+    if (fp_bt) {
+        char buf[64] = {0};
+        if (fgets(buf, sizeof(buf), fp_bt)) {
+            cc_state_.bluetooth_enabled = (strstr(buf, "yes") != nullptr);
+        }
+        pclose(fp_bt);
+    }
+}
+
 void IslandApp::on_hover(bool hovered) {
-    if (notifications_.has_active() || osd_.is_active()) return;
+    if (notifications_.has_active() || osd_.is_active() || in_control_center_) return;
+    if (active_drag_ != DragTarget::None) return;
 
     if (hovered && mpris_.info().active) {
         expanded_ = true;
@@ -127,8 +193,27 @@ void IslandApp::on_hover(bool hovered) {
 }
 
 void IslandApp::on_click(int button, int state, double x, double y) {
-    if (state != 1 || button != 272) return;
+    if (button != 272) {
+        if (button == 273 && state == 1) { // Right Click toggles Control Center
+            in_control_center_ = !in_control_center_;
+            if (in_control_center_) {
+                expanded_ = false;
+                update_control_center_info();
+            }
+            update_target_dimensions();
+            wayland_.request_frame_callback();
+            return;
+        }
+        return;
+    }
 
+    // Button release: finish drag
+    if (state == 0) {
+        active_drag_ = DragTarget::None;
+        return;
+    }
+
+    // Button press:
     // Dismiss notification on click
     if (notifications_.has_active()) {
         notifications_.dismiss();
@@ -139,21 +224,142 @@ void IslandApp::on_click(int button, int state, double x, double y) {
 
     if (osd_.is_active()) return;
 
-    if (expanded_) {
-        float cur_w = width_spring_.value;
+    float cur_w = width_spring_.value;
 
-        // Interactive seek on progress bar (y between 66 and 86)
-        if (y >= 66.0 && y <= 86.0) {
+    // 1. Control Center Interactions
+    if (in_control_center_) {
+        // Header actions
+        if (y <= 38.0) {
+            // Media toggle button (if media active)
+            if (cc_state_.media_active && x >= cur_w - 64.0 && x <= cur_w - 38.0) {
+                in_control_center_ = false;
+                expanded_ = true;
+                update_target_dimensions();
+                wayland_.request_frame_callback();
+                return;
+            }
+            // Close button
+            if (x >= cur_w - 36.0) {
+                in_control_center_ = false;
+                update_target_dimensions();
+                wayland_.request_frame_callback();
+                return;
+            }
+        }
+
+        // Toggles (2x2 Grid)
+        float chip_w = (cur_w - 32.0f - 10.0f) / 2.0f;
+        float col1_x = 16.0f;
+        float col2_x = 16.0f + chip_w + 10.0f;
+        float row1_y = 44.0f;
+        float row2_y = 82.0f;
+
+        // Row 1: Wi-Fi (Col 1) and Bluetooth (Col 2)
+        if (y >= row1_y && y <= row1_y + 34.0f) {
+            if (x >= col1_x && x <= col1_x + chip_w) {
+                if (cc_state_.wifi_enabled) {
+                    int r = system("nmcli radio wifi off"); (void)r;
+                    cc_state_.wifi_enabled = false;
+                } else {
+                    int r = system("nmcli radio wifi on"); (void)r;
+                    cc_state_.wifi_enabled = true;
+                }
+                update_control_center_info();
+                wayland_.request_frame_callback();
+                return;
+            } else if (x >= col2_x && x <= col2_x + chip_w) {
+                if (cc_state_.bluetooth_enabled) {
+                    int r = system("bluetoothctl power off"); (void)r;
+                    cc_state_.bluetooth_enabled = false;
+                } else {
+                    int r = system("bluetoothctl power on"); (void)r;
+                    cc_state_.bluetooth_enabled = true;
+                }
+                update_control_center_info();
+                wayland_.request_frame_callback();
+                return;
+            }
+        }
+
+        // Row 2: Audio Mute (Col 1) and DND (Col 2)
+        if (y >= row2_y && y <= row2_y + 34.0f) {
+            if (x >= col1_x && x <= col1_x + chip_w) {
+                osd_.toggle_mute();
+                cc_state_.audio_muted = osd_.current_muted();
+                wayland_.request_frame_callback();
+                return;
+            } else if (x >= col2_x && x <= col2_x + chip_w) {
+                notifications_.toggle_dnd();
+                cc_state_.dnd_enabled = notifications_.dnd();
+                wayland_.request_frame_callback();
+                return;
+            }
+        }
+
+        // Volume Slider (y between 120 and 152)
+        if (y >= 120.0 && y <= 152.0) {
             float bar_x = 16.0f;
             float bar_w = cur_w - 32.0f;
             float ratio = std::clamp((static_cast<float>(x) - bar_x) / bar_w, 0.0f, 1.0f);
-            mpris_.set_position_ratio(ratio);
+            osd_.set_volume(ratio);
+            cc_state_.volume = ratio;
+            cc_state_.audio_muted = false;
+            active_drag_ = DragTarget::ControlVolume;
             wayland_.request_frame_callback();
             return;
         }
 
-        // Control buttons row: y around 88 - 120
-        if (y > 86.0) {
+        // Brightness Slider (y between 154 and 188)
+        if (y >= 154.0 && y <= 188.0) {
+            float bar_x = 16.0f;
+            float bar_w = cur_w - 32.0f;
+            float ratio = std::clamp((static_cast<float>(x) - bar_x) / bar_w, 0.0f, 1.0f);
+            osd_.set_brightness(ratio);
+            cc_state_.brightness = ratio;
+            active_drag_ = DragTarget::ControlBrightness;
+            wayland_.request_frame_callback();
+            return;
+        }
+
+        // Footer Actions: Screenshot and Lock
+        if (y >= 192.0 && y <= 228.0) {
+            if (x >= cur_w - 76.0f && x <= cur_w - 42.0f) {
+                int r = system("grim ~/Pictures/screenshot_$(date +%s).png &"); (void)r;
+                return;
+            } else if (x >= cur_w - 40.0f) {
+                int r = system("noctalia msg session lock &"); (void)r;
+                return;
+            }
+        }
+
+        return; // Don't collapse inside Control Center
+    }
+
+    // 2. Music Expanded Interactions
+    if (expanded_) {
+        // Control Center button in top right
+        if (x >= cur_w - 36.0f && y <= 36.0f) {
+            expanded_ = false;
+            in_control_center_ = true;
+            update_control_center_info();
+            update_target_dimensions();
+            wayland_.request_frame_callback();
+            return;
+        }
+
+        // Interactive seek on progress bar (generous hitbox: y between 60 and 86)
+        if (y >= 60.0 && y <= 86.0) {
+            float bar_x = 16.0f;
+            float bar_w = cur_w - 32.0f;
+            float ratio = std::clamp((static_cast<float>(x) - bar_x) / bar_w, 0.0f, 1.0f);
+            mpris_.set_position_ratio(ratio);
+            active_drag_ = DragTarget::MusicSeek;
+            wayland_.request_frame_callback();
+            return;
+        }
+
+        // Control buttons row: y around 90 - 126
+        if (y > 88.0) {
             float mid_x = cur_w / 2.0f;
             if (x < mid_x - 25.0f) {
                 mpris_.previous();
@@ -162,14 +368,53 @@ void IslandApp::on_click(int button, int state, double x, double y) {
             } else {
                 mpris_.play_pause();
             }
+            wayland_.request_frame_callback();
             return;
         }
+
+        return; // Don't collapse on random interior clicks
     }
 
-    // Toggle expansion on body click
-    expanded_ = !expanded_;
-    update_target_dimensions();
-    wayland_.request_frame_callback();
+    // 3. Idle mode: Click opens Control Center
+    if (current_mode_ == IslandMode::Idle) {
+        in_control_center_ = true;
+        update_control_center_info();
+        update_target_dimensions();
+        wayland_.request_frame_callback();
+        return;
+    }
+
+    // 4. Music Compact: Click expands media card
+    if (current_mode_ == IslandMode::MusicCompact) {
+        expanded_ = true;
+        update_target_dimensions();
+        wayland_.request_frame_callback();
+        return;
+    }
+}
+
+void IslandApp::on_motion(double x, double y) {
+    (void)y;
+    if (active_drag_ == DragTarget::None) return;
+
+    float cur_w = width_spring_.value;
+    float bar_x = 16.0f;
+    float bar_w = cur_w - 32.0f;
+    float ratio = std::clamp((static_cast<float>(x) - bar_x) / bar_w, 0.0f, 1.0f);
+
+    if (active_drag_ == DragTarget::MusicSeek) {
+        mpris_.set_position_ratio(ratio);
+        wayland_.request_frame_callback();
+    } else if (active_drag_ == DragTarget::ControlVolume) {
+        osd_.set_volume(ratio);
+        cc_state_.volume = ratio;
+        cc_state_.audio_muted = false;
+        wayland_.request_frame_callback();
+    } else if (active_drag_ == DragTarget::ControlBrightness) {
+        osd_.set_brightness(ratio);
+        cc_state_.brightness = ratio;
+        wayland_.request_frame_callback();
+    }
 }
 
 void IslandApp::on_frame() {
@@ -182,6 +427,11 @@ void IslandApp::on_frame() {
 
     // Advance song position smoothly
     mpris_.tick(dt);
+
+    // Refresh control center info if open
+    if (in_control_center_) {
+        update_control_center_info();
+    }
 
     // Check if notification or HUD expired
     if ((current_mode_ == IslandMode::Notification && !notifications_.has_active()) ||
@@ -201,15 +451,16 @@ void IslandApp::on_frame() {
     cairo_t* cr = wayland_.get_cairo_context(cur_w, cur_h);
     if (cr) {
         renderer_.draw(cr, cur_w, cur_h, current_mode_, mpris_.info(), 
-                       osd_.state(), notifications_.current(), 
+                       osd_.state(), notifications_.current(), cc_state_,
                        osd_.is_mic_active(), anim_time_);
         wayland_.commit_frame(cur_w, cur_h);
     }
 
-    // Continue frame loop if animations are active
+    // Continue frame loop if animations or interactions are active
     bool needs_next_frame = animating_w || animating_h || 
                            osd_.is_active() || notifications_.has_active() ||
-                           (mpris_.info().active && mpris_.info().playing);
+                           (mpris_.info().active && mpris_.info().playing) ||
+                           (active_drag_ != DragTarget::None);
 
     if (needs_next_frame) {
         wayland_.request_frame_callback();
@@ -248,7 +499,8 @@ void IslandApp::run() {
         wl_display_flush(wayland_.get_display());
 
         bool fast_poll = osd_.is_active() || notifications_.has_active() || 
-                         (mpris_.info().active && mpris_.info().playing);
+                         (mpris_.info().active && mpris_.info().playing) ||
+                         (active_drag_ != DragTarget::None) || in_control_center_;
         int timeout = fast_poll ? 50 : 500;
 
         int ret = poll(fds, n_fds, timeout);
@@ -282,7 +534,7 @@ void IslandApp::run() {
             wayland_.request_frame_callback();
         }
 
-        // If in Idle mode, request occasional redraw to update clock
+        // Periodic clock update in idle mode
         if (current_mode_ == IslandMode::Idle && width_spring_.is_settled() && height_spring_.is_settled()) {
             wayland_.request_frame_callback();
         }

@@ -90,10 +90,13 @@ static const struct wl_registry_listener registry_listener = {
 };
 
 static const struct wl_pointer_listener pointer_listener = {
-    .enter = [](void* data, struct wl_pointer*, uint32_t, struct wl_surface*, wl_fixed_t, wl_fixed_t) {
+    .enter = [](void* data, struct wl_pointer*, uint32_t, struct wl_surface*, wl_fixed_t sx, wl_fixed_t sy) {
         auto* self = static_cast<WaylandContext*>(data);
         self->hovered_ = true;
+        self->pointer_x_ = wl_fixed_to_double(sx);
+        self->pointer_y_ = wl_fixed_to_double(sy);
         if (self->on_hover) self->on_hover(true);
+        if (self->on_motion) self->on_motion(self->pointer_x_, self->pointer_y_);
     },
     .leave = [](void* data, struct wl_pointer*, uint32_t, struct wl_surface*) {
         auto* self = static_cast<WaylandContext*>(data);

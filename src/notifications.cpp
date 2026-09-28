@@ -15,6 +15,7 @@ NotificationManager::~NotificationManager() {
 
 int NotificationManager::message_filter(sd_bus_message* m, void* userdata, sd_bus_error*) {
     auto* self = static_cast<NotificationManager*>(userdata);
+    if (self->dnd_) return 0;
     const char* member = sd_bus_message_get_member(m);
 
     if (member && strcmp(member, "Notify") == 0) {

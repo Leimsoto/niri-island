@@ -121,19 +121,20 @@ void Renderer::draw_rounded_rect(cairo_t* cr, double x, double y, double w, doub
 
 void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode,
                     const MediaInfo& media, const OsdState& osd,
-                    const NotificationItem& notif, bool mic_active, float anim_time) {
+                    const NotificationItem& notif, const ControlCenterState& cc_state,
+                    bool mic_active, float anim_time) {
     update_art(media.art_url);
 
     double radius = std::min((double)height / 2.0, 22.0);
 
-    // 1. Draw Island Body (OLED Deep Black with subtle outline)
+    // 1. Draw Island Body (Material 3 Dark Surface #131019)
     draw_rounded_rect(cr, 1.0, 1.0, width - 2.0, height - 2.0, radius);
-    cairo_set_source_rgba(cr, 0.05, 0.05, 0.07, 0.96); // #0d0d12
+    cairo_set_source_rgba(cr, 0.075, 0.063, 0.098, 0.96);
     cairo_fill_preserve(cr);
 
-    // Subtle Glass Edge
-    cairo_set_source_rgba(cr, 0.35, 0.38, 0.48, 0.25);
-    cairo_set_line_width(cr, 1.2);
+    // Subtle Material Outline (#49454f at 30%)
+    cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.30);
+    cairo_set_line_width(cr, 1.0);
     cairo_stroke(cr);
 
     // Clip content to rounded pill
@@ -151,6 +152,9 @@ void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode,
             break;
         case IslandMode::MusicExpanded:
             draw_music_expanded(cr, width, height, media, anim_time);
+            break;
+        case IslandMode::ControlCenter:
+            draw_control_center(cr, width, height, cc_state, anim_time);
             break;
         case IslandMode::HudOSD:
             draw_hud_osd(cr, width, height, osd);
@@ -174,14 +178,14 @@ void Renderer::draw_privacy_dot(cairo_t* cr, float w, float h) {
     double dot_y = 10.0;
     double dot_r = 2.8;
 
-    // Subtle glow ring
+    // Subtle Coral Glow Ring
     cairo_arc(cr, dot_x, dot_y, dot_r + 2.0, 0, 2 * M_PI);
-    cairo_set_source_rgba(cr, 1.0, 0.55, 0.0, 0.35); // Orange glow
+    cairo_set_source_rgba(cr, 0.95, 0.55, 0.51, 0.30);
     cairo_fill(cr);
 
-    // Center dot
+    // Center Dot
     cairo_arc(cr, dot_x, dot_y, dot_r, 0, 2 * M_PI);
-    cairo_set_source_rgba(cr, 1.0, 0.58, 0.0, 0.98); // Vivid Orange
+    cairo_set_source_rgba(cr, 0.98, 0.58, 0.52, 0.95);
     cairo_fill(cr);
 }
 
@@ -200,22 +204,22 @@ void Renderer::draw_idle(cairo_t* cr, float w, float h) {
     PangoRectangle ink_rect, logical_rect;
     pango_layout_get_pixel_extents(layout, &ink_rect, &logical_rect);
 
-    double dot_radius = 3.5;
-    double spacing = 8.0;
+    double dot_radius = 3.2;
+    double spacing = 7.0;
     double total_content_w = (dot_radius * 2.0) + spacing + ink_rect.width;
     double start_x = (w - total_content_w) / 2.0;
 
-    // 1. Pulse dot
+    // 1. M3 Lavender Pulse Dot (#d0bcff)
     cairo_arc(cr, start_x + dot_radius, h / 2.0, dot_radius, 0, 2 * M_PI);
-    cairo_set_source_rgba(cr, 0.2, 0.85, 0.5, 0.92); // Emerald green
+    cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.92);
     cairo_fill(cr);
 
-    // 2. Clock Text
+    // 2. Clock Text (M3 On-Surface #e6e0e9)
     double text_x = start_x + (dot_radius * 2.0) + spacing - ink_rect.x;
     double text_y = (h - ink_rect.height) / 2.0 - ink_rect.y;
 
     cairo_move_to(cr, text_x, text_y);
-    cairo_set_source_rgba(cr, 0.94, 0.95, 0.98, 0.96);
+    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.98);
     pango_cairo_show_layout(cr, layout);
 
     pango_font_description_free(font_desc);
@@ -240,7 +244,7 @@ void Renderer::draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo
         cairo_restore(cr);
 
         draw_rounded_rect(cr, art_x, art_y, art_size, art_size, 5.0);
-        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.15);
+        cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.35);
         cairo_set_line_width(cr, 0.8);
         cairo_stroke(cr);
 
@@ -253,13 +257,13 @@ void Renderer::draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo
             if (!media.playing) bar_h = 3.0f;
 
             cairo_rectangle(cr, wave_x + i * 4.5f, wave_y - bar_h / 2.0f, 2.2f, bar_h);
-            cairo_set_source_rgba(cr, 0.25, 0.8, 0.95, 0.9);
+            cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.92); // M3 Lavender
             cairo_fill(cr);
         }
-        left_margin += 22.0f;
+        left_margin += 20.0f;
     }
 
-    // 2. Right side: Dancing equalizer
+    // 2. Right side: Equalizer or Music Icon
     float right_content_w = 0.0f;
     if (mini_art_surface_) {
         float wave_x = right_margin - 16.0f;
@@ -269,7 +273,7 @@ void Renderer::draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo
             if (!media.playing) bar_h = 2.5f;
 
             cairo_rectangle(cr, wave_x + i * 4.5f, wave_y - bar_h / 2.0f, 2.2f, bar_h);
-            cairo_set_source_rgba(cr, 0.35, 0.85, 0.55, 0.95);
+            cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.90);
             cairo_fill(cr);
         }
         right_content_w = 20.0f;
@@ -284,14 +288,14 @@ void Renderer::draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo
         double icon_y = (h - ink_r.height) / 2.0 - ink_r.y;
 
         cairo_move_to(cr, right_margin - 14.0, icon_y);
-        cairo_set_source_rgba(cr, 0.7, 0.75, 0.85, 0.8);
+        cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.85);
         pango_cairo_show_layout(cr, icon_layout);
         pango_font_description_free(icon_font);
         g_object_unref(icon_layout);
         right_content_w = 18.0f;
     }
 
-    // 3. Center: Track title & Artist
+    // 3. Center: Track title & Artist in M3 typography
     std::string display_text = media.title.empty() ? "Música" : media.title;
     if (!media.artist.empty()) {
         display_text += " • " + media.artist;
@@ -313,7 +317,7 @@ void Renderer::draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo
     double text_y = (h - ink_rect.height) / 2.0 - ink_rect.y;
 
     cairo_move_to(cr, left_margin, text_y);
-    cairo_set_source_rgba(cr, 0.94, 0.95, 0.98, 0.96);
+    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.98); // M3 On-Surface
     pango_cairo_show_layout(cr, layout);
 
     pango_font_description_free(font_desc);
@@ -323,10 +327,10 @@ void Renderer::draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo
 void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInfo& media, float) {
     (void)h;
     float art_x = 16.0f;
-    float art_y = 16.0f;
+    float art_y = 14.0f;
     float art_size = 48.0f;
 
-    // 1. Album Art box (rounded square)
+    // 1. Album Art box (Material rounded square)
     cairo_save(cr);
     draw_rounded_rect(cr, art_x, art_y, art_size, art_size, 10.0);
     cairo_clip(cr);
@@ -336,8 +340,8 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
         cairo_paint(cr);
     } else {
         cairo_pattern_t* pat = cairo_pattern_create_linear(art_x, art_y, art_x + art_size, art_y + art_size);
-        cairo_pattern_add_color_stop_rgba(pat, 0.0, 0.18, 0.22, 0.32, 0.95);
-        cairo_pattern_add_color_stop_rgba(pat, 1.0, 0.08, 0.10, 0.16, 0.95);
+        cairo_pattern_add_color_stop_rgba(pat, 0.0, 0.22, 0.18, 0.30, 0.95);
+        cairo_pattern_add_color_stop_rgba(pat, 1.0, 0.12, 0.10, 0.18, 0.95);
         cairo_set_source(cr, pat);
         cairo_paint(cr);
         cairo_pattern_destroy(pat);
@@ -351,7 +355,7 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
         pango_layout_get_pixel_extents(art_icon, &ink_r, &log_r);
         cairo_move_to(cr, art_x + (art_size - ink_r.width) / 2.0 - ink_r.x,
                           art_y + (art_size - ink_r.height) / 2.0 - ink_r.y);
-        cairo_set_source_rgba(cr, 0.3, 0.8, 0.95, 0.85);
+        cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.90);
         pango_cairo_show_layout(cr, art_icon);
         pango_font_description_free(art_font);
         g_object_unref(art_icon);
@@ -359,13 +363,37 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
     cairo_restore(cr);
 
     draw_rounded_rect(cr, art_x, art_y, art_size, art_size, 10.0);
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.15);
+    cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.35);
     cairo_set_line_width(cr, 1.0);
     cairo_stroke(cr);
 
-    // 2. Song Title & Artist
-    float info_x = art_x + art_size + 14.0f;
-    float info_w = w - info_x - 16.0f;
+    // 2. Control Center Shortcut Button (Top Right)
+    float cc_btn_x = w - 34.0f;
+    float cc_btn_y = 14.0f;
+    float cc_btn_size = 22.0f;
+    draw_rounded_rect(cr, cc_btn_x, cc_btn_y, cc_btn_size, cc_btn_size, 11.0);
+    cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.90); // Surface Container High
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.35);
+    cairo_set_line_width(cr, 0.8);
+    cairo_stroke(cr);
+
+    PangoLayout* cc_icon = pango_cairo_create_layout(cr);
+    PangoFontDescription* cc_font = pango_font_description_from_string("JetBrainsMono Nerd Font 10");
+    pango_layout_set_font_description(cc_icon, cc_font);
+    pango_layout_set_text(cc_icon, "󰕮", -1);
+    PangoRectangle cc_ink, cc_log;
+    pango_layout_get_pixel_extents(cc_icon, &cc_ink, &cc_log);
+    cairo_move_to(cr, cc_btn_x + (cc_btn_size - cc_ink.width) / 2.0 - cc_ink.x,
+                      cc_btn_y + (cc_btn_size - cc_ink.height) / 2.0 - cc_ink.y);
+    cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.90);
+    pango_cairo_show_layout(cr, cc_icon);
+    pango_font_description_free(cc_font);
+    g_object_unref(cc_icon);
+
+    // 3. Song Title & Artist in Material 3
+    float info_x = art_x + art_size + 12.0f;
+    float info_w = cc_btn_x - info_x - 8.0f;
 
     PangoLayout* title_layout = pango_cairo_create_layout(cr);
     PangoFontDescription* title_font = pango_font_description_from_string("Sans Bold 11");
@@ -376,10 +404,10 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
 
     PangoRectangle title_ink, title_log;
     pango_layout_get_pixel_extents(title_layout, &title_ink, &title_log);
-    double title_y = art_y + 8.0 - title_ink.y;
+    double title_y = art_y + 6.0 - title_ink.y;
 
     cairo_move_to(cr, info_x, title_y);
-    cairo_set_source_rgba(cr, 0.98, 0.98, 1.0, 1.0);
+    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 1.0); // M3 On-Surface
     pango_cairo_show_layout(cr, title_layout);
     pango_font_description_free(title_font);
     g_object_unref(title_layout);
@@ -393,22 +421,23 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
 
     PangoRectangle artist_ink, artist_log;
     pango_layout_get_pixel_extents(artist_layout, &artist_ink, &artist_log);
-    double artist_y = art_y + 28.0 - artist_ink.y;
+    double artist_y = art_y + 26.0 - artist_ink.y;
 
     cairo_move_to(cr, info_x, artist_y);
-    cairo_set_source_rgba(cr, 0.65, 0.68, 0.78, 0.85);
+    cairo_set_source_rgba(cr, 0.792, 0.769, 0.816, 0.85); // M3 Muted
     pango_cairo_show_layout(cr, artist_layout);
     pango_font_description_free(artist_font);
     g_object_unref(artist_layout);
 
-    // 3. Dynamic Progress Bar & Seek
+    // 4. M3 Capsule Progress Slider (Thicker & Touchable)
     float bar_x = 16.0f;
-    float bar_y = 72.0f;
+    float bar_y = 68.0f;
     float bar_w = w - 32.0f;
-    float bar_h = 4.0f;
+    float bar_h = 8.0f;
 
-    draw_rounded_rect(cr, bar_x, bar_y, bar_w, bar_h, 2.0);
-    cairo_set_source_rgba(cr, 0.22, 0.24, 0.32, 0.7);
+    // Track
+    draw_rounded_rect(cr, bar_x, bar_y, bar_w, bar_h, 4.0);
+    cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.95); // Surface Container High
     cairo_fill(cr);
 
     float fill_ratio = 0.0f;
@@ -417,12 +446,18 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
     }
 
     if (fill_ratio > 0.005f) {
-        draw_rounded_rect(cr, bar_x, bar_y, bar_w * fill_ratio, bar_h, 2.0);
-        cairo_set_source_rgba(cr, 0.3, 0.82, 0.98, 0.95);
+        float active_w = std::max(8.0f, bar_w * fill_ratio);
+        draw_rounded_rect(cr, bar_x, bar_y, active_w, bar_h, 4.0);
+        cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.98); // M3 Lavender Fill
+        cairo_fill(cr);
+
+        // Tactile Thumb handle
+        cairo_arc(cr, bar_x + active_w - 4.0f, bar_y + bar_h / 2.0f, 4.5, 0, 2 * M_PI);
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
         cairo_fill(cr);
     }
 
-    // 4. Time Timestamps (Elapsed & Total)
+    // 5. Time Timestamps (Elapsed & Total)
     int64_t cur_sec = media.position_us / 1000000;
     int64_t tot_sec = media.length_us / 1000000;
 
@@ -438,8 +473,8 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
     PangoLayout* cur_time_layout = pango_cairo_create_layout(cr);
     pango_layout_set_font_description(cur_time_layout, time_font);
     pango_layout_set_text(cur_time_layout, cur_oss.str().c_str(), -1);
-    cairo_move_to(cr, bar_x, bar_y + 6.0);
-    cairo_set_source_rgba(cr, 0.6, 0.65, 0.75, 0.85);
+    cairo_move_to(cr, bar_x, bar_y + 10.0);
+    cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.90);
     pango_cairo_show_layout(cr, cur_time_layout);
     g_object_unref(cur_time_layout);
 
@@ -449,61 +484,376 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
     pango_layout_set_text(tot_time_layout, tot_oss.str().c_str(), -1);
     PangoRectangle tot_ink, tot_log;
     pango_layout_get_pixel_extents(tot_time_layout, &tot_ink, &tot_log);
-    cairo_move_to(cr, bar_x + bar_w - tot_ink.width - tot_ink.x, bar_y + 6.0);
-    cairo_set_source_rgba(cr, 0.6, 0.65, 0.75, 0.85);
+    cairo_move_to(cr, bar_x + bar_w - tot_ink.width - tot_ink.x, bar_y + 10.0);
+    cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.90);
     pango_cairo_show_layout(cr, tot_time_layout);
     g_object_unref(tot_time_layout);
     pango_font_description_free(time_font);
 
-    // 5. Media Control Buttons
+    // 6. Media Control Buttons (Material 3 Circular Tonal Chips)
     PangoLayout* btn_layout = pango_cairo_create_layout(cr);
     PangoFontDescription* btn_font = pango_font_description_from_string("JetBrainsMono Nerd Font 13");
     pango_layout_set_font_description(btn_layout, btn_font);
 
-    double btn_center_y = 100.0;
+    double btn_center_y = 104.0;
 
-    // Previous
+    // Previous Button
+    float prev_x = w / 2.0f - 50.0f;
+    draw_rounded_rect(cr, prev_x - 14.0f, btn_center_y - 14.0f, 28.0f, 28.0f, 14.0);
+    cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.85);
+    cairo_fill(cr);
+
     pango_layout_set_text(btn_layout, "󰒮", -1);
     PangoRectangle prev_ink, prev_log;
     pango_layout_get_pixel_extents(btn_layout, &prev_ink, &prev_log);
-    cairo_move_to(cr, w / 2.0 - 55.0 - prev_ink.width / 2.0 - prev_ink.x,
+    cairo_move_to(cr, prev_x - prev_ink.width / 2.0 - prev_ink.x,
                       btn_center_y - prev_ink.height / 2.0 - prev_ink.y);
-    cairo_set_source_rgba(cr, 0.8, 0.82, 0.9, 0.9);
+    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.95);
     pango_cairo_show_layout(cr, btn_layout);
 
-    // Play/Pause
+    // Play/Pause Button (Prominent M3 Primary Container #4f378b)
+    float play_x = w / 2.0f;
+    draw_rounded_rect(cr, play_x - 17.0f, btn_center_y - 17.0f, 34.0f, 34.0f, 17.0);
+    cairo_set_source_rgba(cr, 0.310, 0.216, 0.545, 0.95);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.40);
+    cairo_set_line_width(cr, 1.0);
+    cairo_stroke(cr);
+
     pango_layout_set_text(btn_layout, media.playing ? "󰏤" : "󰐊", -1);
     PangoRectangle play_ink, play_log;
     pango_layout_get_pixel_extents(btn_layout, &play_ink, &play_log);
-    cairo_move_to(cr, w / 2.0 - play_ink.width / 2.0 - play_ink.x,
+    cairo_move_to(cr, play_x - play_ink.width / 2.0 - play_ink.x,
                       btn_center_y - play_ink.height / 2.0 - play_ink.y);
-    cairo_set_source_rgba(cr, 0.3, 0.85, 0.95, 1.0);
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
     pango_cairo_show_layout(cr, btn_layout);
 
-    // Next
+    // Next Button
+    float next_x = w / 2.0f + 50.0f;
+    draw_rounded_rect(cr, next_x - 14.0f, btn_center_y - 14.0f, 28.0f, 28.0f, 14.0);
+    cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.85);
+    cairo_fill(cr);
+
     pango_layout_set_text(btn_layout, "󰒭", -1);
     PangoRectangle next_ink, next_log;
     pango_layout_get_pixel_extents(btn_layout, &next_ink, &next_log);
-    cairo_move_to(cr, w / 2.0 + 55.0 - next_ink.width / 2.0 - next_ink.x,
+    cairo_move_to(cr, next_x - next_ink.width / 2.0 - next_ink.x,
                       btn_center_y - next_ink.height / 2.0 - next_ink.y);
-    cairo_set_source_rgba(cr, 0.8, 0.82, 0.9, 0.9);
+    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.95);
     pango_cairo_show_layout(cr, btn_layout);
 
     pango_font_description_free(btn_font);
     g_object_unref(btn_layout);
 }
 
+void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlCenterState& state, float) {
+    (void)h;
+    time_t now = time(nullptr);
+    struct tm* tm_info = localtime(&now);
+
+    char time_str[16];
+    char date_str[32];
+    strftime(time_str, sizeof(time_str), "%H:%M", tm_info);
+    strftime(date_str, sizeof(date_str), "%a, %d %b", tm_info);
+
+    // 1. Header (Time, Date, Media & Close Buttons)
+    PangoLayout* clock_layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* clock_font = pango_font_description_from_string("JetBrainsMono Nerd Font Bold 13");
+    pango_layout_set_font_description(clock_layout, clock_font);
+    pango_layout_set_text(clock_layout, time_str, -1);
+    cairo_move_to(cr, 18.0, 14.0);
+    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 1.0); // M3 On-Surface
+    pango_cairo_show_layout(cr, clock_layout);
+    pango_font_description_free(clock_font);
+    g_object_unref(clock_layout);
+
+    PangoLayout* date_layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* date_font = pango_font_description_from_string("Sans 9.5");
+    pango_layout_set_font_description(date_layout, date_font);
+    pango_layout_set_text(date_layout, date_str, -1);
+    cairo_move_to(cr, 74.0, 17.0);
+    cairo_set_source_rgba(cr, 0.792, 0.769, 0.816, 0.85); // M3 Muted
+    pango_cairo_show_layout(cr, date_layout);
+    pango_font_description_free(date_font);
+    g_object_unref(date_layout);
+
+    // Switch to Music Button (if media active)
+    if (state.media_active) {
+        float media_btn_x = w - 62.0f;
+        draw_rounded_rect(cr, media_btn_x, 12.0f, 24.0f, 24.0f, 12.0);
+        cairo_set_source_rgba(cr, 0.310, 0.216, 0.545, 0.85); // Primary Container
+        cairo_fill_preserve(cr);
+        cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.35);
+        cairo_set_line_width(cr, 0.8);
+        cairo_stroke(cr);
+
+        PangoLayout* m_icon = pango_cairo_create_layout(cr);
+        PangoFontDescription* m_font = pango_font_description_from_string("JetBrainsMono Nerd Font 10.5");
+        pango_layout_set_font_description(m_icon, m_font);
+        pango_layout_set_text(m_icon, "󰎆", -1);
+        PangoRectangle m_ink, m_log;
+        pango_layout_get_pixel_extents(m_icon, &m_ink, &m_log);
+        cairo_move_to(cr, media_btn_x + (24.0 - m_ink.width) / 2.0 - m_ink.x,
+                          12.0 + (24.0 - m_ink.height) / 2.0 - m_ink.y);
+        cairo_set_source_rgba(cr, 0.918, 0.867, 1.0, 0.98);
+        pango_cairo_show_layout(cr, m_icon);
+        pango_font_description_free(m_font);
+        g_object_unref(m_icon);
+    }
+
+    // Close Button
+    float close_btn_x = w - 34.0f;
+    draw_rounded_rect(cr, close_btn_x, 12.0f, 24.0f, 24.0f, 12.0);
+    cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.85);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.35);
+    cairo_set_line_width(cr, 0.8);
+    cairo_stroke(cr);
+
+    PangoLayout* cl_icon = pango_cairo_create_layout(cr);
+    PangoFontDescription* cl_font = pango_font_description_from_string("JetBrainsMono Nerd Font 10.5");
+    pango_layout_set_font_description(cl_icon, cl_font);
+    pango_layout_set_text(cl_icon, "󰅖", -1);
+    PangoRectangle cl_ink, cl_log;
+    pango_layout_get_pixel_extents(cl_icon, &cl_ink, &cl_log);
+    cairo_move_to(cr, close_btn_x + (24.0 - cl_ink.width) / 2.0 - cl_ink.x,
+                      12.0 + (24.0 - cl_ink.height) / 2.0 - cl_ink.y);
+    cairo_set_source_rgba(cr, 0.792, 0.769, 0.816, 0.95);
+    pango_cairo_show_layout(cr, cl_icon);
+    pango_font_description_free(cl_font);
+    g_object_unref(cl_icon);
+
+    // 2. Tonal Toggle Chips (2x2 Grid)
+    float chip_w = (w - 32.0f - 10.0f) / 2.0f;
+    float chip_h = 32.0f;
+    float col1_x = 16.0f;
+    float col2_x = 16.0f + chip_w + 10.0f;
+    float row1_y = 44.0f;
+    float row2_y = 82.0f;
+
+    auto draw_chip = [&](float x, float y, const char* icon, const std::string& label, bool active, bool alert = false) {
+        draw_rounded_rect(cr, x, y, chip_w, chip_h, 8.0);
+        if (alert && active) {
+            cairo_set_source_rgba(cr, 0.35, 0.12, 0.14, 0.90);
+        } else if (active) {
+            cairo_set_source_rgba(cr, 0.310, 0.216, 0.545, 0.90); // M3 Primary Container
+        } else {
+            cairo_set_source_rgba(cr, 0.125, 0.106, 0.165, 0.88); // M3 Surface Container
+        }
+        cairo_fill_preserve(cr);
+
+        cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, active ? 0.45 : 0.25);
+        cairo_set_line_width(cr, 0.8);
+        cairo_stroke(cr);
+
+        // Icon
+        PangoLayout* i_layout = pango_cairo_create_layout(cr);
+        PangoFontDescription* i_font = pango_font_description_from_string("JetBrainsMono Nerd Font 12");
+        pango_layout_set_font_description(i_layout, i_font);
+        pango_layout_set_text(i_layout, icon, -1);
+        PangoRectangle i_ink, i_log;
+        pango_layout_get_pixel_extents(i_layout, &i_ink, &i_log);
+        cairo_move_to(cr, x + 10.0 - i_ink.x, y + (chip_h - i_ink.height) / 2.0 - i_ink.y);
+        if (alert && active) {
+            cairo_set_source_rgba(cr, 0.98, 0.58, 0.52, 1.0);
+        } else if (active) {
+            cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 1.0);
+        } else {
+            cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.85);
+        }
+        pango_cairo_show_layout(cr, i_layout);
+        pango_font_description_free(i_font);
+        g_object_unref(i_layout);
+
+        // Label
+        PangoLayout* l_layout = pango_cairo_create_layout(cr);
+        PangoFontDescription* l_font = pango_font_description_from_string("Sans SemiBold 9.0");
+        pango_layout_set_font_description(l_layout, l_font);
+        pango_layout_set_text(l_layout, label.c_str(), -1);
+        pango_layout_set_ellipsize(l_layout, PANGO_ELLIPSIZE_END);
+        pango_layout_set_width(l_layout, (chip_w - 38.0f) * PANGO_SCALE);
+
+        PangoRectangle l_ink, l_log;
+        pango_layout_get_pixel_extents(l_layout, &l_ink, &l_log);
+        cairo_move_to(cr, x + 30.0, y + (chip_h - l_ink.height) / 2.0 - l_ink.y);
+        cairo_set_source_rgba(cr, active ? 0.95 : 0.80, active ? 0.95 : 0.80, active ? 1.0 : 0.85, 0.95);
+        pango_cairo_show_layout(cr, l_layout);
+        pango_font_description_free(l_font);
+        g_object_unref(l_layout);
+    };
+
+    // Wi-Fi
+    draw_chip(col1_x, row1_y, state.wifi_enabled ? "󰖩" : "󰖪",
+              state.wifi_enabled ? (state.wifi_ssid.empty() ? "Wi-Fi" : state.wifi_ssid) : "Desactivado",
+              state.wifi_enabled);
+
+    // Bluetooth
+    draw_chip(col2_x, row1_y, state.bluetooth_enabled ? "󰂯" : "󰂲",
+              state.bluetooth_enabled ? "Bluetooth" : "Desactivado",
+              state.bluetooth_enabled);
+
+    // Audio Mute
+    draw_chip(col1_x, row2_y, state.audio_muted ? "󰝟" : "󰕾",
+              state.audio_muted ? "Silenciado" : "Sonido Activo",
+              state.audio_muted, true);
+
+    // DND (No Molestar)
+    draw_chip(col2_x, row2_y, state.dnd_enabled ? "󰍷" : "󰂚",
+              state.dnd_enabled ? "No Molestar" : "Notificaciones",
+              state.dnd_enabled);
+
+    // 3. Material 3 Sliders (Volume & Brightness)
+    float s_x = 16.0f;
+    float s_w = w - 32.0f;
+    float s_h = 28.0f;
+
+    auto draw_slider = [&](float y, const char* icon, float val, double r_fill, double g_fill, double b_fill) {
+        val = std::clamp(val, 0.0f, 1.0f);
+        // Track
+        draw_rounded_rect(cr, s_x, y, s_w, s_h, 14.0);
+        cairo_set_source_rgba(cr, 0.125, 0.106, 0.165, 0.90);
+        cairo_fill(cr);
+
+        // Active fill
+        if (val > 0.01f) {
+            float fill_w = std::max(28.0f, s_w * val);
+            draw_rounded_rect(cr, s_x, y, fill_w, s_h, 14.0);
+            cairo_set_source_rgba(cr, r_fill, g_fill, b_fill, 0.95);
+            cairo_fill(cr);
+        }
+
+        // Icon inside slider on the left
+        PangoLayout* s_icon = pango_cairo_create_layout(cr);
+        PangoFontDescription* si_font = pango_font_description_from_string("JetBrainsMono Nerd Font 12");
+        pango_layout_set_font_description(s_icon, si_font);
+        pango_layout_set_text(s_icon, icon, -1);
+        PangoRectangle si_ink, si_log;
+        pango_layout_get_pixel_extents(s_icon, &si_ink, &si_log);
+        cairo_move_to(cr, s_x + 12.0 - si_ink.x, y + (s_h - si_ink.height) / 2.0 - si_ink.y);
+        if (val > 0.15f) {
+            cairo_set_source_rgba(cr, 0.15, 0.10, 0.22, 1.0); // High contrast on active bar
+        } else {
+            cairo_set_source_rgba(cr, r_fill, g_fill, b_fill, 0.95);
+        }
+        pango_cairo_show_layout(cr, s_icon);
+        pango_font_description_free(si_font);
+        g_object_unref(s_icon);
+
+        // Percentage text inside slider on the right
+        std::string pct_str = std::to_string(static_cast<int>(std::round(val * 100.0f))) + "%";
+        PangoLayout* s_pct = pango_cairo_create_layout(cr);
+        PangoFontDescription* sp_font = pango_font_description_from_string("Sans Bold 9.5");
+        pango_layout_set_font_description(s_pct, sp_font);
+        pango_layout_set_text(s_pct, pct_str.c_str(), -1);
+        PangoRectangle sp_ink, sp_log;
+        pango_layout_get_pixel_extents(s_pct, &sp_ink, &sp_log);
+        cairo_move_to(cr, s_x + s_w - 14.0 - sp_ink.width - sp_ink.x, y + (s_h - sp_ink.height) / 2.0 - sp_ink.y);
+        cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.95);
+        pango_cairo_show_layout(cr, s_pct);
+        pango_font_description_free(sp_font);
+        g_object_unref(s_pct);
+    };
+
+    // Volume Slider (M3 Lavender #d0bcff)
+    draw_slider(122.0f, state.audio_muted ? "󰝟" : "󰕾", state.volume, 0.816, 0.737, 1.0);
+
+    // Brightness Slider (M3 Warm Amber #ffd27d)
+    draw_slider(156.0f, "󰃠", state.brightness, 1.0, 0.824, 0.490);
+
+    // 4. Footer Bar (Battery + Quick Actions)
+    float foot_y = 194.0f;
+
+    // Battery Chip
+    float bat_w = 150.0f;
+    float bat_h = 26.0f;
+    draw_rounded_rect(cr, 16.0f, foot_y, bat_w, bat_h, 13.0);
+    cairo_set_source_rgba(cr, 0.125, 0.106, 0.165, 0.88);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.25);
+    cairo_set_line_width(cr, 0.8);
+    cairo_stroke(cr);
+
+    const char* b_icon = state.battery_charging ? "󰂄" : "󰁹";
+    std::string b_text = std::to_string(state.battery_percent) + "%" + (state.battery_charging ? " (Cargando)" : "");
+
+    PangoLayout* b_layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* b_font = pango_font_description_from_string("JetBrainsMono Nerd Font 10");
+    pango_layout_set_font_description(b_layout, b_font);
+    pango_layout_set_text(b_layout, b_icon, -1);
+    PangoRectangle bi_ink, bi_log;
+    pango_layout_get_pixel_extents(b_layout, &bi_ink, &bi_log);
+    cairo_move_to(cr, 26.0 - bi_ink.x, foot_y + (bat_h - bi_ink.height) / 2.0 - bi_ink.y);
+    cairo_set_source_rgba(cr, 0.502, 0.871, 0.773, 0.95); // M3 Mint
+    pango_cairo_show_layout(cr, b_layout);
+
+    pango_font_description_free(b_font);
+    b_font = pango_font_description_from_string("Sans SemiBold 8.5");
+    pango_layout_set_font_description(b_layout, b_font);
+    pango_layout_set_text(b_layout, b_text.c_str(), -1);
+    PangoRectangle bt_ink, bt_log;
+    pango_layout_get_pixel_extents(b_layout, &bt_ink, &bt_log);
+    cairo_move_to(cr, 42.0, foot_y + (bat_h - bt_ink.height) / 2.0 - bt_ink.y);
+    cairo_set_source_rgba(cr, 0.792, 0.769, 0.816, 0.95);
+    pango_cairo_show_layout(cr, b_layout);
+    pango_font_description_free(b_font);
+    g_object_unref(b_layout);
+
+    // Quick Action: Screenshot
+    float shot_x = w - 74.0f;
+    draw_rounded_rect(cr, shot_x, foot_y, 30.0f, 26.0f, 13.0);
+    cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.90);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.30);
+    cairo_set_line_width(cr, 0.8);
+    cairo_stroke(cr);
+
+    PangoLayout* shot_layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* shot_font = pango_font_description_from_string("JetBrainsMono Nerd Font 11");
+    pango_layout_set_font_description(shot_layout, shot_font);
+    pango_layout_set_text(shot_layout, "󰄀", -1);
+    PangoRectangle sh_ink, sh_log;
+    pango_layout_get_pixel_extents(shot_layout, &sh_ink, &sh_log);
+    cairo_move_to(cr, shot_x + (30.0 - sh_ink.width) / 2.0 - sh_ink.x,
+                      foot_y + (26.0 - sh_ink.height) / 2.0 - sh_ink.y);
+    cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.95);
+    pango_cairo_show_layout(cr, shot_layout);
+    pango_font_description_free(shot_font);
+    g_object_unref(shot_layout);
+
+    // Quick Action: Lock
+    float lock_x = w - 38.0f;
+    draw_rounded_rect(cr, lock_x, foot_y, 30.0f, 26.0f, 13.0);
+    cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.90);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.30);
+    cairo_set_line_width(cr, 0.8);
+    cairo_stroke(cr);
+
+    PangoLayout* lock_layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* lock_font = pango_font_description_from_string("JetBrainsMono Nerd Font 11");
+    pango_layout_set_font_description(lock_layout, lock_font);
+    pango_layout_set_text(lock_layout, "󰌾", -1);
+    PangoRectangle lk_ink, lk_log;
+    pango_layout_get_pixel_extents(lock_layout, &lk_ink, &lk_log);
+    cairo_move_to(cr, lock_x + (30.0 - lk_ink.width) / 2.0 - lk_ink.x,
+                      foot_y + (26.0 - lk_ink.height) / 2.0 - lk_ink.y);
+    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.95);
+    pango_cairo_show_layout(cr, lock_layout);
+    pango_font_description_free(lock_font);
+    g_object_unref(lock_layout);
+}
+
 void Renderer::draw_hud_osd(cairo_t* cr, float w, float h, const OsdState& osd) {
     const char* icon_str = "󰕾";
-    double r_color = 0.3, g_color = 0.82, b_color = 1.0;
+    double r_color = 0.816, g_color = 0.737, b_color = 1.0; // M3 Lavender
 
     if (osd.type == OsdType::Volume) {
         if (osd.muted) {
             icon_str = "󰝟";
-            r_color = 0.96; g_color = 0.4; b_color = 0.45;
+            r_color = 0.98; g_color = 0.58; b_color = 0.52; // Coral
         } else if (osd.value < 0.01f) {
             icon_str = "󰝟";
-            r_color = 0.65; g_color = 0.68; b_color = 0.75;
+            r_color = 0.584; g_color = 0.557; b_color = 0.612;
         } else if (osd.value < 0.33f) {
             icon_str = "󰕿";
         } else if (osd.value < 0.66f) {
@@ -512,7 +862,7 @@ void Renderer::draw_hud_osd(cairo_t* cr, float w, float h, const OsdState& osd) 
             icon_str = "󰕾";
         }
     } else if (osd.type == OsdType::Brightness) {
-        r_color = 1.0; g_color = 0.82; b_color = 0.25;
+        r_color = 1.0; g_color = 0.824; b_color = 0.490; // M3 Amber
         if (osd.value < 0.33f) {
             icon_str = "󰃞";
         } else if (osd.value < 0.66f) {
@@ -523,13 +873,13 @@ void Renderer::draw_hud_osd(cairo_t* cr, float w, float h, const OsdState& osd) 
     } else { // Battery
         if (osd.is_charging) {
             icon_str = "󰂄";
-            r_color = 0.2; g_color = 0.85, b_color = 0.5; // Green charging
+            r_color = 0.502; g_color = 0.871; b_color = 0.773; // M3 Mint
         } else if (osd.value < 0.2f) {
             icon_str = "󰂃";
-            r_color = 0.95; g_color = 0.35, b_color = 0.35; // Red low bat
+            r_color = 0.98; g_color = 0.58; b_color = 0.52; // Coral
         } else {
             icon_str = "󰁹";
-            r_color = 0.3; g_color = 0.82, b_color = 0.95;
+            r_color = 0.502; g_color = 0.871; b_color = 0.773;
         }
     }
 
@@ -571,12 +921,12 @@ void Renderer::draw_hud_osd(cairo_t* cr, float w, float h, const OsdState& osd) 
     double val_x = w - 12.0 - val_ink.width - val_ink.x;
 
     cairo_move_to(cr, val_x, val_y);
-    cairo_set_source_rgba(cr, 0.92, 0.94, 0.98, 0.95);
+    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.95);
     pango_cairo_show_layout(cr, val_layout);
     pango_font_description_free(val_font);
     g_object_unref(val_layout);
 
-    // 3. Fluid Progress Bar
+    // 3. Fluid Capsule Progress Bar
     float bar_x = 36.0f;
     float bar_w = static_cast<float>(val_x) - bar_x - 10.0f;
     if (bar_w < 20.0f) bar_w = 20.0f;
@@ -584,7 +934,7 @@ void Renderer::draw_hud_osd(cairo_t* cr, float w, float h, const OsdState& osd) 
     float bar_y = (h - bar_h) / 2.0f;
 
     draw_rounded_rect(cr, bar_x, bar_y, bar_w, bar_h, 3.5);
-    cairo_set_source_rgba(cr, 0.2, 0.22, 0.3, 0.85);
+    cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.90);
     cairo_fill(cr);
 
     float fill_ratio = std::clamp(osd.value, 0.0f, 1.0f);
@@ -604,9 +954,9 @@ void Renderer::draw_notification(cairo_t* cr, float w, float h, const Notificati
     float badge_size = 38.0f;
 
     draw_rounded_rect(cr, badge_x, badge_y, badge_size, badge_size, 10.0);
-    cairo_set_source_rgba(cr, 0.18, 0.16, 0.28, 0.95);
+    cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.95);
     cairo_fill_preserve(cr);
-    cairo_set_source_rgba(cr, 0.5, 0.45, 0.85, 0.4);
+    cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.35);
     cairo_set_line_width(cr, 1.0);
     cairo_stroke(cr);
 
@@ -620,7 +970,7 @@ void Renderer::draw_notification(cairo_t* cr, float w, float h, const Notificati
     pango_layout_get_pixel_extents(bell_layout, &bell_ink, &bell_log);
     cairo_move_to(cr, badge_x + (badge_size - bell_ink.width) / 2.0 - bell_ink.x,
                       badge_y + (badge_size - bell_ink.height) / 2.0 - bell_ink.y);
-    cairo_set_source_rgba(cr, 0.72, 0.65, 0.98, 0.95);
+    cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.95);
     pango_cairo_show_layout(cr, bell_layout);
     pango_font_description_free(bell_font);
     g_object_unref(bell_layout);
@@ -637,7 +987,7 @@ void Renderer::draw_notification(cairo_t* cr, float w, float h, const Notificati
     pango_layout_set_width(title_layout, text_w * PANGO_SCALE);
 
     cairo_move_to(cr, text_x, badge_y + 2.0);
-    cairo_set_source_rgba(cr, 0.98, 0.98, 1.0, 1.0);
+    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 1.0);
     pango_cairo_show_layout(cr, title_layout);
     pango_font_description_free(title_font);
     g_object_unref(title_layout);
@@ -656,7 +1006,7 @@ void Renderer::draw_notification(cairo_t* cr, float w, float h, const Notificati
     pango_layout_set_width(body_layout, text_w * PANGO_SCALE);
 
     cairo_move_to(cr, text_x, badge_y + 21.0);
-    cairo_set_source_rgba(cr, 0.72, 0.76, 0.86, 0.85);
+    cairo_set_source_rgba(cr, 0.792, 0.769, 0.816, 0.85);
     pango_cairo_show_layout(cr, body_layout);
     pango_font_description_free(body_font);
     g_object_unref(body_layout);

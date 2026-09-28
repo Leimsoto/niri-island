@@ -192,12 +192,10 @@ void MprisClient::query_player_properties(const char* service) {
                             }
                         } else if (strcmp(key, "mpris:trackid") == 0) {
                             const char* tid = nullptr;
-                            if (sd_bus_message_enter_container(reply, 'v', "o") >= 0) {
-                                sd_bus_message_read(reply, "o", &tid);
-                                if (tid) info_.track_id = tid;
-                                sd_bus_message_exit_container(reply);
-                            } else if (sd_bus_message_enter_container(reply, 'v', "s") >= 0) {
-                                sd_bus_message_read(reply, "s", &tid);
+                            if (sd_bus_message_enter_container(reply, 'v', nullptr) >= 0) {
+                                if (sd_bus_message_read(reply, "o", &tid) < 0) {
+                                    sd_bus_message_read(reply, "s", &tid);
+                                }
                                 if (tid) info_.track_id = tid;
                                 sd_bus_message_exit_container(reply);
                             } else {
@@ -244,6 +242,7 @@ void MprisClient::query_position() {
 void MprisClient::set_position_ratio(float ratio) {
     if (!bus_ || current_player_service_.empty() || info_.length_us <= 0) return;
     ratio = std::clamp(ratio, 0.0f, 1.0f);
+    int64_t prev_us = info_.position_us;
     int64_t target_us = static_cast<int64_t>(ratio * static_cast<float>(info_.length_us));
     info_.position_us = target_us;
 
@@ -257,10 +256,11 @@ void MprisClient::set_position_ratio(float ratio) {
     );
     if (r < 0) {
         sd_bus_error_free(&error);
+        int64_t offset_us = target_us - prev_us;
         sd_bus_call_method(
             bus_, current_player_service_.c_str(), "/org/mpris/MediaPlayer2",
             "org.mpris.MediaPlayer2.Player", "Seek",
-            nullptr, nullptr, "x", target_us
+            nullptr, nullptr, "x", offset_us
         );
     }
     sd_bus_error_free(&error);

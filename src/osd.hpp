@@ -43,6 +43,16 @@ public:
     bool is_active() const { return state_.is_active(); }
     bool is_mic_active() const { return mic_active_; }
 
+    float current_volume() const { return current_volume_; }
+    bool current_muted() const { return current_muted_; }
+    float current_brightness() const;
+    int current_battery_pct() const { return last_battery_pct_ >= 0 ? last_battery_pct_ : 100; }
+    bool current_battery_charging() const { return last_ac_online_ == 1; }
+
+    void set_volume(float vol);
+    void toggle_mute();
+    void set_brightness(float brightness);
+
     std::function<void(const OsdState& state)> on_osd_change;
     std::function<void(bool active)> on_mic_change;
 
@@ -51,6 +61,8 @@ private:
     bool initialized_ = false;
     bool initial_vol_received_ = false;
     bool mic_active_ = false;
+    float current_volume_ = 0.5f;
+    bool current_muted_ = false;
 
     // PulseAudio (Volume + Mic Monitoring)
     pa_threaded_mainloop* pa_mainloop_ = nullptr;

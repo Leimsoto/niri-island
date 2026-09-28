@@ -10,6 +10,13 @@
 
 namespace island {
 
+enum class DragTarget {
+    None,
+    MusicSeek,
+    ControlVolume,
+    ControlBrightness
+};
+
 class IslandApp {
 public:
     IslandApp();
@@ -30,14 +37,21 @@ private:
 
     IslandMode current_mode_ = IslandMode::Idle;
     bool expanded_ = false;
+    bool in_control_center_ = false;
     bool running_ = true;
 
+    ControlCenterState cc_state_;
+    DragTarget active_drag_ = DragTarget::None;
+
     std::chrono::steady_clock::time_point last_frame_time_;
+    std::chrono::steady_clock::time_point last_cc_poll_time_;
     float anim_time_ = 0.0f;
 
     void update_target_dimensions();
+    void update_control_center_info();
     void on_frame();
     void on_click(int button, int state, double x, double y);
+    void on_motion(double x, double y);
     void on_hover(bool hovered);
 };
 

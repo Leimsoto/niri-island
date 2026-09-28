@@ -35,11 +35,15 @@ public:
     bool has_active() const { return current_.is_active(); }
     void dismiss() { current_ = NotificationItem{}; }
 
+    bool dnd() const { return dnd_; }
+    void toggle_dnd() { dnd_ = !dnd_; }
+
     std::function<void(const NotificationItem& item)> on_notification;
 
 private:
     sd_bus* bus_ = nullptr;
     NotificationItem current_;
+    bool dnd_ = false;
 
     static int message_filter(sd_bus_message* m, void* userdata, sd_bus_error* ret_error);
 };

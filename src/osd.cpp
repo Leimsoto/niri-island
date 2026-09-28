@@ -89,6 +89,8 @@ void OsdManager::pa_source_output_cb(pa_context*, const pa_source_output_info* i
 }
 
 void OsdManager::on_pulse_volume(float volume, bool muted) {
+    current_volume_ = volume;
+    current_muted_ = muted;
     if (!initial_vol_received_) {
         // Just record initial volume on launch without showing HUD
         initial_vol_received_ = true;
@@ -286,6 +288,42 @@ bool OsdManager::init() {
 
     initialized_ = true;
     return true;
+}
+
+float OsdManager::current_brightness() const {
+    if (max_brightness_ > 0 && last_brightness_ >= 0) {
+        return std::clamp(static_cast<float>(last_brightness_) / static_cast<float>(max_brightness_), 0.0f, 1.0f);
+    }
+    return 0.7f;
+}
+
+void OsdManager::set_volume(float vol) {
+    vol = std::clamp(vol, 0.0f, 1.0f);
+    current_volume_ = vol;
+    state_.value = vol;
+    char cmd[128];
+    snprintf(cmd, sizeof(cmd), "wpctl set-volume @DEFAULT_AUDIO_SINK@ %.2f", vol);
+    int r = system(cmd);
+    (void)r;
+}
+
+void OsdManager::toggle_mute() {
+    current_muted_ = !current_muted_;
+    state_.muted = current_muted_;
+    int r = system("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle");
+    (void)r;
+}
+
+void OsdManager::set_brightness(float b) {
+    b = std::clamp(b, 0.05f, 1.0f);
+    int pct = static_cast<int>(std::round(b * 100.0f));
+    char cmd[128];
+    snprintf(cmd, sizeof(cmd), "brightnessctl set %d%% -q", pct);
+    int r = system(cmd);
+    (void)r;
+    if (max_brightness_ > 0) {
+        last_brightness_ = static_cast<int>(b * max_brightness_);
+    }
 }
 
 } // namespace island
