@@ -1,6 +1,7 @@
 #include "mpris.hpp"
 #include <iostream>
 #include <cstring>
+#include <algorithm>
 
 namespace island {
 
@@ -180,6 +181,28 @@ void MprisClient::query_player_properties(const char* service) {
                             } else {
                                 sd_bus_message_skip(reply, "v");
                             }
+                        } else if (strcmp(key, "mpris:length") == 0) {
+                            int64_t len = 0;
+                            if (sd_bus_message_enter_container(reply, 'v', "x") >= 0) {
+                                sd_bus_message_read(reply, "x", &len);
+                                info_.length_us = len;
+                                sd_bus_message_exit_container(reply);
+                            } else {
+                                sd_bus_message_skip(reply, "v");
+                            }
+                        } else if (strcmp(key, "mpris:trackid") == 0) {
+                            const char* tid = nullptr;
+                            if (sd_bus_message_enter_container(reply, 'v', "o") >= 0) {
+                                sd_bus_message_read(reply, "o", &tid);
+                                if (tid) info_.track_id = tid;
+                                sd_bus_message_exit_container(reply);
+                            } else if (sd_bus_message_enter_container(reply, 'v', "s") >= 0) {
+                                sd_bus_message_read(reply, "s", &tid);
+                                if (tid) info_.track_id = tid;
+                                sd_bus_message_exit_container(reply);
+                            } else {
+                                sd_bus_message_skip(reply, "v");
+                            }
                         } else {
                             sd_bus_message_skip(reply, "v");
                         }
@@ -196,8 +219,59 @@ void MprisClient::query_player_properties(const char* service) {
 
     sd_bus_error_free(&error);
 
+    query_position();
+
     if (on_change) {
         on_change(info_);
+    }
+}
+
+void MprisClient::query_position() {
+    if (!bus_ || current_player_service_.empty() || !info_.active) return;
+    int64_t pos = 0;
+    sd_bus_error error = SD_BUS_ERROR_NULL;
+    int r = sd_bus_get_property_trivial(
+        bus_, current_player_service_.c_str(), "/org/mpris/MediaPlayer2",
+        "org.mpris.MediaPlayer2.Player", "Position",
+        &error, 'x', &pos
+    );
+    if (r >= 0) {
+        info_.position_us = pos;
+    }
+    sd_bus_error_free(&error);
+}
+
+void MprisClient::set_position_ratio(float ratio) {
+    if (!bus_ || current_player_service_.empty() || info_.length_us <= 0) return;
+    ratio = std::clamp(ratio, 0.0f, 1.0f);
+    int64_t target_us = static_cast<int64_t>(ratio * static_cast<float>(info_.length_us));
+    info_.position_us = target_us;
+
+    sd_bus_error error = SD_BUS_ERROR_NULL;
+    const char* tid = info_.track_id.empty() ? "/" : info_.track_id.c_str();
+
+    int r = sd_bus_call_method(
+        bus_, current_player_service_.c_str(), "/org/mpris/MediaPlayer2",
+        "org.mpris.MediaPlayer2.Player", "SetPosition",
+        &error, nullptr, "ox", tid, target_us
+    );
+    if (r < 0) {
+        sd_bus_error_free(&error);
+        sd_bus_call_method(
+            bus_, current_player_service_.c_str(), "/org/mpris/MediaPlayer2",
+            "org.mpris.MediaPlayer2.Player", "Seek",
+            nullptr, nullptr, "x", target_us
+        );
+    }
+    sd_bus_error_free(&error);
+}
+
+void MprisClient::tick(float dt) {
+    if (info_.active && info_.playing && info_.length_us > 0) {
+        info_.position_us += static_cast<int64_t>(dt * 1000000.0f);
+        if (info_.position_us > info_.length_us) {
+            info_.position_us = info_.length_us;
+        }
     }
 }
 

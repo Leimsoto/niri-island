@@ -4,6 +4,7 @@
 #include "renderer.hpp"
 #include "mpris.hpp"
 #include "osd.hpp"
+#include "notifications.hpp"
 #include "spring.hpp"
 #include <chrono>
 
@@ -21,6 +22,7 @@ private:
     WaylandContext wayland_;
     MprisClient mpris_;
     OsdManager osd_;
+    NotificationManager notifications_;
     Renderer renderer_;
 
     Spring width_spring_;

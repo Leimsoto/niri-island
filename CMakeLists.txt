@@ -57,6 +57,7 @@ add_executable(niri-island
     src/renderer.cpp
     src/mpris.cpp
     src/osd.cpp
+    src/notifications.cpp
     src/island.cpp
     ${PROTO_SRCS}
 )

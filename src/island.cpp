@@ -54,15 +54,32 @@ bool IslandApp::init() {
         if (state.type == OsdType::Volume) {
             std::cout << "[Island] OSD Volume: " << static_cast<int>(std::round(state.value * 100))
                       << "% (" << (state.muted ? "Muted" : "Active") << ")\n";
-        } else {
+        } else if (state.type == OsdType::Brightness) {
             std::cout << "[Island] OSD Brightness: " << static_cast<int>(std::round(state.value * 100)) << "%\n";
+        } else if (state.type == OsdType::Battery) {
+            std::cout << "[Island] OSD Battery: " << static_cast<int>(std::round(state.value * 100)) 
+                      << "% (" << (state.is_charging ? "Charging" : "Discharging") << ")\n";
         }
         update_target_dimensions();
         wayland_.request_frame_callback();
     };
 
+    osd_.on_mic_change = [this](bool) {
+        wayland_.request_frame_callback();
+    };
+
     if (!osd_.init()) {
         std::cerr << "Failed to init OSD Manager\n";
+    }
+
+    // Set Notification callback
+    notifications_.on_notification = [this](const NotificationItem&) {
+        update_target_dimensions();
+        wayland_.request_frame_callback();
+    };
+
+    if (!notifications_.init()) {
+        std::cerr << "Failed to init Notification Manager (continuing without notifications)\n";
     }
 
     update_target_dimensions();
@@ -74,13 +91,17 @@ bool IslandApp::init() {
 }
 
 void IslandApp::update_target_dimensions() {
-    if (osd_.is_active()) {
+    if (notifications_.has_active()) {
+        width_spring_.set_target(330.0f);
+        height_spring_.set_target(70.0f);
+        current_mode_ = IslandMode::Notification;
+    } else if (osd_.is_active()) {
         width_spring_.set_target(210.0f);
         height_spring_.set_target(34.0f);
         current_mode_ = IslandMode::HudOSD;
     } else if (expanded_) {
         width_spring_.set_target(330.0f);
-        height_spring_.set_target(115.0f);
+        height_spring_.set_target(125.0f);
         current_mode_ = IslandMode::MusicExpanded;
     } else if (mpris_.info().active) {
         width_spring_.set_target(240.0f);
@@ -94,7 +115,7 @@ void IslandApp::update_target_dimensions() {
 }
 
 void IslandApp::on_hover(bool hovered) {
-    if (osd_.is_active()) return; // Don't interrupt active HUD
+    if (notifications_.has_active() || osd_.is_active()) return;
 
     if (hovered && mpris_.info().active) {
         expanded_ = true;
@@ -106,19 +127,37 @@ void IslandApp::on_hover(bool hovered) {
 }
 
 void IslandApp::on_click(int button, int state, double x, double y) {
-    // Only handle button press (state == 1), left click (button == 272 / BTN_LEFT in Linux evdev)
     if (state != 1 || button != 272) return;
+
+    // Dismiss notification on click
+    if (notifications_.has_active()) {
+        notifications_.dismiss();
+        update_target_dimensions();
+        wayland_.request_frame_callback();
+        return;
+    }
 
     if (osd_.is_active()) return;
 
     if (expanded_) {
         float cur_w = width_spring_.value;
-        // Control buttons row: y around 80 - 110
-        if (y >= 75.0) {
+
+        // Interactive seek on progress bar (y between 66 and 86)
+        if (y >= 66.0 && y <= 86.0) {
+            float bar_x = 16.0f;
+            float bar_w = cur_w - 32.0f;
+            float ratio = std::clamp((static_cast<float>(x) - bar_x) / bar_w, 0.0f, 1.0f);
+            mpris_.set_position_ratio(ratio);
+            wayland_.request_frame_callback();
+            return;
+        }
+
+        // Control buttons row: y around 88 - 120
+        if (y > 86.0) {
             float mid_x = cur_w / 2.0f;
-            if (x < mid_x - 20.0f) {
+            if (x < mid_x - 25.0f) {
                 mpris_.previous();
-            } else if (x > mid_x + 20.0f) {
+            } else if (x > mid_x + 25.0f) {
                 mpris_.next();
             } else {
                 mpris_.play_pause();
@@ -137,12 +176,16 @@ void IslandApp::on_frame() {
     auto now = std::chrono::steady_clock::now();
     float dt = std::chrono::duration<float>(now - last_frame_time_).count();
     last_frame_time_ = now;
-    if (dt > 0.05f) dt = 0.05f; // Clamp delta to avoid physics explosion on stalls
+    if (dt > 0.05f) dt = 0.05f;
 
     anim_time_ += dt;
 
-    // Check if HUD expired
-    if (current_mode_ == IslandMode::HudOSD && !osd_.is_active()) {
+    // Advance song position smoothly
+    mpris_.tick(dt);
+
+    // Check if notification or HUD expired
+    if ((current_mode_ == IslandMode::Notification && !notifications_.has_active()) ||
+        (current_mode_ == IslandMode::HudOSD && !osd_.is_active())) {
         update_target_dimensions();
     }
 
@@ -157,13 +200,16 @@ void IslandApp::on_frame() {
 
     cairo_t* cr = wayland_.get_cairo_context(cur_w, cur_h);
     if (cr) {
-        renderer_.draw(cr, cur_w, cur_h, current_mode_, mpris_.info(), osd_.state(), anim_time_);
+        renderer_.draw(cr, cur_w, cur_h, current_mode_, mpris_.info(), 
+                       osd_.state(), notifications_.current(), 
+                       osd_.is_mic_active(), anim_time_);
         wayland_.commit_frame(cur_w, cur_h);
     }
 
-    // Continue frame loop if physics are moving, or audio equalizer is dancing, or HUD is active
-    bool needs_next_frame = animating_w || animating_h || osd_.is_active() ||
-                           (current_mode_ == IslandMode::MusicCompact && mpris_.info().playing);
+    // Continue frame loop if animations are active
+    bool needs_next_frame = animating_w || animating_h || 
+                           osd_.is_active() || notifications_.has_active() ||
+                           (mpris_.info().active && mpris_.info().playing);
 
     if (needs_next_frame) {
         wayland_.request_frame_callback();
@@ -171,17 +217,27 @@ void IslandApp::on_frame() {
 }
 
 void IslandApp::run() {
-    struct pollfd fds[3];
+    struct pollfd fds[4];
     int n_fds = 2;
     fds[0].fd = wayland_.get_fd();
     fds[0].events = POLLIN;
     fds[1].fd = mpris_.get_fd();
     fds[1].events = POLLIN;
 
+    int udev_idx = -1;
     if (osd_.get_udev_fd() >= 0) {
-        fds[2].fd = osd_.get_udev_fd();
-        fds[2].events = POLLIN;
-        n_fds = 3;
+        udev_idx = n_fds;
+        fds[n_fds].fd = osd_.get_udev_fd();
+        fds[n_fds].events = POLLIN;
+        n_fds++;
+    }
+
+    int notif_idx = -1;
+    if (notifications_.get_fd() >= 0) {
+        notif_idx = n_fds;
+        fds[n_fds].fd = notifications_.get_fd();
+        fds[n_fds].events = POLLIN;
+        n_fds++;
     }
 
     while (running_) {
@@ -191,7 +247,10 @@ void IslandApp::run() {
         }
         wl_display_flush(wayland_.get_display());
 
-        int timeout = osd_.is_active() ? 50 : 500;
+        bool fast_poll = osd_.is_active() || notifications_.has_active() || 
+                         (mpris_.info().active && mpris_.info().playing);
+        int timeout = fast_poll ? 50 : 500;
+
         int ret = poll(fds, n_fds, timeout);
         if (ret < 0) {
             break;
@@ -208,12 +267,17 @@ void IslandApp::run() {
             mpris_.update();
         }
 
-        if (n_fds == 3 && (fds[2].revents & POLLIN)) {
+        if (udev_idx >= 0 && (fds[udev_idx].revents & POLLIN)) {
             osd_.process_udev_events();
         }
 
-        // Handle HUD timeout transition
-        if (current_mode_ == IslandMode::HudOSD && !osd_.is_active()) {
+        if (notif_idx >= 0 && (fds[notif_idx].revents & POLLIN)) {
+            notifications_.update();
+        }
+
+        // Handle Mode expiry
+        if ((current_mode_ == IslandMode::Notification && !notifications_.has_active()) ||
+            (current_mode_ == IslandMode::HudOSD && !osd_.is_active())) {
             update_target_dimensions();
             wayland_.request_frame_callback();
         }

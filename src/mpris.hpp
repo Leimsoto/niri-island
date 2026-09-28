@@ -15,6 +15,7 @@ struct MediaInfo {
     std::string artist;
     std::string album;
     std::string art_url;
+    std::string track_id = "/";
     int64_t position_us = 0;
     int64_t length_us = 0;
 };
@@ -31,6 +32,9 @@ public:
     void play_pause();
     void next();
     void previous();
+    void set_position_ratio(float ratio);
+    void query_position();
+    void tick(float dt);
 
     const MediaInfo& info() const { return info_; }
     std::function<void(const MediaInfo&)> on_change;
