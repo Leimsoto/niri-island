@@ -341,101 +341,94 @@ void Renderer::draw_idle_expanded(cairo_t* cr, float, float h, const ControlCent
 }
 
 void Renderer::draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo& media, float anim_time) {
-    float left_margin = 8.0f;
-    float right_margin = w - 8.0f;
+    // 1. Center: Clock (HH:MM)
+    time_t now = time(nullptr);
+    struct tm* tm_info = localtime(&now);
+    char time_str[16];
+    strftime(time_str, sizeof(time_str), "%H:%M", tm_info);
 
-    // 1. Left side: Mini Album Art if available
+    PangoLayout* layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* font_desc = pango_font_description_from_string("JetBrainsMono Nerd Font SemiBold 11");
+    if (!font_desc) font_desc = pango_font_description_from_string("Sans SemiBold 11");
+    pango_layout_set_font_description(layout, font_desc);
+    pango_layout_set_text(layout, time_str, -1);
+
+    PangoRectangle ink_rect, logical_rect;
+    pango_layout_get_pixel_extents(layout, &ink_rect, &logical_rect);
+
+    double clock_x = (w - ink_rect.width) / 2.0 - ink_rect.x;
+    double clock_y = (h - ink_rect.height) / 2.0 - ink_rect.y;
+
+    cairo_move_to(cr, clock_x, clock_y);
+    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.98);
+    pango_cairo_show_layout(cr, layout);
+
+    pango_font_description_free(font_desc);
+    g_object_unref(layout);
+
+    // 2. Left side: Square Album Art with rounded corners
+    float art_size = 20.0f;
+    float art_x = 7.0f;
+    float art_y = (h - art_size) / 2.0f;
+    float art_radius = 4.5f;
+
     if (mini_art_surface_) {
-        float art_size = 22.0f;
-        float art_x = left_margin;
-        float art_y = (h - art_size) / 2.0f;
-
         cairo_save(cr);
-        draw_rounded_rect(cr, art_x, art_y, art_size, art_size, 5.0);
+        draw_rounded_rect(cr, art_x, art_y, art_size, art_size, art_radius);
         cairo_clip(cr);
         cairo_set_source_surface(cr, mini_art_surface_, art_x, art_y);
         cairo_paint(cr);
         cairo_restore(cr);
 
-        draw_rounded_rect(cr, art_x, art_y, art_size, art_size, 5.0);
-        cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.35);
+        // Subtle Material border highlight
+        draw_rounded_rect(cr, art_x, art_y, art_size, art_size, art_radius);
+        cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.25);
         cairo_set_line_width(cr, 0.8);
         cairo_stroke(cr);
-
-        left_margin += art_size + 8.0f;
     } else {
-        float wave_x = left_margin + 2.0f;
-        float wave_y = h / 2.0f;
-        for (int i = 0; i < 3; ++i) {
-            float bar_h = 4.0f + 6.0f * std::abs(std::sin(anim_time * 5.0f + i * 1.3f));
-            if (!media.playing) bar_h = 3.0f;
+        // Fallback: stylish dark container with music note
+        draw_rounded_rect(cr, art_x, art_y, art_size, art_size, art_radius);
+        cairo_set_source_rgba(cr, 0.18, 0.16, 0.22, 0.95);
+        cairo_fill(cr);
 
-            cairo_rectangle(cr, wave_x + i * 4.5f, wave_y - bar_h / 2.0f, 2.2f, bar_h);
-            cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.92); // M3 Lavender
-            cairo_fill(cr);
-        }
-        left_margin += 20.0f;
-    }
-
-    // 2. Right side: Equalizer or Music Icon
-    float right_content_w = 0.0f;
-    if (mini_art_surface_) {
-        float wave_x = right_margin - 16.0f;
-        float wave_y = h / 2.0f;
-        for (int i = 0; i < 3; ++i) {
-            float bar_h = 4.0f + 6.0f * std::abs(std::sin(anim_time * 6.0f + i * 1.5f));
-            if (!media.playing) bar_h = 2.5f;
-
-            cairo_rectangle(cr, wave_x + i * 4.5f, wave_y - bar_h / 2.0f, 2.2f, bar_h);
-            cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.90);
-            cairo_fill(cr);
-        }
-        right_content_w = 20.0f;
-    } else {
-        PangoLayout* icon_layout = pango_cairo_create_layout(cr);
-        PangoFontDescription* icon_font = pango_font_description_from_string("JetBrainsMono Nerd Font 10");
-        pango_layout_set_font_description(icon_layout, icon_font);
-        pango_layout_set_text(icon_layout, "󰎆", -1);
-
-        PangoRectangle ink_r, log_r;
-        pango_layout_get_pixel_extents(icon_layout, &ink_r, &log_r);
-        double icon_y = (h - ink_r.height) / 2.0 - ink_r.y;
-
-        cairo_move_to(cr, right_margin - 14.0, icon_y);
+        PangoLayout* icon_l = pango_cairo_create_layout(cr);
+        PangoFontDescription* icon_f = pango_font_description_from_string("JetBrainsMono Nerd Font 9");
+        pango_layout_set_font_description(icon_l, icon_f);
+        pango_layout_set_text(icon_l, "󰎆", -1);
+        PangoRectangle ink_i, log_i;
+        pango_layout_get_pixel_extents(icon_l, &ink_i, &log_i);
+        cairo_move_to(cr, art_x + (art_size - ink_i.width) / 2.0 - ink_i.x, 
+                          art_y + (art_size - ink_i.height) / 2.0 - ink_i.y);
         cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.85);
-        pango_cairo_show_layout(cr, icon_layout);
-        pango_font_description_free(icon_font);
-        g_object_unref(icon_layout);
-        right_content_w = 18.0f;
+        pango_cairo_show_layout(cr, icon_l);
+        pango_font_description_free(icon_f);
+        g_object_unref(icon_l);
     }
 
-    // 3. Center: Track title & Artist in M3 typography
-    std::string display_text = media.title.empty() ? "Música" : media.title;
-    if (!media.artist.empty()) {
-        display_text += " • " + media.artist;
+    // 3. Right side: Mini Cava-style equalizer bars animation
+    float cava_w = 18.0f;
+    float cava_x = w - 8.0f - cava_w;
+    float cava_center_y = h / 2.0f;
+    int num_bars = 4;
+    float bar_w = 2.2f;
+    float bar_spacing = (cava_w - num_bars * bar_w) / (num_bars - 1);
+
+    float freqs[4] = { 6.2f, 8.5f, 7.1f, 9.3f };
+    float phases[4] = { 0.2f, 1.5f, 3.1f, 4.4f };
+
+    for (int i = 0; i < num_bars; ++i) {
+        float bx = cava_x + i * (bar_w + bar_spacing);
+        float bar_h = 3.0f;
+        if (media.playing) {
+            float wave = 0.5f + 0.35f * std::sin(anim_time * freqs[i] + phases[i])
+                              + 0.15f * std::cos(anim_time * 12.0f + phases[i] * 1.8f);
+            bar_h = 3.5f + 11.5f * std::clamp(wave, 0.0f, 1.0f);
+        }
+
+        draw_rounded_rect(cr, bx, cava_center_y - bar_h / 2.0f, bar_w, bar_h, 1.1);
+        cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.92); // M3 Primary Lavender
+        cairo_fill(cr);
     }
-
-    float available_w = (w - left_margin - right_content_w - 6.0f);
-    if (available_w < 20.0f) available_w = 20.0f;
-
-    PangoLayout* layout = pango_cairo_create_layout(cr);
-    PangoFontDescription* font_desc = pango_font_description_from_string("Sans SemiBold 9.5");
-    pango_layout_set_font_description(layout, font_desc);
-    pango_layout_set_text(layout, display_text.c_str(), -1);
-    pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
-    pango_layout_set_width(layout, available_w * PANGO_SCALE);
-
-    PangoRectangle ink_rect, logical_rect;
-    pango_layout_get_pixel_extents(layout, &ink_rect, &logical_rect);
-
-    double text_y = (h - ink_rect.height) / 2.0 - ink_rect.y;
-
-    cairo_move_to(cr, left_margin, text_y);
-    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.98); // M3 On-Surface
-    pango_cairo_show_layout(cr, layout);
-
-    pango_font_description_free(font_desc);
-    g_object_unref(layout);
 }
 
 void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInfo& media, float) {

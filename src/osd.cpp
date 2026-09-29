@@ -301,29 +301,63 @@ void OsdManager::set_volume(float vol) {
     vol = std::clamp(vol, 0.0f, 1.0f);
     current_volume_ = vol;
     state_.value = vol;
-    char cmd[128];
-    snprintf(cmd, sizeof(cmd), "wpctl set-volume @DEFAULT_AUDIO_SINK@ %.2f", vol);
-    int r = system(cmd);
-    (void)r;
+
+    if (pa_mainloop_ && pa_ctx_) {
+        pa_threaded_mainloop_lock(pa_mainloop_);
+        if (pa_context_get_state(pa_ctx_) == PA_CONTEXT_READY) {
+            pa_cvolume cv;
+            pa_cvolume_init(&cv);
+            pa_cvolume_set(&cv, 2, static_cast<pa_volume_t>(std::round(vol * PA_VOLUME_NORM)));
+            pa_operation* op = pa_context_set_sink_volume_by_name(pa_ctx_, "@DEFAULT_SINK@", &cv, nullptr, nullptr);
+            if (op) pa_operation_unref(op);
+        }
+        pa_threaded_mainloop_unlock(pa_mainloop_);
+    } else {
+        char cmd[128];
+        snprintf(cmd, sizeof(cmd), "wpctl set-volume @DEFAULT_AUDIO_SINK@ %.2f &", vol);
+        int r = system(cmd);
+        (void)r;
+    }
 }
 
 void OsdManager::toggle_mute() {
     current_muted_ = !current_muted_;
     state_.muted = current_muted_;
-    int r = system("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle");
-    (void)r;
+
+    if (pa_mainloop_ && pa_ctx_) {
+        pa_threaded_mainloop_lock(pa_mainloop_);
+        if (pa_context_get_state(pa_ctx_) == PA_CONTEXT_READY) {
+            pa_operation* op = pa_context_set_sink_mute_by_name(pa_ctx_, "@DEFAULT_SINK@", current_muted_ ? 1 : 0, nullptr, nullptr);
+            if (op) pa_operation_unref(op);
+        }
+        pa_threaded_mainloop_unlock(pa_mainloop_);
+    } else {
+        int r = system("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle &");
+        (void)r;
+    }
 }
 
 void OsdManager::set_brightness(float b) {
-    b = std::clamp(b, 0.05f, 1.0f);
-    int pct = static_cast<int>(std::round(b * 100.0f));
+    b = std::clamp(b, 0.02f, 1.0f);
+    state_.value = b;
+    if (max_brightness_ > 0 && !backlight_path_.empty()) {
+        int target = static_cast<int>(std::round(b * max_brightness_));
+        last_brightness_ = target;
+
+        std::string bright_path = backlight_path_ + "/brightness";
+        std::ofstream f(bright_path);
+        if (f.is_open()) {
+            f << target;
+            f.close();
+            return;
+        }
+    }
+    // Asynchronous non-blocking fallback if direct write fails
     char cmd[128];
-    snprintf(cmd, sizeof(cmd), "brightnessctl set %d%% -q", pct);
+    int pct = static_cast<int>(std::round(b * 100.0f));
+    snprintf(cmd, sizeof(cmd), "brightnessctl set %d%% -q &", pct);
     int r = system(cmd);
     (void)r;
-    if (max_brightness_ > 0) {
-        last_brightness_ = static_cast<int>(b * max_brightness_);
-    }
 }
 
 } // namespace island

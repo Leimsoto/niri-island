@@ -18,10 +18,7 @@ int MprisClient::on_properties_changed(sd_bus_message* m, void* userdata, sd_bus
     const char* interface = nullptr;
     int r = sd_bus_message_read(m, "s", &interface);
     if (r >= 0 && strcmp(interface, "org.mpris.MediaPlayer2.Player") == 0) {
-        const char* sender = sd_bus_message_get_sender(m);
-        if (sender) {
-            self->query_player_properties(sender);
-        }
+        self->query_active_player();
     }
     return 0;
 }
@@ -59,54 +56,10 @@ bool MprisClient::init() {
     return true;
 }
 
-void MprisClient::query_active_player() {
-    sd_bus_message* reply = nullptr;
-    sd_bus_error error = SD_BUS_ERROR_NULL;
+MediaInfo MprisClient::fetch_player_info(const char* service) {
+    MediaInfo info;
+    if (!bus_ || !service) return info;
 
-    int r = sd_bus_call_method(
-        bus_, "org.freedesktop.DBus", "/org/freedesktop/DBus",
-        "org.freedesktop.DBus", "ListNames", &error, &reply, ""
-    );
-
-    if (r < 0) {
-        sd_bus_error_free(&error);
-        return;
-    }
-
-    r = sd_bus_message_enter_container(reply, 'a', "s");
-    if (r < 0) {
-        sd_bus_message_unref(reply);
-        return;
-    }
-
-    const char* name = nullptr;
-    std::string found_player;
-
-    while (sd_bus_message_read(reply, "s", &name) > 0) {
-        if (strncmp(name, "org.mpris.MediaPlayer2.", 23) == 0) {
-            query_player_properties(name);
-            if (info_.active) {
-                found_player = name;
-                if (info_.playing) {
-                    break;
-                }
-            }
-        }
-    }
-
-    sd_bus_message_exit_container(reply);
-    sd_bus_message_unref(reply);
-
-    if (found_player.empty() || !info_.active) {
-        info_.active = false;
-        info_.playing = false;
-        info_.title.clear();
-        info_.artist.clear();
-        if (on_change) on_change(info_);
-    }
-}
-
-void MprisClient::query_player_properties(const char* service) {
     sd_bus_error error = SD_BUS_ERROR_NULL;
     char* status = nullptr;
 
@@ -118,15 +71,12 @@ void MprisClient::query_player_properties(const char* service) {
 
     if (r < 0) {
         sd_bus_error_free(&error);
-        return;
+        return info;
     }
 
-    current_player_service_ = service;
-    info_.active = true;
-    info_.playing = (status && strcmp(status, "Playing") == 0);
-    info_.title.clear();
-    info_.artist.clear();
-    info_.art_url.clear();
+    info.player_name = service;
+    info.playing = (status && strcmp(status, "Playing") == 0);
+    bool is_stopped = (status && strcmp(status, "Stopped") == 0);
     free(status);
 
     // Query Metadata
@@ -151,21 +101,35 @@ void MprisClient::query_player_properties(const char* service) {
                             const char* t = nullptr;
                             if (sd_bus_message_enter_container(reply, 'v', "s") >= 0) {
                                 sd_bus_message_read(reply, "s", &t);
-                                if (t) info_.title = t;
+                                if (t) info.title = t;
                                 sd_bus_message_exit_container(reply);
                             } else {
                                 sd_bus_message_skip(reply, "v");
                             }
                         } else if (strcmp(key, "xesam:artist") == 0) {
-                            if (sd_bus_message_enter_container(reply, 'v', "as") >= 0) {
+                            if (sd_bus_message_enter_container(reply, 'v', nullptr) >= 0) {
                                 if (sd_bus_message_enter_container(reply, 'a', "s") >= 0) {
                                     const char* a = nullptr;
                                     while (sd_bus_message_read(reply, "s", &a) > 0) {
-                                        if (!info_.artist.empty()) info_.artist += ", ";
-                                        info_.artist += a;
+                                        if (!info.artist.empty()) info.artist += ", ";
+                                        if (a) info.artist += a;
                                     }
                                     sd_bus_message_exit_container(reply);
+                                } else {
+                                    const char* a = nullptr;
+                                    if (sd_bus_message_read(reply, "s", &a) > 0 && a) {
+                                        info.artist = a;
+                                    }
                                 }
+                                sd_bus_message_exit_container(reply);
+                            } else {
+                                sd_bus_message_skip(reply, "v");
+                            }
+                        } else if (strcmp(key, "xesam:album") == 0) {
+                            const char* alb = nullptr;
+                            if (sd_bus_message_enter_container(reply, 'v', "s") >= 0) {
+                                sd_bus_message_read(reply, "s", &alb);
+                                if (alb) info.album = alb;
                                 sd_bus_message_exit_container(reply);
                             } else {
                                 sd_bus_message_skip(reply, "v");
@@ -174,10 +138,7 @@ void MprisClient::query_player_properties(const char* service) {
                             const char* u = nullptr;
                             if (sd_bus_message_enter_container(reply, 'v', "s") >= 0) {
                                 sd_bus_message_read(reply, "s", &u);
-                                if (u) {
-                                    info_.art_url = u;
-                                    std::cout << "[Island] Found artUrl: " << u << "\n";
-                                }
+                                if (u) info.art_url = u;
                                 sd_bus_message_exit_container(reply);
                             } else {
                                 sd_bus_message_skip(reply, "v");
@@ -186,7 +147,7 @@ void MprisClient::query_player_properties(const char* service) {
                             int64_t len = 0;
                             if (sd_bus_message_enter_container(reply, 'v', "x") >= 0) {
                                 sd_bus_message_read(reply, "x", &len);
-                                info_.length_us = len;
+                                info.length_us = len;
                                 sd_bus_message_exit_container(reply);
                             } else {
                                 sd_bus_message_skip(reply, "v");
@@ -197,7 +158,7 @@ void MprisClient::query_player_properties(const char* service) {
                                 if (sd_bus_message_read(reply, "o", &tid) < 0) {
                                     sd_bus_message_read(reply, "s", &tid);
                                 }
-                                if (tid) info_.track_id = tid;
+                                if (tid) info.track_id = tid;
                                 sd_bus_message_exit_container(reply);
                             } else {
                                 sd_bus_message_skip(reply, "v");
@@ -215,15 +176,90 @@ void MprisClient::query_player_properties(const char* service) {
         }
         sd_bus_message_unref(reply);
     }
-
     sd_bus_error_free(&error);
 
-    info_.active = !info_.title.empty();
+    // Active if title is present and playback is not fully stopped
+    info.active = !info.title.empty() && !is_stopped;
+    return info;
+}
 
-    query_position();
+void MprisClient::query_active_player() {
+    sd_bus_message* reply = nullptr;
+    sd_bus_error error = SD_BUS_ERROR_NULL;
 
-    if (on_change) {
+    int r = sd_bus_call_method(
+        bus_, "org.freedesktop.DBus", "/org/freedesktop/DBus",
+        "org.freedesktop.DBus", "ListNames", &error, &reply, ""
+    );
+
+    if (r < 0) {
+        sd_bus_error_free(&error);
+        return;
+    }
+
+    r = sd_bus_message_enter_container(reply, 'a', "s");
+    if (r < 0) {
+        sd_bus_message_unref(reply);
+        return;
+    }
+
+    const char* name = nullptr;
+    std::string best_service;
+    MediaInfo best_info;
+
+    while (sd_bus_message_read(reply, "s", &name) > 0) {
+        if (strncmp(name, "org.mpris.MediaPlayer2.", 23) == 0) {
+            if (strstr(name, "playerctld")) continue;
+
+            MediaInfo cand = fetch_player_info(name);
+            if (cand.active) {
+                if (cand.playing) {
+                    best_service = name;
+                    best_info = cand;
+                    break;
+                } else if (best_service.empty() || !best_info.playing) {
+                    best_service = name;
+                    best_info = cand;
+                }
+            }
+        }
+    }
+
+    sd_bus_message_exit_container(reply);
+    sd_bus_message_unref(reply);
+
+    bool was_active = info_.active;
+    bool was_playing = info_.playing;
+    std::string prev_title = info_.title;
+    std::string prev_art = info_.art_url;
+
+    current_player_service_ = best_service;
+    info_ = best_info;
+
+    if (info_.active) {
+        query_position();
+    }
+
+    bool changed = (was_active != info_.active ||
+                    was_playing != info_.playing ||
+                    prev_title != info_.title ||
+                    prev_art != info_.art_url);
+
+    if (changed && on_change) {
         on_change(info_);
+    }
+}
+
+void MprisClient::query_player_properties(const char* service) {
+    if (!service) return;
+    MediaInfo cand = fetch_player_info(service);
+    if (cand.active) {
+        current_player_service_ = service;
+        info_ = cand;
+        query_position();
+        if (on_change) on_change(info_);
+    } else if (current_player_service_ == service) {
+        query_active_player();
     }
 }
 
@@ -275,6 +311,13 @@ void MprisClient::tick(float dt) {
         if (info_.position_us > info_.length_us) {
             info_.position_us = info_.length_us;
         }
+    }
+
+    static float poll_timer = 0.0f;
+    poll_timer += dt;
+    if (poll_timer >= 1.0f) {
+        poll_timer = 0.0f;
+        query_active_player();
     }
 }
 

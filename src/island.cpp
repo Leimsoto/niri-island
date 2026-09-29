@@ -172,8 +172,8 @@ void IslandApp::update_target_dimensions() {
             current_mode_ = IslandMode::IdleExpanded;
         }
     } else if (has_media) {
-        width_spring_.set_target(240.0f);
-        height_spring_.set_target(34.0f);
+        width_spring_.set_target(146.0f);
+        height_spring_.set_target(32.0f);
         current_mode_ = IslandMode::MusicCompact;
     } else {
         width_spring_.set_target(110.0f);
