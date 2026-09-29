@@ -265,8 +265,27 @@ void MprisClient::query_player_properties(const char* service) {
     }
 }
 
+void MprisClient::set_scrubbing(bool scrubbing) {
+    is_scrubbing_ = scrubbing;
+    if (scrubbing) {
+        seek_lockout_timer_ = 0.8f;
+    }
+}
+
+void MprisClient::preview_position_ratio(float ratio) {
+    if (info_.length_us <= 0) return;
+    ratio = std::clamp(ratio, 0.0f, 1.0f);
+    info_.position_us = static_cast<int64_t>(ratio * static_cast<float>(info_.length_us));
+}
+
+void MprisClient::commit_seek_ratio(float ratio) {
+    set_position_ratio(ratio);
+}
+
 void MprisClient::query_position() {
     if (!bus_ || current_player_service_.empty() || !info_.active) return;
+    if (seek_lockout_timer_ > 0.0f || is_scrubbing_) return; // Ignore outdated player Position right after seek
+
     int64_t pos = 0;
     sd_bus_error error = SD_BUS_ERROR_NULL;
     int r = sd_bus_get_property_trivial(
@@ -286,6 +305,7 @@ void MprisClient::set_position_ratio(float ratio) {
     int64_t prev_us = info_.position_us;
     int64_t target_us = static_cast<int64_t>(ratio * static_cast<float>(info_.length_us));
     info_.position_us = target_us;
+    seek_lockout_timer_ = 0.8f; // Lockout external updates for 800ms to allow audio buffer settle
 
     sd_bus_error error = SD_BUS_ERROR_NULL;
     const char* tid = info_.track_id.empty() ? "/" : info_.track_id.c_str();
@@ -308,7 +328,12 @@ void MprisClient::set_position_ratio(float ratio) {
 }
 
 void MprisClient::tick(float dt) {
-    if (info_.active && info_.playing && info_.length_us > 0) {
+    if (seek_lockout_timer_ > 0.0f) {
+        seek_lockout_timer_ -= dt;
+        if (seek_lockout_timer_ < 0.0f) seek_lockout_timer_ = 0.0f;
+    }
+
+    if (info_.active && info_.playing && info_.length_us > 0 && !is_scrubbing_) {
         info_.position_us += static_cast<int64_t>(dt * 1000000.0f);
         if (info_.position_us > info_.length_us) {
             info_.position_us = info_.length_us;

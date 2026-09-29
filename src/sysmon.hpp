@@ -2,6 +2,7 @@
 
 #include <string>
 #include <cstdint>
+#include <chrono>
 
 namespace island {
 
@@ -24,6 +25,8 @@ private:
     SystemStats stats_;
     uint64_t prev_total_ = 0;
     uint64_t prev_idle_ = 0;
+    std::chrono::steady_clock::time_point last_sample_time_{};
+    bool first_sample_ = true;
 
     void read_cpu();
     void read_memory();

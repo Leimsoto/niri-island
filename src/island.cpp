@@ -84,9 +84,9 @@ bool IslandApp::init() {
 
     // Set MPRIS callback
     mpris_.on_change = [this](const MediaInfo& info) {
-        if (info.active && !info.title.empty() && info.playing) {
+        if (info.active && !info.title.empty()) {
             std::cout << "[Island] Media: " << info.artist << " - " << info.title 
-                      << " (Playing)\n";
+                      << (info.playing ? " (Playing)\n" : " (Paused)\n");
         } else {
             std::cout << "[Island] Media: Inactive / Stopped\n";
             if (current_mode_ == IslandMode::MusicExpanded || current_mode_ == IslandMode::MusicCompact) {
@@ -152,7 +152,7 @@ void IslandApp::update_target_dimensions() {
     workspaces_.update();
     ws_bubble_w_ = workspaces_.bubble_width();
 
-    bool has_media = mpris_.info().active && !mpris_.info().title.empty() && mpris_.info().playing;
+    bool has_media = mpris_.info().active && !mpris_.info().title.empty();
 
     if (in_control_center_) {
         width_spring_.set_target(400.0f);
@@ -322,6 +322,15 @@ void IslandApp::on_click(int button, int state, double x, double y) {
 
     // Button release: finish drag and release tactile press
     if (state == 0) {
+        if (active_drag_ == DragTarget::MusicSeek) {
+            float bar_x = 16.0f;
+            float bar_w = width_spring_.value - 32.0f;
+            float left_wing = (ws_bubble_w_ > 0.0f) ? (ws_bubble_w_ + 8.0f) : 0.0f;
+            float cur_x = static_cast<float>(x) - left_wing;
+            float ratio = std::clamp((cur_x - bar_x) / bar_w, 0.0f, 1.0f);
+            mpris_.commit_seek_ratio(ratio);
+            mpris_.set_scrubbing(false);
+        }
         active_drag_ = DragTarget::None;
         volume_press_spring_.set_target(0.0f);
         volume_bounce_spring_.set_target(0.0f);
@@ -486,8 +495,9 @@ void IslandApp::on_click(int button, int state, double x, double y) {
             float bar_x = 16.0f;
             float bar_w = cur_w - 32.0f;
             float ratio = std::clamp((static_cast<float>(cur_x) - bar_x) / bar_w, 0.0f, 1.0f);
-            mpris_.set_position_ratio(ratio);
             active_drag_ = DragTarget::MusicSeek;
+            mpris_.set_scrubbing(true);
+            mpris_.preview_position_ratio(ratio);
             wayland_.request_frame_callback();
             return;
         }
@@ -552,7 +562,7 @@ void IslandApp::on_motion(double x, double y) {
         float bar_x = 16.0f;
         float bar_w = cur_w - 32.0f;
         float ratio = std::clamp((cur_x - bar_x) / bar_w, 0.0f, 1.0f);
-        mpris_.set_position_ratio(ratio);
+        mpris_.preview_position_ratio(ratio);
         wayland_.request_frame_callback();
     } else if (active_drag_ == DragTarget::ControlVolume) {
         float bar_x = 20.0f;

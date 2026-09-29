@@ -33,6 +33,9 @@ public:
     void next();
     void previous();
     void set_position_ratio(float ratio);
+    void preview_position_ratio(float ratio);
+    void commit_seek_ratio(float ratio);
+    void set_scrubbing(bool scrubbing);
     void query_position();
     void tick(float dt);
 
@@ -44,6 +47,8 @@ private:
     MediaInfo info_;
     std::string current_player_service_;
     float poll_timer_ = 0.0f;
+    float seek_lockout_timer_ = 0.0f;
+    bool is_scrubbing_ = false;
 
     void query_active_player();
     MediaInfo fetch_player_info(const char* service);

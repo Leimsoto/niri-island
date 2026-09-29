@@ -160,7 +160,7 @@ void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode,
                     const NotificationItem& notif, const ControlCenterState& cc_state,
                     bool mic_active, float anim_time,
                     float ws_bubble_w, const std::vector<WorkspaceInfo>& workspaces, uint32_t active_ws_idx) {
-    if (media.active && media.playing && !media.title.empty()) {
+    if (media.active && !media.title.empty()) {
         update_art(media.art_url);
     } else {
         update_art("");
@@ -466,7 +466,7 @@ void Renderer::draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo
         }
 
         draw_rounded_rect(cr, bx, cava_center_y - bar_h / 2.0f, bar_w, bar_h, 1.1);
-        cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.92); // M3 Primary Lavender
+        cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, media.playing ? 0.92 : 0.45); // Subtle when paused
         cairo_fill(cr);
     }
 }
