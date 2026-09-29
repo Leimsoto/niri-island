@@ -20,7 +20,7 @@ int MprisClient::on_properties_changed(sd_bus_message* m, void* userdata, sd_bus
     if (r >= 0 && strcmp(interface, "org.mpris.MediaPlayer2.Player") == 0) {
         self->query_active_player();
     }
-    return 0;
+    return 1;
 }
 
 int MprisClient::on_name_owner_changed(sd_bus_message* m, void* userdata, sd_bus_error*) {
@@ -30,11 +30,11 @@ int MprisClient::on_name_owner_changed(sd_bus_message* m, void* userdata, sd_bus
     if (r >= 0 && strncmp(name, "org.mpris.MediaPlayer2.", 23) == 0) {
         self->query_active_player();
     }
-    return 0;
+    return 1;
 }
 
 bool MprisClient::init() {
-    int r = sd_bus_default_user(&bus_);
+    int r = sd_bus_open_user(&bus_);
     if (r < 0) {
         std::cerr << "Failed to connect to user D-Bus: " << strerror(-r) << "\n";
         return false;
@@ -51,6 +51,8 @@ bool MprisClient::init() {
         "org.freedesktop.DBus", "NameOwnerChanged",
         on_name_owner_changed, this
     );
+
+    sd_bus_flush(bus_);
 
     query_active_player();
     return true;
@@ -313,10 +315,9 @@ void MprisClient::tick(float dt) {
         }
     }
 
-    static float poll_timer = 0.0f;
-    poll_timer += dt;
-    if (poll_timer >= 1.0f) {
-        poll_timer = 0.0f;
+    poll_timer_ += dt;
+    if (poll_timer_ >= 2.0f) {
+        poll_timer_ = 0.0f;
         query_active_player();
     }
 }

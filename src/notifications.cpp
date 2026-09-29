@@ -42,11 +42,11 @@ int NotificationManager::message_filter(sd_bus_message* m, void* userdata, sd_bu
         }
     }
 
-    return 0;
+    return 1;
 }
 
 bool NotificationManager::init() {
-    int r = sd_bus_default_user(&bus_);
+    int r = sd_bus_open_user(&bus_);
     if (r < 0) {
         std::cerr << "[Notification] Failed to connect to user D-Bus\n";
         return false;

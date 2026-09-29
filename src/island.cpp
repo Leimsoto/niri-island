@@ -84,9 +84,14 @@ bool IslandApp::init() {
 
     // Set MPRIS callback
     mpris_.on_change = [this](const MediaInfo& info) {
-        if (info.active && !info.title.empty()) {
+        if (info.active && !info.title.empty() && info.playing) {
             std::cout << "[Island] Media: " << info.artist << " - " << info.title 
-                      << " (" << (info.playing ? "Playing" : "Paused") << ")\n";
+                      << " (Playing)\n";
+        } else {
+            std::cout << "[Island] Media: Inactive / Stopped\n";
+            if (current_mode_ == IslandMode::MusicExpanded || current_mode_ == IslandMode::MusicCompact) {
+                expanded_ = false;
+            }
         }
         update_target_dimensions();
         wayland_.request_frame_callback();
@@ -147,7 +152,7 @@ void IslandApp::update_target_dimensions() {
     workspaces_.update();
     ws_bubble_w_ = workspaces_.bubble_width();
 
-    bool has_media = mpris_.info().active && !mpris_.info().title.empty();
+    bool has_media = mpris_.info().active && !mpris_.info().title.empty() && mpris_.info().playing;
 
     if (in_control_center_) {
         width_spring_.set_target(400.0f);
@@ -693,6 +698,7 @@ void IslandApp::run() {
         n_fds++;
     }
 
+    auto last_loop_time = std::chrono::steady_clock::now();
     while (running_) {
         // Prepare Wayland events
         while (wl_display_prepare_read(wayland_.get_display()) != 0) {
@@ -704,12 +710,17 @@ void IslandApp::run() {
                          (mpris_.info().active && !mpris_.info().title.empty() && mpris_.info().playing) ||
                          (active_drag_ != DragTarget::None) || in_control_center_ ||
                          (current_mode_ == IslandMode::IdleExpanded);
-        int timeout = fast_poll ? 50 : 500;
+        int timeout = fast_poll ? 50 : 250;
 
         int ret = poll(fds, n_fds, timeout);
         if (ret < 0) {
             break;
         }
+
+        auto now_loop = std::chrono::steady_clock::now();
+        float dt_loop = std::chrono::duration<float>(now_loop - last_loop_time).count();
+        last_loop_time = now_loop;
+        if (dt_loop > 0.5f) dt_loop = 0.5f;
 
         if (fds[0].revents & POLLIN) {
             wl_display_read_events(wayland_.get_display());
@@ -718,9 +729,9 @@ void IslandApp::run() {
             wl_display_cancel_read(wayland_.get_display());
         }
 
-        if (fds[1].revents & POLLIN) {
-            mpris_.update();
-        }
+        // Always update and tick MPRIS so track changes/stops are immediate
+        mpris_.update();
+        mpris_.tick(dt_loop);
 
         if (udev_idx >= 0 && (fds[udev_idx].revents & POLLIN)) {
             osd_.process_udev_events();

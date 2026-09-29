@@ -43,6 +43,7 @@ private:
     sd_bus* bus_ = nullptr;
     MediaInfo info_;
     std::string current_player_service_;
+    float poll_timer_ = 0.0f;
 
     void query_active_player();
     MediaInfo fetch_player_info(const char* service);

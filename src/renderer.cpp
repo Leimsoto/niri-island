@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
+#include <filesystem>
 
 namespace island {
 
@@ -24,19 +25,41 @@ Renderer::~Renderer() {
     }
 }
 
+static std::string resolve_art_path(const std::string& path_or_uri) {
+    if (path_or_uri.empty()) return "";
+    if (path_or_uri.rfind("file://", 0) == 0) {
+        char* local = g_filename_from_uri(path_or_uri.c_str(), nullptr, nullptr);
+        if (local) {
+            std::string res = local;
+            g_free(local);
+            return res;
+        }
+        return path_or_uri.substr(7);
+    }
+    if (path_or_uri.rfind("http://", 0) == 0 || path_or_uri.rfind("https://", 0) == 0) {
+        std::hash<std::string> hasher;
+        std::string cache_path = "/tmp/niri_art_" + std::to_string(hasher(path_or_uri)) + ".img";
+        if (std::filesystem::exists(cache_path) && std::filesystem::file_size(cache_path) > 0) {
+            return cache_path;
+        }
+        static std::string last_download;
+        if (last_download != path_or_uri) {
+            last_download = path_or_uri;
+            char cmd[512];
+            snprintf(cmd, sizeof(cmd), "curl -s -L '%s' -o '%s' &", path_or_uri.c_str(), cache_path.c_str());
+            int r = system(cmd);
+            (void)r;
+        }
+        return "";
+    }
+    return path_or_uri;
+}
+
 cairo_surface_t* Renderer::load_image_scaled(const std::string& path_or_uri, int target_w, int target_h) {
     if (path_or_uri.empty()) return nullptr;
 
-    std::string path = path_or_uri;
-    if (path.rfind("file://", 0) == 0) {
-        char* local = g_filename_from_uri(path.c_str(), nullptr, nullptr);
-        if (local) {
-            path = local;
-            g_free(local);
-        } else {
-            path = path.substr(7);
-        }
-    }
+    std::string path = resolve_art_path(path_or_uri);
+    if (path.empty()) return nullptr;
 
     GError* err = nullptr;
     GdkPixbuf* pixbuf = gdk_pixbuf_new_from_file_at_scale(path.c_str(), target_w, target_h, FALSE, &err);
@@ -89,7 +112,22 @@ cairo_surface_t* Renderer::load_image_scaled(const std::string& path_or_uri, int
 }
 
 void Renderer::update_art(const std::string& art_url) {
-    if (art_url == current_art_url_) return;
+    if (art_url.empty()) {
+        if (!current_art_url_.empty() || art_surface_ || mini_art_surface_) {
+            current_art_url_.clear();
+            if (art_surface_) {
+                cairo_surface_destroy(art_surface_);
+                art_surface_ = nullptr;
+            }
+            if (mini_art_surface_) {
+                cairo_surface_destroy(mini_art_surface_);
+                mini_art_surface_ = nullptr;
+            }
+        }
+        return;
+    }
+
+    if (art_url == current_art_url_ && art_surface_ && mini_art_surface_) return;
 
     current_art_url_ = art_url;
     if (art_surface_) {
@@ -101,10 +139,8 @@ void Renderer::update_art(const std::string& art_url) {
         mini_art_surface_ = nullptr;
     }
 
-    if (!art_url.empty()) {
-        art_surface_ = load_image_scaled(art_url, 48, 48);
-        mini_art_surface_ = load_image_scaled(art_url, 22, 22);
-    }
+    art_surface_ = load_image_scaled(art_url, 48, 48);
+    mini_art_surface_ = load_image_scaled(art_url, 22, 22);
 }
 
 void Renderer::draw_rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r) {
@@ -124,7 +160,11 @@ void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode,
                     const NotificationItem& notif, const ControlCenterState& cc_state,
                     bool mic_active, float anim_time,
                     float ws_bubble_w, const std::vector<WorkspaceInfo>& workspaces, uint32_t active_ws_idx) {
-    update_art(media.art_url);
+    if (media.active && media.playing && !media.title.empty()) {
+        update_art(media.art_url);
+    } else {
+        update_art("");
+    }
 
     // 1. Calculate symmetrical side wings so the main island is perfectly centered horizontally
     float left_wing = (ws_bubble_w > 0.0f) ? (ws_bubble_w + 8.0f) : 0.0f;
