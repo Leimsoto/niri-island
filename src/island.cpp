@@ -76,8 +76,10 @@ bool IslandApp::init() {
         on_hover(hovered);
     };
 
-    // Initial surface creation with idle default dimensions
-    wayland_.create_surface(110, 32);
+    workspaces_.init();
+    ws_bubble_w_ = workspaces_.bubble_width();
+    int initial_total_w = (int)std::round(ws_bubble_w_ + 8.0f + 110.0f);
+    wayland_.create_surface(initial_total_w, 32);
     last_frame_time_ = std::chrono::steady_clock::now();
 
     // Set MPRIS callback
@@ -142,6 +144,9 @@ bool IslandApp::init() {
 }
 
 void IslandApp::update_target_dimensions() {
+    workspaces_.update();
+    ws_bubble_w_ = workspaces_.bubble_width();
+
     bool has_media = mpris_.info().active && !mpris_.info().title.empty();
 
     if (in_control_center_) {
@@ -228,23 +233,70 @@ void IslandApp::on_hover(bool hovered) {
 }
 
 void IslandApp::on_click(int button, int state, double x, double y) {
-    if (button != 272) {
-        if (button == 273 && state == 1) { // Right Click toggles Control Center
-            in_control_center_ = !in_control_center_;
-            if (in_control_center_) {
-                expanded_ = false;
-                update_control_center_info();
+    // 0. Workspaces Bubble interaction (Left satellite)
+    if (ws_bubble_w_ > 0.0f && x < ws_bubble_w_) {
+        if (button == 272 && state == 1) { // Left Click
+            const auto& ws_list = workspaces_.workspaces();
+            if (!ws_list.empty()) {
+                float per_ws = ws_bubble_w_ / static_cast<float>(ws_list.size());
+                int ws_idx = std::clamp(static_cast<int>(x / per_ws), 0, static_cast<int>(ws_list.size()) - 1);
+                workspaces_.focus_workspace(ws_list[ws_idx].idx);
+                wayland_.request_frame_callback();
             }
-            update_target_dimensions();
-            wayland_.request_frame_callback();
-            return;
         }
         return;
     }
 
-    // Button release: finish drag
+    float island_offset_x = (ws_bubble_w_ > 0.0f) ? (ws_bubble_w_ + 8.0f) : 0.0f;
+    if (x < island_offset_x) return; // In gap between bubble and island
+
+    double cur_x = x - island_offset_x;
+    float cur_w = width_spring_.value;
+
+    // Right Click handler
+    if (button == 273 && state == 1) {
+        if (in_control_center_) {
+            // Check if right click was on Wi-Fi or Bluetooth chips!
+            float chip_w = (cur_w - 40.0f - 12.0f) / 2.0f;
+            float chip_h = 38.0f;
+            float col1_x = 20.0f;
+            float col2_x = 20.0f + chip_w + 12.0f;
+            float row1_y = 90.0f;
+
+            if (y >= row1_y && y <= row1_y + chip_h) {
+                if (cur_x >= col1_x && cur_x <= col1_x + chip_w) {
+                    // Right click on Wi-Fi: open network manager / nmtui
+                    int r = system("ghostty -e nmtui & || nm-connection-editor &"); (void)r;
+                    return;
+                } else if (cur_x >= col2_x && cur_x <= col2_x + chip_w) {
+                    // Right click on Bluetooth: open bluetoothctl / blueman
+                    int r = system("ghostty -e bluetoothctl & || blueman-manager &"); (void)r;
+                    return;
+                }
+            }
+        }
+
+        // Otherwise right click toggles Control Center
+        in_control_center_ = !in_control_center_;
+        if (in_control_center_) {
+            expanded_ = false;
+            update_control_center_info();
+        }
+        update_target_dimensions();
+        wayland_.request_frame_callback();
+        return;
+    }
+
+    if (button != 272) return;
+
+    // Button release: finish drag and release tactile press
     if (state == 0) {
         active_drag_ = DragTarget::None;
+        volume_press_spring_.set_target(0.0f);
+        volume_bounce_spring_.set_target(0.0f);
+        brightness_press_spring_.set_target(0.0f);
+        brightness_bounce_spring_.set_target(0.0f);
+        wayland_.request_frame_callback();
         return;
     }
 
@@ -259,31 +311,29 @@ void IslandApp::on_click(int button, int state, double x, double y) {
 
     if (osd_.is_active()) return;
 
-    float cur_w = width_spring_.value;
-
     // 1. Control Center Interactions
     if (in_control_center_) {
         // Header actions (y <= 44.0)
         if (y <= 44.0) {
             // Close button (far right: cur_w - 42)
-            if (x >= cur_w - 46.0f) {
+            if (cur_x >= cur_w - 46.0f) {
                 in_control_center_ = false;
                 update_target_dimensions();
                 wayland_.request_frame_callback();
                 return;
             }
             // Lock button (cur_w - 76)
-            if (x >= cur_w - 80.0f && x <= cur_w - 50.0f) {
+            if (cur_x >= cur_w - 80.0f && cur_x <= cur_w - 50.0f) {
                 int r = system("swaylock -f 2>/dev/null || loginctl lock-session &"); (void)r;
                 return;
             }
             // Screenshot button (cur_w - 110)
-            if (x >= cur_w - 114.0f && x <= cur_w - 84.0f) {
+            if (cur_x >= cur_w - 114.0f && cur_x <= cur_w - 84.0f) {
                 int r = system("mkdir -p ~/Imágenes/Screenshots && grim ~/Imágenes/Screenshots/screenshot_$(date +%s).png &"); (void)r;
                 return;
             }
             // Media toggle button (if media active: cur_w - 144)
-            if (cc_state_.media_active && x >= cur_w - 148.0f && x <= cur_w - 118.0f) {
+            if (cc_state_.media_active && cur_x >= cur_w - 148.0f && cur_x <= cur_w - 118.0f) {
                 in_control_center_ = false;
                 expanded_ = true;
                 update_target_dimensions();
@@ -302,7 +352,7 @@ void IslandApp::on_click(int button, int state, double x, double y) {
 
         // Row 1: Wi-Fi (Col 1) and Bluetooth (Col 2)
         if (y >= row1_y && y <= row1_y + chip_h) {
-            if (x >= col1_x && x <= col1_x + chip_w) {
+            if (cur_x >= col1_x && cur_x <= col1_x + chip_w) {
                 if (cc_state_.wifi_enabled) {
                     int r = system("nmcli radio wifi off"); (void)r;
                     cc_state_.wifi_enabled = false;
@@ -313,7 +363,7 @@ void IslandApp::on_click(int button, int state, double x, double y) {
                 update_control_center_info();
                 wayland_.request_frame_callback();
                 return;
-            } else if (x >= col2_x && x <= col2_x + chip_w) {
+            } else if (cur_x >= col2_x && cur_x <= col2_x + chip_w) {
                 if (cc_state_.bluetooth_enabled) {
                     int r = system("bluetoothctl power off"); (void)r;
                     cc_state_.bluetooth_enabled = false;
@@ -329,12 +379,12 @@ void IslandApp::on_click(int button, int state, double x, double y) {
 
         // Row 2: Audio Mute (Col 1) and DND (Col 2)
         if (y >= row2_y && y <= row2_y + chip_h) {
-            if (x >= col1_x && x <= col1_x + chip_w) {
+            if (cur_x >= col1_x && cur_x <= col1_x + chip_w) {
                 osd_.toggle_mute();
                 cc_state_.audio_muted = osd_.current_muted();
                 wayland_.request_frame_callback();
                 return;
-            } else if (x >= col2_x && x <= col2_x + chip_w) {
+            } else if (cur_x >= col2_x && cur_x <= col2_x + chip_w) {
                 notifications_.toggle_dnd();
                 cc_state_.dnd_enabled = notifications_.dnd();
                 wayland_.request_frame_callback();
@@ -342,27 +392,45 @@ void IslandApp::on_click(int button, int state, double x, double y) {
             }
         }
 
-        // Volume Slider (y between 186 and 224)
-        if (y >= 186.0 && y <= 224.0) {
+        // Volume Slider (continuous generous hitbox: y between 176 and 228, full width)
+        if (y >= 176.0 && y < 228.0) {
             float bar_x = 20.0f;
             float bar_w = cur_w - 40.0f;
-            float ratio = std::clamp((static_cast<float>(x) - bar_x) / bar_w, 0.0f, 1.0f);
+            float raw_ratio = (static_cast<float>(cur_x) - bar_x) / bar_w;
+            float ratio = std::clamp(raw_ratio, 0.0f, 1.0f);
             osd_.set_volume(ratio);
             cc_state_.volume = ratio;
             cc_state_.audio_muted = false;
             active_drag_ = DragTarget::ControlVolume;
+            volume_press_spring_.set_target(1.0f);
+            if (raw_ratio > 1.0f) {
+                volume_bounce_spring_.value = 8.0f;
+                volume_bounce_spring_.set_target(0.0f);
+            } else if (raw_ratio < 0.0f) {
+                volume_bounce_spring_.value = -8.0f;
+                volume_bounce_spring_.set_target(0.0f);
+            }
             wayland_.request_frame_callback();
             return;
         }
 
-        // Brightness Slider (y between 230 and 268)
-        if (y >= 230.0 && y <= 268.0) {
+        // Brightness Slider (continuous generous hitbox: y between 228 and 280, full width)
+        if (y >= 228.0 && y <= 280.0) {
             float bar_x = 20.0f;
             float bar_w = cur_w - 40.0f;
-            float ratio = std::clamp((static_cast<float>(x) - bar_x) / bar_w, 0.0f, 1.0f);
+            float raw_ratio = (static_cast<float>(cur_x) - bar_x) / bar_w;
+            float ratio = std::clamp(raw_ratio, 0.0f, 1.0f);
             osd_.set_brightness(ratio);
             cc_state_.brightness = ratio;
             active_drag_ = DragTarget::ControlBrightness;
+            brightness_press_spring_.set_target(1.0f);
+            if (raw_ratio > 1.0f) {
+                brightness_bounce_spring_.value = 8.0f;
+                brightness_bounce_spring_.set_target(0.0f);
+            } else if (raw_ratio < 0.0f) {
+                brightness_bounce_spring_.value = -8.0f;
+                brightness_bounce_spring_.set_target(0.0f);
+            }
             wayland_.request_frame_callback();
             return;
         }
@@ -373,7 +441,7 @@ void IslandApp::on_click(int button, int state, double x, double y) {
     // 2. Music Expanded Interactions
     if (expanded_) {
         // Control Center button in top right
-        if (x >= cur_w - 36.0f && y <= 36.0f) {
+        if (cur_x >= cur_w - 36.0f && y <= 36.0f) {
             expanded_ = false;
             in_control_center_ = true;
             update_control_center_info();
@@ -382,11 +450,11 @@ void IslandApp::on_click(int button, int state, double x, double y) {
             return;
         }
 
-        // Interactive seek on progress bar (generous hitbox: y between 60 and 86)
+        // Interactive seek on progress bar
         if (y >= 60.0 && y <= 86.0) {
             float bar_x = 16.0f;
             float bar_w = cur_w - 32.0f;
-            float ratio = std::clamp((static_cast<float>(x) - bar_x) / bar_w, 0.0f, 1.0f);
+            float ratio = std::clamp((static_cast<float>(cur_x) - bar_x) / bar_w, 0.0f, 1.0f);
             mpris_.set_position_ratio(ratio);
             active_drag_ = DragTarget::MusicSeek;
             wayland_.request_frame_callback();
@@ -396,9 +464,9 @@ void IslandApp::on_click(int button, int state, double x, double y) {
         // Control buttons row: y around 90 - 126
         if (y > 88.0) {
             float mid_x = cur_w / 2.0f;
-            if (x < mid_x - 25.0f) {
+            if (cur_x < mid_x - 25.0f) {
                 mpris_.previous();
-            } else if (x > mid_x + 25.0f) {
+            } else if (cur_x > mid_x + 25.0f) {
                 mpris_.next();
             } else {
                 mpris_.play_pause();
@@ -407,7 +475,7 @@ void IslandApp::on_click(int button, int state, double x, double y) {
             return;
         }
 
-        return; // Don't collapse on random interior clicks
+        return;
     }
 
     // 3. Idle mode: Click opens Control Center
@@ -432,18 +500,28 @@ void IslandApp::on_motion(double x, double y) {
     (void)y;
     if (active_drag_ == DragTarget::None) return;
 
+    float island_offset_x = (ws_bubble_w_ > 0.0f) ? (ws_bubble_w_ + 8.0f) : 0.0f;
+    float cur_x = static_cast<float>(x) - island_offset_x;
     float cur_w = width_spring_.value;
 
     if (active_drag_ == DragTarget::MusicSeek) {
         float bar_x = 16.0f;
         float bar_w = cur_w - 32.0f;
-        float ratio = std::clamp((static_cast<float>(x) - bar_x) / bar_w, 0.0f, 1.0f);
+        float ratio = std::clamp((cur_x - bar_x) / bar_w, 0.0f, 1.0f);
         mpris_.set_position_ratio(ratio);
         wayland_.request_frame_callback();
     } else if (active_drag_ == DragTarget::ControlVolume) {
         float bar_x = 20.0f;
         float bar_w = cur_w - 40.0f;
-        float ratio = std::clamp((static_cast<float>(x) - bar_x) / bar_w, 0.0f, 1.0f);
+        float raw_ratio = (cur_x - bar_x) / bar_w;
+        float ratio = std::clamp(raw_ratio, 0.0f, 1.0f);
+        if (raw_ratio > 1.0f) {
+            volume_bounce_spring_.set_target(std::min(12.0f, (raw_ratio - 1.0f) * 20.0f));
+        } else if (raw_ratio < 0.0f) {
+            volume_bounce_spring_.set_target(std::max(-12.0f, raw_ratio * 20.0f));
+        } else {
+            volume_bounce_spring_.set_target(0.0f);
+        }
         osd_.set_volume(ratio);
         cc_state_.volume = ratio;
         cc_state_.audio_muted = false;
@@ -451,7 +529,15 @@ void IslandApp::on_motion(double x, double y) {
     } else if (active_drag_ == DragTarget::ControlBrightness) {
         float bar_x = 20.0f;
         float bar_w = cur_w - 40.0f;
-        float ratio = std::clamp((static_cast<float>(x) - bar_x) / bar_w, 0.0f, 1.0f);
+        float raw_ratio = (cur_x - bar_x) / bar_w;
+        float ratio = std::clamp(raw_ratio, 0.0f, 1.0f);
+        if (raw_ratio > 1.0f) {
+            brightness_bounce_spring_.set_target(std::min(12.0f, (raw_ratio - 1.0f) * 20.0f));
+        } else if (raw_ratio < 0.0f) {
+            brightness_bounce_spring_.set_target(std::max(-12.0f, raw_ratio * 20.0f));
+        } else {
+            brightness_bounce_spring_.set_target(0.0f);
+        }
         osd_.set_brightness(ratio);
         cc_state_.brightness = ratio;
         wayland_.request_frame_callback();
@@ -469,6 +555,10 @@ void IslandApp::on_frame() {
     // Advance song position smoothly
     mpris_.tick(dt);
 
+    // Refresh workspaces
+    workspaces_.update();
+    ws_bubble_w_ = workspaces_.bubble_width();
+
     // Refresh control center info if open
     if (in_control_center_) {
         update_control_center_info();
@@ -482,9 +572,19 @@ void IslandApp::on_frame() {
 
     bool animating_w = width_spring_.update(dt);
     bool animating_h = height_spring_.update(dt);
+    bool animating_vp = volume_press_spring_.update(dt);
+    bool animating_vb = volume_bounce_spring_.update(dt);
+    bool animating_bp = brightness_press_spring_.update(dt);
+    bool animating_bb = brightness_bounce_spring_.update(dt);
 
-    int cur_w = std::max(20, (int)std::round(width_spring_.value));
-    int cur_h = std::max(20, (int)std::round(height_spring_.value));
+    cc_state_.volume_press = volume_press_spring_.value;
+    cc_state_.volume_bounce = volume_bounce_spring_.value;
+    cc_state_.brightness_press = brightness_press_spring_.value;
+    cc_state_.brightness_bounce = brightness_bounce_spring_.value;
+
+    int island_w = std::max(20, (int)std::round(width_spring_.value));
+    int cur_w = (int)std::round(ws_bubble_w_ + 8.0f + island_w);
+    int cur_h = std::max(32, (int)std::round(height_spring_.value));
 
     // Update Wayland surface size & render
     wayland_.resize_surface(cur_w, cur_h);
@@ -493,12 +593,14 @@ void IslandApp::on_frame() {
     if (cr) {
         renderer_.draw(cr, cur_w, cur_h, current_mode_, mpris_.info(), 
                        osd_.state(), notifications_.current(), cc_state_,
-                       osd_.is_mic_active(), anim_time_);
+                       osd_.is_mic_active(), anim_time_,
+                       ws_bubble_w_, workspaces_.workspaces(), workspaces_.active_idx());
         wayland_.commit_frame(cur_w, cur_h);
     }
 
     // Continue frame loop if animations or interactions are active
     bool needs_next_frame = animating_w || animating_h || 
+                           animating_vp || animating_vb || animating_bp || animating_bb ||
                            osd_.is_active() || notifications_.has_active() ||
                            (mpris_.info().active && !mpris_.info().title.empty() && mpris_.info().playing) ||
                            (active_drag_ != DragTarget::None);

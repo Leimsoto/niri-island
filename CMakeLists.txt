@@ -61,6 +61,7 @@ add_executable(niri-island
     src/island.cpp
     src/ipc.cpp
     src/sysmon.cpp
+    src/workspaces.cpp
     ${PROTO_SRCS}
 )
 

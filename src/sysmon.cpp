@@ -18,15 +18,22 @@ void SystemMonitor::read_cpu() {
     if (std::getline(file, line)) {
         if (line.rfind("cpu ", 0) == 0) {
             std::istringstream ss(line.substr(4));
-            uint64_t user, nice, system, idle, iowait, irq, softirq, steal;
-            if (ss >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal) {
+            uint64_t user = 0, nice = 0, system = 0, idle = 0;
+            uint64_t iowait = 0, irq = 0, softirq = 0, steal = 0;
+            if (ss >> user >> nice >> system >> idle) {
+                ss >> iowait >> irq >> softirq >> steal;
                 uint64_t total = user + nice + system + idle + iowait + irq + softirq + steal;
                 uint64_t idle_time = idle + iowait;
 
                 if (prev_total_ > 0 && total > prev_total_) {
                     uint64_t total_delta = total - prev_total_;
-                    uint64_t idle_delta = idle_time - prev_idle_;
-                    stats_.cpu_percent = std::clamp(100.0f * (1.0f - static_cast<float>(idle_delta) / static_cast<float>(total_delta)), 0.0f, 100.0f);
+                    uint64_t idle_delta = (idle_time >= prev_idle_) ? (idle_time - prev_idle_) : 0;
+                    float raw_usage = std::clamp(100.0f * (1.0f - static_cast<float>(idle_delta) / static_cast<float>(total_delta)), 0.0f, 100.0f);
+                    if (stats_.cpu_percent <= 0.01f) {
+                        stats_.cpu_percent = raw_usage;
+                    } else {
+                        stats_.cpu_percent = stats_.cpu_percent * 0.35f + raw_usage * 0.65f;
+                    }
                 }
 
                 prev_total_ = total;
@@ -40,17 +47,16 @@ void SystemMonitor::read_memory() {
     std::ifstream file("/proc/meminfo");
     if (!file.is_open()) return;
 
-    std::string line;
+    std::string key, unit;
+    uint64_t value_kb = 0;
     uint64_t total_kb = 0;
     uint64_t avail_kb = 0;
 
-    while (std::getline(file, line)) {
-        if (line.rfind("MemTotal:", 0) == 0) {
-            std::istringstream ss(line.substr(9));
-            ss >> total_kb;
-        } else if (line.rfind("MemAvailable:", 0) == 0) {
-            std::istringstream ss(line.substr(13));
-            ss >> avail_kb;
+    while (file >> key >> value_kb >> unit) {
+        if (key == "MemTotal:") {
+            total_kb = value_kb;
+        } else if (key == "MemAvailable:") {
+            avail_kb = value_kb;
         }
         if (total_kb > 0 && avail_kb > 0) break;
     }

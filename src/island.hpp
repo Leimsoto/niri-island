@@ -8,6 +8,7 @@
 #include "spring.hpp"
 #include "ipc.hpp"
 #include "sysmon.hpp"
+#include "workspaces.hpp"
 #include <chrono>
 
 namespace island {
@@ -35,9 +36,18 @@ private:
     Renderer renderer_;
     IpcServer ipc_;
     SystemMonitor sysmon_;
+    WorkspaceManager workspaces_;
 
     Spring width_spring_;
     Spring height_spring_;
+
+    // Tactile Slider Springs
+    Spring volume_press_spring_{0.0f, 320.0f, 26.0f};
+    Spring volume_bounce_spring_{0.0f, 280.0f, 20.0f};
+    Spring brightness_press_spring_{0.0f, 320.0f, 26.0f};
+    Spring brightness_bounce_spring_{0.0f, 280.0f, 20.0f};
+
+    float ws_bubble_w_ = 0.0f;
 
     IslandMode current_mode_ = IslandMode::Idle;
     bool expanded_ = false;

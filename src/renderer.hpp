@@ -5,6 +5,7 @@
 #include <string>
 #include "mpris.hpp"
 #include "sysmon.hpp"
+#include "workspaces.hpp"
 
 namespace island {
 
@@ -33,6 +34,12 @@ struct ControlCenterState {
     bool dnd_enabled = false;
     bool media_active = false;
     SystemStats stats;
+
+    // Press depth and bounce animation values
+    float volume_press = 0.0f;
+    float volume_bounce = 0.0f;
+    float brightness_press = 0.0f;
+    float brightness_bounce = 0.0f;
 };
 
 class Renderer {
@@ -43,10 +50,13 @@ public:
     void draw(cairo_t* cr, float width, float height, IslandMode mode,
                const MediaInfo& media, const OsdState& osd,
                const NotificationItem& notif, const ControlCenterState& cc_state,
-               bool mic_active, float anim_time);
+               bool mic_active, float anim_time,
+               float ws_bubble_w, const std::vector<WorkspaceInfo>& workspaces, uint32_t active_ws_idx);
 
 private:
     void draw_rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r);
+    void draw_workspace_bubble(cairo_t* cr, float x, float y, float w, float h,
+                              const std::vector<WorkspaceInfo>& workspaces, uint32_t active_idx);
     void draw_idle(cairo_t* cr, float w, float h);
     void draw_idle_expanded(cairo_t* cr, float w, float h, const ControlCenterState& cc_state);
     void draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo& media, float anim_time);

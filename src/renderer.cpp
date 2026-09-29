@@ -122,48 +122,102 @@ void Renderer::draw_rounded_rect(cairo_t* cr, double x, double y, double w, doub
 void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode,
                     const MediaInfo& media, const OsdState& osd,
                     const NotificationItem& notif, const ControlCenterState& cc_state,
-                    bool mic_active, float anim_time) {
+                    bool mic_active, float anim_time,
+                    float ws_bubble_w, const std::vector<WorkspaceInfo>& workspaces, uint32_t active_ws_idx) {
     update_art(media.art_url);
+
+    // 1. Draw Left Workspaces Satellite Bubble if present
+    float main_x = 0.0f;
+    float main_w = width;
+
+    if (ws_bubble_w > 0.0f) {
+        draw_workspace_bubble(cr, 0.0f, 0.0f, ws_bubble_w, 32.0f, workspaces, active_ws_idx);
+        main_x = ws_bubble_w + 8.0f;
+        main_w = std::max(20.0f, width - main_x);
+    }
 
     double radius = std::min((double)height / 2.0, 24.0);
 
-    // 1. Draw Island Body (Material 3 Dark Surface #141218 - Pure seamless, no outer outline)
-    draw_rounded_rect(cr, 0.0, 0.0, width, height, radius);
+    // 2. Draw Main Island Body (Material 3 Dark Surface #141218 - Pure seamless, no outer outline)
+    draw_rounded_rect(cr, main_x, 0.0, main_w, height, radius);
     cairo_set_source_rgba(cr, 0.078, 0.071, 0.094, 0.98); // M3 Surface Container Lowest (#141218)
     cairo_fill(cr);
 
     // Clip content to rounded pill
     cairo_save(cr);
-    draw_rounded_rect(cr, 0.0, 0.0, width, height, radius);
+    cairo_translate(cr, main_x, 0.0);
+    draw_rounded_rect(cr, 0.0, 0.0, main_w, height, radius);
     cairo_clip(cr);
 
-    // 2. Draw Mode Content
+    // 3. Draw Mode Content
     switch (mode) {
         case IslandMode::Idle:
-            draw_idle(cr, width, height);
+            draw_idle(cr, main_w, height);
             break;
         case IslandMode::IdleExpanded:
-            draw_idle_expanded(cr, width, height, cc_state);
+            draw_idle_expanded(cr, main_w, height, cc_state);
             break;
         case IslandMode::MusicCompact:
-            draw_music_compact(cr, width, height, media, anim_time);
+            draw_music_compact(cr, main_w, height, media, anim_time);
             break;
         case IslandMode::MusicExpanded:
-            draw_music_expanded(cr, width, height, media, anim_time);
+            draw_music_expanded(cr, main_w, height, media, anim_time);
             break;
         case IslandMode::ControlCenter:
-            draw_control_center(cr, width, height, cc_state, anim_time);
+            draw_control_center(cr, main_w, height, cc_state, anim_time);
             break;
         case IslandMode::HudOSD:
-            draw_hud_osd(cr, width, height, osd);
+            draw_hud_osd(cr, main_w, height, osd);
             break;
         case IslandMode::Notification:
-            draw_notification(cr, width, height, notif);
+            draw_notification(cr, main_w, height, notif);
             break;
     }
 
     cairo_restore(cr);
     (void)mic_active;
+}
+
+void Renderer::draw_workspace_bubble(cairo_t* cr, float x, float y, float w, float h,
+                                     const std::vector<WorkspaceInfo>& workspaces, uint32_t active_idx) {
+    double radius = std::min((double)h / 2.0, 16.0);
+    draw_rounded_rect(cr, x, y, w, h, radius);
+    cairo_set_source_rgba(cr, 0.078, 0.071, 0.094, 0.98); // M3 Dark Surface #141218
+    cairo_fill(cr);
+
+    if (workspaces.empty()) return;
+
+    size_t count = workspaces.size();
+    float dot_size = 6.0f;
+    float active_pill_w = 18.0f;
+    float gap = 6.0f;
+    float total_content_w = 0.0f;
+
+    for (const auto& ws : workspaces) {
+        bool is_act = (ws.idx == active_idx || ws.is_active || ws.is_focused);
+        total_content_w += is_act ? active_pill_w : dot_size;
+    }
+    total_content_w += (count - 1) * gap;
+
+    float cur_x = x + (w - total_content_w) / 2.0f;
+    float center_y = y + h / 2.0f;
+
+    for (const auto& ws : workspaces) {
+        bool is_act = (ws.idx == active_idx || ws.is_active || ws.is_focused);
+        if (is_act) {
+            // Active elongated capsule in M3 Primary Lavender
+            draw_rounded_rect(cr, cur_x, center_y - 3.0f, active_pill_w, 6.0f, 3.0);
+            cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.95);
+            cairo_fill(cr);
+            cur_x += active_pill_w + gap;
+        } else {
+            // Inactive subtle dot in M3 Muted Gray
+            cairo_arc(cr, cur_x + dot_size / 2.0f, center_y, dot_size / 2.0f, 0, 2 * M_PI);
+            cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.65);
+            cairo_fill(cr);
+            cur_x += dot_size + gap;
+        }
+    }
 }
 
 void Renderer::draw_privacy_dot(cairo_t*, float, float) {
@@ -748,18 +802,18 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
         g_object_unref(vl);
     };
 
-    // CPU Stat
+    // CPU Stat (Muted gray icon like Wi-Fi button)
     std::string cpu_str = "CPU " + std::to_string(static_cast<int>(std::round(state.stats.cpu_percent))) + "%";
-    draw_stat_chip(20.0f, "󰍛", cpu_str, 0.60, 0.85, 0.75); // Soft Mint
+    draw_stat_chip(20.0f, "󰍛", cpu_str, 0.584, 0.557, 0.612);
 
-    // RAM Stat
+    // RAM Stat (Muted gray icon like Wi-Fi button)
     std::string ram_str = "RAM " + std::to_string(static_cast<int>(std::round(state.stats.ram_percent))) + "%";
-    draw_stat_chip(20.0f + stat_chip_w + stat_chip_gap, "󰘚", ram_str, 0.82, 0.74, 1.0); // Soft Lavender
+    draw_stat_chip(20.0f + stat_chip_w + stat_chip_gap, "󰘚", ram_str, 0.584, 0.557, 0.612);
 
-    // Battery Stat
+    // Battery Stat (Muted gray icon like Wi-Fi button)
     std::string bat_str = std::to_string(state.battery_percent) + "%";
     draw_stat_chip(20.0f + (stat_chip_w + stat_chip_gap) * 2.0f,
-                   state.battery_charging ? "󰂄" : "󰁹", bat_str, 0.95, 0.85, 0.55); // Soft Amber
+                   state.battery_charging ? "󰂄" : "󰁹", bat_str, 0.584, 0.557, 0.612);
 
     // 3. Tonal Toggle Chips (2x2 Grid) (y = 90..176)
     float chip_w = (w - 40.0f - 12.0f) / 2.0f;
@@ -840,27 +894,36 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
               state.dnd_enabled ? "No Molestar" : "Notificaciones",
               state.dnd_enabled);
 
-    // 4. Material 3 LevelRows (Thick Sliders) (y = 188..270)
+    // 4. Material 3 LevelRows (Thick Sliders with Tactile Depth & Bounce) (y = 188..270)
     float s_x = 20.0f;
     float s_w = w - 40.0f;
     float s_h = 34.0f;
 
-    auto draw_slider = [&](float y, const char* icon, float val, double r_fill, double g_fill, double b_fill) {
+    auto draw_slider = [&](float y, const char* icon, float val, double r_fill, double g_fill, double b_fill, float press, float bounce) {
         val = std::clamp(val, 0.0f, 1.0f);
-        // Track
-        draw_rounded_rect(cr, s_x, y, s_w, s_h, 17.0);
-        cairo_set_source_rgba(cr, 0.125, 0.106, 0.165, 0.92); // Surface Container
+        float h_press = s_h - (press * 3.0f);
+        float y_press = y + (press * 1.5f);
+        float r_press = h_press / 2.0f;
+
+        // Track with press depth
+        draw_rounded_rect(cr, s_x, y_press, s_w, h_press, r_press);
+        cairo_set_source_rgba(cr, 0.125 - press * 0.03, 0.106 - press * 0.03, 0.165 - press * 0.03, 0.92);
         cairo_fill_preserve(cr);
-        cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.20);
-        cairo_set_line_width(cr, 0.8);
+        cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.20 + press * 0.12);
+        cairo_set_line_width(cr, 0.8 + press * 0.4);
         cairo_stroke(cr);
 
-        // Active fill
-        if (val > 0.01f) {
-            float fill_w = std::max(34.0f, s_w * val);
-            draw_rounded_rect(cr, s_x, y, fill_w, s_h, 17.0);
-            cairo_set_source_rgba(cr, r_fill, g_fill, b_fill, 0.95);
-            cairo_fill(cr);
+        // Active fill with bounce elasticity
+        if (val > 0.005f || bounce != 0.0f) {
+            float base_w = s_w * val;
+            float fill_w = std::clamp(base_w + bounce, h_press, s_w + std::max(0.0f, bounce));
+            if (fill_w > s_w) fill_w = s_w;
+            if (val <= 0.01f && bounce <= 0.0f) fill_w = 0.0f;
+            if (fill_w > 0.0f) {
+                draw_rounded_rect(cr, s_x, y_press, fill_w, h_press, r_press);
+                cairo_set_source_rgba(cr, r_fill, g_fill, b_fill, 0.95);
+                cairo_fill(cr);
+            }
         }
 
         // Icon inside slider on the left
@@ -870,7 +933,7 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
         pango_layout_set_text(s_icon, icon, -1);
         PangoRectangle si_ink, si_log;
         pango_layout_get_pixel_extents(s_icon, &si_ink, &si_log);
-        cairo_move_to(cr, s_x + 14.0 - si_ink.x, y + (s_h - si_ink.height) / 2.0 - si_ink.y);
+        cairo_move_to(cr, s_x + 14.0 - si_ink.x, y_press + (h_press - si_ink.height) / 2.0 - si_ink.y);
         if (val > 0.16f) {
             cairo_set_source_rgba(cr, 0.12, 0.08, 0.18, 1.0); // Contrast on active bar
         } else {
@@ -888,18 +951,18 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
         pango_layout_set_text(s_pct, pct_str.c_str(), -1);
         PangoRectangle sp_ink, sp_log;
         pango_layout_get_pixel_extents(s_pct, &sp_ink, &sp_log);
-        cairo_move_to(cr, s_x + s_w - 14.0 - sp_ink.width - sp_ink.x, y + (s_h - sp_ink.height) / 2.0 - sp_ink.y);
+        cairo_move_to(cr, s_x + s_w - 14.0 - sp_ink.width - sp_ink.x, y_press + (h_press - sp_ink.height) / 2.0 - sp_ink.y);
         cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.95);
         pango_cairo_show_layout(cr, s_pct);
         pango_font_description_free(sp_font);
         g_object_unref(s_pct);
     };
 
-    // Volume Slider
-    draw_slider(188.0f, state.audio_muted ? "󰝟" : "󰕾", state.volume, 0.816, 0.737, 1.0);
+    // Volume Slider (with press depth and bounce)
+    draw_slider(188.0f, state.audio_muted ? "󰝟" : "󰕾", state.volume, 0.816, 0.737, 1.0, state.volume_press, state.volume_bounce);
 
-    // Brightness Slider
-    draw_slider(232.0f, "󰃠", state.brightness, 0.92, 0.78, 0.45);
+    // Brightness Slider (with press depth and bounce)
+    draw_slider(232.0f, "󰃠", state.brightness, 0.92, 0.78, 0.45, state.brightness_press, state.brightness_bounce);
 
     // 5. Subtle System Identifier Footer (y = 284..310)
     float foot_y = 286.0f;
