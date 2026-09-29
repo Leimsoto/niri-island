@@ -150,13 +150,13 @@ bool IslandApp::init() {
 
 void IslandApp::update_target_dimensions() {
     workspaces_.update();
-    ws_bubble_w_ = workspaces_.bubble_width();
+    ws_bubble_w_ = in_control_center_ ? 0.0f : workspaces_.bubble_width();
 
     bool has_media = mpris_.info().active && !mpris_.info().title.empty();
 
     if (in_control_center_) {
-        width_spring_.set_target(400.0f);
-        height_spring_.set_target(330.0f);
+        width_spring_.set_target(820.0f);
+        height_spring_.set_target(484.0f);
         current_mode_ = IslandMode::ControlCenter;
     } else if (notifications_.has_active()) {
         width_spring_.set_target(330.0f);
@@ -323,8 +323,8 @@ void IslandApp::on_click(int button, int state, double x, double y) {
     // Button release: finish drag and release tactile press
     if (state == 0) {
         if (active_drag_ == DragTarget::MusicSeek) {
-            float bar_x = 16.0f;
-            float bar_w = width_spring_.value - 32.0f;
+            float bar_x = in_control_center_ ? 298.0f : 16.0f;
+            float bar_w = in_control_center_ ? 240.0f : (width_spring_.value - 32.0f);
             float left_wing = (ws_bubble_w_ > 0.0f) ? (ws_bubble_w_ + 8.0f) : 0.0f;
             float cur_x = static_cast<float>(x) - left_wing;
             float ratio = std::clamp((cur_x - bar_x) / bar_w, 0.0f, 1.0f);
@@ -353,124 +353,186 @@ void IslandApp::on_click(int button, int state, double x, double y) {
 
     // 1. Control Center Interactions
     if (in_control_center_) {
-        // Header actions (y <= 44.0)
-        if (y <= 44.0) {
-            // Close button (far right: cur_w - 42)
-            if (cur_x >= cur_w - 46.0f) {
+        // Top Action Bar (y <= 38.0)
+        if (y <= 38.0) {
+            // Right-most button (Settings / Close)
+            if (cur_x >= cur_w - 55.0f) {
                 in_control_center_ = false;
                 update_target_dimensions();
                 wayland_.request_frame_callback();
                 return;
             }
-            // Lock button (cur_w - 76)
-            if (cur_x >= cur_w - 80.0f && cur_x <= cur_w - 50.0f) {
+            // Left quick buttons
+            if (cur_x >= 8.0f && cur_x <= 36.0f) { // Lock
                 int r = system("swaylock -f 2>/dev/null || loginctl lock-session &"); (void)r;
                 return;
             }
-            // Screenshot button (cur_w - 110)
-            if (cur_x >= cur_w - 114.0f && cur_x <= cur_w - 84.0f) {
-                int r = system("mkdir -p ~/Imágenes/Screenshots && grim ~/Imágenes/Screenshots/screenshot_$(date +%s).png &"); (void)r;
+            if (cur_x >= 38.0f && cur_x <= 66.0f) { // Night light
+                int r = system("pkill -USR1 wlsunset 2>/dev/null || gammastep -O 3500 &"); (void)r;
                 return;
             }
-            // Media toggle button (if media active: cur_w - 144)
-            if (cc_state_.media_active && cur_x >= cur_w - 148.0f && cur_x <= cur_w - 118.0f) {
-                in_control_center_ = false;
-                expanded_ = true;
-                update_target_dimensions();
-                wayland_.request_frame_callback();
+            if (cur_x >= 68.0f && cur_x <= 96.0f) { // Logout
+                int r = system("loginctl terminate-user $USER &"); (void)r;
+                return;
+            }
+            if (cur_x >= 98.0f && cur_x <= 126.0f) { // Reboot
+                int r = system("systemctl reboot &"); (void)r;
+                return;
+            }
+            if (cur_x >= 128.0f && cur_x <= 160.0f) { // Shutdown
+                int r = system("systemctl poweroff &"); (void)r;
                 return;
             }
         }
 
-        // Toggles (2x2 Grid)
-        float chip_w = (cur_w - 40.0f - 12.0f) / 2.0f;
-        float chip_h = 38.0f;
-        float col1_x = 20.0f;
-        float col2_x = 20.0f + chip_w + 12.0f;
-        float row1_y = 90.0f;
-        float row2_y = 136.0f;
+        // ===================================
+        // COLUMN 1: LEFT (cur_x <= 276.0f)
+        // ===================================
+        if (cur_x <= 276.0f) {
+            float tile_w = 122.0f;
+            float col1_x = 16.0f;
+            float col2_x = 146.0f;
 
-        // Row 1: Wi-Fi (Col 1) and Bluetooth (Col 2)
-        if (y >= row1_y && y <= row1_y + chip_h) {
-            if (cur_x >= col1_x && cur_x <= col1_x + chip_w) {
-                if (cc_state_.wifi_enabled) {
-                    int r = system("nmcli radio wifi off"); (void)r;
-                    cc_state_.wifi_enabled = false;
-                } else {
-                    int r = system("nmcli radio wifi on"); (void)r;
-                    cc_state_.wifi_enabled = true;
+            // Row 0 (y: 48..90): Wi-Fi (Col 1), Bluetooth (Col 2)
+            if (y >= 48.0 && y <= 90.0) {
+                if (cur_x >= col1_x && cur_x <= col1_x + tile_w) {
+                    if (cc_state_.wifi_enabled) {
+                        int r = system("nmcli radio wifi off"); (void)r;
+                        cc_state_.wifi_enabled = false;
+                    } else {
+                        int r = system("nmcli radio wifi on"); (void)r;
+                        cc_state_.wifi_enabled = true;
+                    }
+                    update_control_center_info();
+                    wayland_.request_frame_callback();
+                    return;
+                } else if (cur_x >= col2_x && cur_x <= col2_x + tile_w) {
+                    if (cc_state_.bluetooth_enabled) {
+                        int r = system("bluetoothctl power off"); (void)r;
+                        cc_state_.bluetooth_enabled = false;
+                    } else {
+                        int r = system("bluetoothctl power on"); (void)r;
+                        cc_state_.bluetooth_enabled = true;
+                    }
+                    update_control_center_info();
+                    wayland_.request_frame_callback();
+                    return;
                 }
-                update_control_center_info();
-                wayland_.request_frame_callback();
-                return;
-            } else if (cur_x >= col2_x && cur_x <= col2_x + chip_w) {
-                if (cc_state_.bluetooth_enabled) {
-                    int r = system("bluetoothctl power off"); (void)r;
-                    cc_state_.bluetooth_enabled = false;
-                } else {
-                    int r = system("bluetoothctl power on"); (void)r;
-                    cc_state_.bluetooth_enabled = true;
+            }
+
+            // Row 1 (y: 94..136): Power (Col 1), Focus / DND (Col 2)
+            if (y >= 94.0 && y <= 136.0) {
+                if (cur_x >= col1_x && cur_x <= col1_x + tile_w) {
+                    int r = system("powerprofilesctl set performance 2>/dev/null || powerprofilesctl set balanced 2>/dev/null &"); (void)r;
+                    return;
+                } else if (cur_x >= col2_x && cur_x <= col2_x + tile_w) {
+                    notifications_.toggle_dnd();
+                    cc_state_.dnd_enabled = notifications_.dnd();
+                    wayland_.request_frame_callback();
+                    return;
                 }
-                update_control_center_info();
+            }
+
+            // Row 2 (y: 140..182): Microphone (Col 1), Airplane (Col 2)
+            if (y >= 140.0 && y <= 182.0) {
+                if (cur_x >= col1_x && cur_x <= col1_x + tile_w) {
+                    int r = system("pactl set-source-mute @DEFAULT_SOURCE@ toggle &"); (void)r;
+                    wayland_.request_frame_callback();
+                    return;
+                } else if (cur_x >= col2_x && cur_x <= col2_x + tile_w) {
+                    int r = system("rfkill toggle all &"); (void)r;
+                    return;
+                }
+            }
+
+            // Volume Slider (y: 196..238)
+            if (y >= 196.0 && y < 238.0) {
+                float bar_x = 16.0f;
+                float bar_w = 252.0f;
+                float raw_ratio = (static_cast<float>(cur_x) - bar_x) / bar_w;
+                float ratio = std::clamp(raw_ratio, 0.0f, 1.0f);
+                osd_.set_volume(ratio);
+                cc_state_.volume = ratio;
+                cc_state_.audio_muted = false;
+                active_drag_ = DragTarget::ControlVolume;
+                volume_press_spring_.set_target(1.0f);
+                if (raw_ratio > 1.0f) {
+                    volume_bounce_spring_.value = 8.0f;
+                    volume_bounce_spring_.set_target(0.0f);
+                } else if (raw_ratio < 0.0f) {
+                    volume_bounce_spring_.value = -8.0f;
+                    volume_bounce_spring_.set_target(0.0f);
+                }
                 wayland_.request_frame_callback();
+                return;
+            }
+
+            // Brightness Slider (y: 240..282)
+            if (y >= 240.0 && y <= 282.0) {
+                float bar_x = 16.0f;
+                float bar_w = 252.0f;
+                float raw_ratio = (static_cast<float>(cur_x) - bar_x) / bar_w;
+                float ratio = std::clamp(raw_ratio, 0.0f, 1.0f);
+                osd_.set_brightness(ratio);
+                cc_state_.brightness = ratio;
+                active_drag_ = DragTarget::ControlBrightness;
+                brightness_press_spring_.set_target(1.0f);
+                if (raw_ratio > 1.0f) {
+                    brightness_bounce_spring_.value = 8.0f;
+                    brightness_bounce_spring_.set_target(0.0f);
+                } else if (raw_ratio < 0.0f) {
+                    brightness_bounce_spring_.value = -8.0f;
+                    brightness_bounce_spring_.set_target(0.0f);
+                }
+                wayland_.request_frame_callback();
+                return;
+            }
+
+            // Appearance card click (y >= 286): cycle wallpaper
+            if (y >= 286.0) {
+                int r = system("skwd-wall-v2 --next 2>/dev/null &"); (void)r;
                 return;
             }
         }
 
-        // Row 2: Audio Mute (Col 1) and DND (Col 2)
-        if (y >= row2_y && y <= row2_y + chip_h) {
-            if (cur_x >= col1_x && cur_x <= col1_x + chip_w) {
-                osd_.toggle_mute();
-                cc_state_.audio_muted = osd_.current_muted();
-                wayland_.request_frame_callback();
-                return;
-            } else if (cur_x >= col2_x && cur_x <= col2_x + chip_w) {
-                notifications_.toggle_dnd();
-                cc_state_.dnd_enabled = notifications_.dnd();
-                wayland_.request_frame_callback();
-                return;
+        // ===================================
+        // COLUMN 2: CENTER (cur_x: 280..560)
+        // ===================================
+        if (cur_x >= 280.0f && cur_x <= 560.0f) {
+            // Media Card (y: 48..166)
+            if (y >= 48.0 && y <= 166.0) {
+                // Seek Bar (y: 104..124)
+                if (y >= 104.0 && y <= 124.0) {
+                    float bar_x = 298.0f;
+                    float bar_w = 240.0f;
+                    float ratio = std::clamp((static_cast<float>(cur_x) - bar_x) / bar_w, 0.0f, 1.0f);
+                    active_drag_ = DragTarget::MusicSeek;
+                    mpris_.set_scrubbing(true);
+                    mpris_.preview_position_ratio(ratio);
+                    wayland_.request_frame_callback();
+                    return;
+                }
+                // Media Controls (y: 124..166)
+                if (y > 124.0) {
+                    float mid_x = 284.0f + 134.0f;
+                    if (cur_x < mid_x - 18.0f) {
+                        mpris_.previous();
+                    } else if (cur_x > mid_x + 18.0f) {
+                        mpris_.next();
+                    } else {
+                        mpris_.play_pause();
+                    }
+                    wayland_.request_frame_callback();
+                    return;
+                }
             }
         }
 
-        // Volume Slider (continuous generous hitbox: y between 176 and 228, full width)
-        if (y >= 176.0 && y < 228.0) {
-            float bar_x = 20.0f;
-            float bar_w = cur_w - 40.0f;
-            float raw_ratio = (static_cast<float>(cur_x) - bar_x) / bar_w;
-            float ratio = std::clamp(raw_ratio, 0.0f, 1.0f);
-            osd_.set_volume(ratio);
-            cc_state_.volume = ratio;
-            cc_state_.audio_muted = false;
-            active_drag_ = DragTarget::ControlVolume;
-            volume_press_spring_.set_target(1.0f);
-            if (raw_ratio > 1.0f) {
-                volume_bounce_spring_.value = 8.0f;
-                volume_bounce_spring_.set_target(0.0f);
-            } else if (raw_ratio < 0.0f) {
-                volume_bounce_spring_.value = -8.0f;
-                volume_bounce_spring_.set_target(0.0f);
-            }
-            wayland_.request_frame_callback();
-            return;
-        }
-
-        // Brightness Slider (continuous generous hitbox: y between 228 and 280, full width)
-        if (y >= 228.0 && y <= 280.0) {
-            float bar_x = 20.0f;
-            float bar_w = cur_w - 40.0f;
-            float raw_ratio = (static_cast<float>(cur_x) - bar_x) / bar_w;
-            float ratio = std::clamp(raw_ratio, 0.0f, 1.0f);
-            osd_.set_brightness(ratio);
-            cc_state_.brightness = ratio;
-            active_drag_ = DragTarget::ControlBrightness;
-            brightness_press_spring_.set_target(1.0f);
-            if (raw_ratio > 1.0f) {
-                brightness_bounce_spring_.value = 8.0f;
-                brightness_bounce_spring_.set_target(0.0f);
-            } else if (raw_ratio < 0.0f) {
-                brightness_bounce_spring_.value = -8.0f;
-                brightness_bounce_spring_.set_target(0.0f);
-            }
+        // ===================================
+        // COLUMN 3: RIGHT (cur_x >= 564.0f)
+        // ===================================
+        if (cur_x >= 564.0f) {
+            notifications_.dismiss();
             wayland_.request_frame_callback();
             return;
         }
@@ -559,14 +621,14 @@ void IslandApp::on_motion(double x, double y) {
     (void)y;
 
     if (active_drag_ == DragTarget::MusicSeek) {
-        float bar_x = 16.0f;
-        float bar_w = cur_w - 32.0f;
+        float bar_x = in_control_center_ ? 298.0f : 16.0f;
+        float bar_w = in_control_center_ ? 240.0f : (cur_w - 32.0f);
         float ratio = std::clamp((cur_x - bar_x) / bar_w, 0.0f, 1.0f);
         mpris_.preview_position_ratio(ratio);
         wayland_.request_frame_callback();
     } else if (active_drag_ == DragTarget::ControlVolume) {
-        float bar_x = 20.0f;
-        float bar_w = cur_w - 40.0f;
+        float bar_x = 16.0f;
+        float bar_w = in_control_center_ ? 252.0f : (cur_w - 40.0f);
         float raw_ratio = (cur_x - bar_x) / bar_w;
         float ratio = std::clamp(raw_ratio, 0.0f, 1.0f);
         if (raw_ratio > 1.0f) {
@@ -581,8 +643,8 @@ void IslandApp::on_motion(double x, double y) {
         cc_state_.audio_muted = false;
         wayland_.request_frame_callback();
     } else if (active_drag_ == DragTarget::ControlBrightness) {
-        float bar_x = 20.0f;
-        float bar_w = cur_w - 40.0f;
+        float bar_x = 16.0f;
+        float bar_w = in_control_center_ ? 252.0f : (cur_w - 40.0f);
         float raw_ratio = (cur_x - bar_x) / bar_w;
         float ratio = std::clamp(raw_ratio, 0.0f, 1.0f);
         if (raw_ratio > 1.0f) {
@@ -611,7 +673,7 @@ void IslandApp::on_frame() {
 
     // Refresh workspaces
     workspaces_.update();
-    ws_bubble_w_ = workspaces_.bubble_width();
+    ws_bubble_w_ = in_control_center_ ? 0.0f : workspaces_.bubble_width();
 
     // Refresh control center info if open
     if (in_control_center_) {
