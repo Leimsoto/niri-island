@@ -227,19 +227,45 @@ void IslandApp::on_hover(bool hovered) {
     if (notifications_.has_active() || osd_.is_active() || in_control_center_) return;
     if (active_drag_ != DragTarget::None) return;
 
-    expanded_ = hovered;
+    if (!hovered) {
+        expanded_ = false;
+        update_target_dimensions();
+        wayland_.request_frame_callback();
+        return;
+    }
+
+    float left_wing = (ws_bubble_w_ > 0.0f) ? (ws_bubble_w_ + 8.0f) : 0.0f;
+    float wing = std::max(left_wing, 0.0f);
+    float island_offset_x = wing;
+    float cur_w = width_spring_.value;
+
+    if (wayland_.pointer_x_ >= island_offset_x && wayland_.pointer_x_ <= island_offset_x + cur_w) {
+        expanded_ = true;
+    } else {
+        expanded_ = false;
+    }
+
     update_target_dimensions();
     wayland_.request_frame_callback();
 }
 
 void IslandApp::on_click(int button, int state, double x, double y) {
+    float left_wing = (ws_bubble_w_ > 0.0f) ? (ws_bubble_w_ + 8.0f) : 0.0f;
+    float right_wing = 0.0f;
+    float wing = std::max(left_wing, right_wing);
+
+    float ws_x = wing - 8.0f - ws_bubble_w_;
+    float island_offset_x = wing;
+    float cur_w = width_spring_.value;
+    float cur_h = height_spring_.value;
+
     // 0. Workspaces Bubble interaction (Left satellite)
-    if (ws_bubble_w_ > 0.0f && x < ws_bubble_w_) {
+    if (ws_bubble_w_ > 0.0f && x >= ws_x && x < ws_x + ws_bubble_w_ && y <= 32.0) {
         if (button == 272 && state == 1) { // Left Click
             const auto& ws_list = workspaces_.workspaces();
             if (!ws_list.empty()) {
                 float per_ws = ws_bubble_w_ / static_cast<float>(ws_list.size());
-                int ws_idx = std::clamp(static_cast<int>(x / per_ws), 0, static_cast<int>(ws_list.size()) - 1);
+                int ws_idx = std::clamp(static_cast<int>((x - ws_x) / per_ws), 0, static_cast<int>(ws_list.size()) - 1);
                 workspaces_.focus_workspace(ws_list[ws_idx].idx);
                 wayland_.request_frame_callback();
             }
@@ -247,11 +273,11 @@ void IslandApp::on_click(int button, int state, double x, double y) {
         return;
     }
 
-    float island_offset_x = (ws_bubble_w_ > 0.0f) ? (ws_bubble_w_ + 8.0f) : 0.0f;
-    if (x < island_offset_x) return; // In gap between bubble and island
+    if (x < island_offset_x || x > island_offset_x + cur_w || y > cur_h) {
+        return; // Outside main island
+    }
 
     double cur_x = x - island_offset_x;
-    float cur_w = width_spring_.value;
 
     // Right Click handler
     if (button == 273 && state == 1) {
@@ -497,12 +523,25 @@ void IslandApp::on_click(int button, int state, double x, double y) {
 }
 
 void IslandApp::on_motion(double x, double y) {
-    (void)y;
-    if (active_drag_ == DragTarget::None) return;
-
-    float island_offset_x = (ws_bubble_w_ > 0.0f) ? (ws_bubble_w_ + 8.0f) : 0.0f;
-    float cur_x = static_cast<float>(x) - island_offset_x;
+    float left_wing = (ws_bubble_w_ > 0.0f) ? (ws_bubble_w_ + 8.0f) : 0.0f;
+    float right_wing = 0.0f;
+    float wing = std::max(left_wing, right_wing);
+    float island_offset_x = wing;
     float cur_w = width_spring_.value;
+    float cur_x = static_cast<float>(x) - island_offset_x;
+
+    // Handle hover transition between satellite and main island
+    if (!notifications_.has_active() && !osd_.is_active() && !in_control_center_ && active_drag_ == DragTarget::None) {
+        bool over_island = (x >= island_offset_x && x <= island_offset_x + cur_w && y <= height_spring_.value);
+        if (over_island != expanded_) {
+            expanded_ = over_island;
+            update_target_dimensions();
+            wayland_.request_frame_callback();
+        }
+    }
+
+    if (active_drag_ == DragTarget::None) return;
+    (void)y;
 
     if (active_drag_ == DragTarget::MusicSeek) {
         float bar_x = 16.0f;
@@ -583,11 +622,23 @@ void IslandApp::on_frame() {
     cc_state_.brightness_bounce = brightness_bounce_spring_.value;
 
     int island_w = std::max(20, (int)std::round(width_spring_.value));
-    int cur_w = (int)std::round(ws_bubble_w_ + 8.0f + island_w);
+    float left_wing = (ws_bubble_w_ > 0.0f) ? (ws_bubble_w_ + 8.0f) : 0.0f;
+    float right_wing = 0.0f;
+    float wing = std::max(left_wing, right_wing);
+
+    int cur_w = (int)std::round(island_w + 2.0f * wing);
     int cur_h = std::max(32, (int)std::round(height_spring_.value));
 
-    // Update Wayland surface size & render
+    // Update Wayland surface size & input regions
     wayland_.resize_surface(cur_w, cur_h);
+
+    std::vector<InputRect> input_rects;
+    if (ws_bubble_w_ > 0.0f) {
+        int ws_x = (int)std::round(wing - 8.0f - ws_bubble_w_);
+        input_rects.push_back({ws_x, 0, (int)std::round(ws_bubble_w_), 32});
+    }
+    input_rects.push_back({(int)std::round(wing), 0, island_w, cur_h});
+    wayland_.set_input_regions(input_rects);
 
     cairo_t* cr = wayland_.get_cairo_context(cur_w, cur_h);
     if (cr) {

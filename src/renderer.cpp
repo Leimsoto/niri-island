@@ -126,14 +126,17 @@ void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode,
                     float ws_bubble_w, const std::vector<WorkspaceInfo>& workspaces, uint32_t active_ws_idx) {
     update_art(media.art_url);
 
-    // 1. Draw Left Workspaces Satellite Bubble if present
-    float main_x = 0.0f;
-    float main_w = width;
+    // 1. Calculate symmetrical side wings so the main island is perfectly centered horizontally
+    float left_wing = (ws_bubble_w > 0.0f) ? (ws_bubble_w + 8.0f) : 0.0f;
+    float right_wing = 0.0f;
+    float wing = std::max(left_wing, right_wing);
+
+    float main_x = wing;
+    float main_w = std::max(20.0f, width - 2.0f * wing);
 
     if (ws_bubble_w > 0.0f) {
-        draw_workspace_bubble(cr, 0.0f, 0.0f, ws_bubble_w, 32.0f, workspaces, active_ws_idx);
-        main_x = ws_bubble_w + 8.0f;
-        main_w = std::max(20.0f, width - main_x);
+        float ws_x = wing - 8.0f - ws_bubble_w;
+        draw_workspace_bubble(cr, ws_x, 0.0f, ws_bubble_w, 32.0f, workspaces, active_ws_idx);
     }
 
     double radius = std::min((double)height / 2.0, 24.0);

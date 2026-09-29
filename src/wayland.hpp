@@ -5,10 +5,18 @@
 #include <functional>
 #include <string>
 #include <memory>
+#include <vector>
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 
 namespace island {
+
+struct InputRect {
+    int x;
+    int y;
+    int width;
+    int height;
+};
 
 struct Buffer {
     struct wl_buffer* wl_buf = nullptr;
@@ -32,6 +40,7 @@ public:
     void create_surface(int width, int height);
     void resize_surface(int width, int height);
     void set_margin(int top);
+    void set_input_regions(const std::vector<InputRect>& rects);
 
     void roundtrip();
     int dispatch();

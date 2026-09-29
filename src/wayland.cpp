@@ -209,6 +209,18 @@ void WaylandContext::set_margin(int top) {
     zwlr_layer_surface_v1_set_margin(layer_surface_, top, 0, 0, 0);
 }
 
+void WaylandContext::set_input_regions(const std::vector<InputRect>& rects) {
+    if (!surface_ || !compositor_) return;
+    struct wl_region* region = wl_compositor_create_region(compositor_);
+    for (const auto& r : rects) {
+        if (r.width > 0 && r.height > 0) {
+            wl_region_add(region, r.x, r.y, r.width, r.height);
+        }
+    }
+    wl_surface_set_input_region(surface_, region);
+    wl_region_destroy(region);
+}
+
 void WaylandContext::roundtrip() {
     wl_display_roundtrip(display_);
 }
