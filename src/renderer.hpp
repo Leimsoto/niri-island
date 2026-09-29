@@ -4,6 +4,7 @@
 #include <pango/pangocairo.h>
 #include <string>
 #include "mpris.hpp"
+#include "sysmon.hpp"
 
 namespace island {
 
@@ -30,6 +31,7 @@ struct ControlCenterState {
     bool battery_charging = false;
     bool dnd_enabled = false;
     bool media_active = false;
+    SystemStats stats;
 };
 
 class Renderer {
@@ -44,6 +46,8 @@ public:
 
 private:
     void draw_rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r);
+    void draw_glass_sheen(cairo_t* cr, float w, float h, double r);
+    void draw_lit_rim(cairo_t* cr, float w, float h, double r);
     void draw_idle(cairo_t* cr, float w, float h);
     void draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo& media, float anim_time);
     void draw_music_expanded(cairo_t* cr, float w, float h, const MediaInfo& media, float anim_time);

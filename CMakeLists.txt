@@ -59,6 +59,8 @@ add_executable(niri-island
     src/osd.cpp
     src/notifications.cpp
     src/island.cpp
+    src/ipc.cpp
+    src/sysmon.cpp
     ${PROTO_SRCS}
 )
 

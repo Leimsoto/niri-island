@@ -6,6 +6,8 @@
 #include "osd.hpp"
 #include "notifications.hpp"
 #include "spring.hpp"
+#include "ipc.hpp"
+#include "sysmon.hpp"
 #include <chrono>
 
 namespace island {
@@ -31,6 +33,8 @@ private:
     OsdManager osd_;
     NotificationManager notifications_;
     Renderer renderer_;
+    IpcServer ipc_;
+    SystemMonitor sysmon_;
 
     Spring width_spring_;
     Spring height_spring_;
@@ -53,6 +57,7 @@ private:
     void on_click(int button, int state, double x, double y);
     void on_motion(double x, double y);
     void on_hover(bool hovered);
+    std::string handle_ipc_command(const std::string& cmd);
 };
 
 } // namespace island

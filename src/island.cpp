@@ -4,6 +4,8 @@
 #include <unistd.h>
 #include <algorithm>
 #include <cstring>
+#include <sstream>
+#include <cmath>
 
 namespace island {
 
@@ -87,6 +89,10 @@ bool IslandApp::init() {
         std::cerr << "Failed to init Notification Manager (continuing without notifications)\n";
     }
 
+    if (!ipc_.start()) {
+        std::cerr << "Failed to start IPC server (continuing without socket)\n";
+    }
+
     update_target_dimensions();
 
     // Kick off first frame
@@ -106,11 +112,11 @@ void IslandApp::update_target_dimensions() {
         current_mode_ = IslandMode::HudOSD;
     } else if (in_control_center_) {
         width_spring_.set_target(350.0f);
-        height_spring_.set_target(240.0f);
+        height_spring_.set_target(246.0f);
         current_mode_ = IslandMode::ControlCenter;
     } else if (expanded_) {
         width_spring_.set_target(330.0f);
-        height_spring_.set_target(130.0f);
+        height_spring_.set_target(136.0f);
         current_mode_ = IslandMode::MusicExpanded;
     } else if (mpris_.info().active) {
         width_spring_.set_target(240.0f);
@@ -135,6 +141,10 @@ void IslandApp::update_control_center_info() {
     cc_state_.battery_charging = osd_.current_battery_charging();
     cc_state_.media_active = mpris_.info().active;
     cc_state_.dnd_enabled = notifications_.dnd();
+
+    // Update real-time CPU & RAM stats
+    sysmon_.update();
+    cc_state_.stats = sysmon_.stats();
 
     if (elapsed < 3.0f && last_cc_poll_time_.time_since_epoch().count() != 0) {
         return;
@@ -228,19 +238,29 @@ void IslandApp::on_click(int button, int state, double x, double y) {
 
     // 1. Control Center Interactions
     if (in_control_center_) {
-        // Header actions
-        if (y <= 38.0) {
-            // Media toggle button (if media active)
-            if (cc_state_.media_active && x >= cur_w - 64.0 && x <= cur_w - 38.0) {
+        // Header actions (y <= 36.0)
+        if (y <= 36.0) {
+            // Close button (far right: w - 34)
+            if (x >= cur_w - 38.0) {
                 in_control_center_ = false;
-                expanded_ = true;
                 update_target_dimensions();
                 wayland_.request_frame_callback();
                 return;
             }
-            // Close button
-            if (x >= cur_w - 36.0) {
+            // Lock button (w - 60)
+            if (x >= cur_w - 64.0 && x <= cur_w - 40.0) {
+                int r = system("swaylock -f 2>/dev/null || loginctl lock-session &"); (void)r;
+                return;
+            }
+            // Screenshot button (w - 86)
+            if (x >= cur_w - 90.0 && x <= cur_w - 66.0) {
+                int r = system("mkdir -p ~/Imágenes/Screenshots && grim ~/Imágenes/Screenshots/screenshot_$(date +%s).png &"); (void)r;
+                return;
+            }
+            // Media toggle button (if media active: w - 112)
+            if (cc_state_.media_active && x >= cur_w - 116.0 && x <= cur_w - 92.0) {
                 in_control_center_ = false;
+                expanded_ = true;
                 update_target_dimensions();
                 wayland_.request_frame_callback();
                 return;
@@ -251,11 +271,11 @@ void IslandApp::on_click(int button, int state, double x, double y) {
         float chip_w = (cur_w - 32.0f - 10.0f) / 2.0f;
         float col1_x = 16.0f;
         float col2_x = 16.0f + chip_w + 10.0f;
-        float row1_y = 44.0f;
-        float row2_y = 82.0f;
+        float row1_y = 70.0f;
+        float row2_y = 106.0f;
 
         // Row 1: Wi-Fi (Col 1) and Bluetooth (Col 2)
-        if (y >= row1_y && y <= row1_y + 34.0f) {
+        if (y >= row1_y && y <= row1_y + 32.0f) {
             if (x >= col1_x && x <= col1_x + chip_w) {
                 if (cc_state_.wifi_enabled) {
                     int r = system("nmcli radio wifi off"); (void)r;
@@ -282,7 +302,7 @@ void IslandApp::on_click(int button, int state, double x, double y) {
         }
 
         // Row 2: Audio Mute (Col 1) and DND (Col 2)
-        if (y >= row2_y && y <= row2_y + 34.0f) {
+        if (y >= row2_y && y <= row2_y + 32.0f) {
             if (x >= col1_x && x <= col1_x + chip_w) {
                 osd_.toggle_mute();
                 cc_state_.audio_muted = osd_.current_muted();
@@ -296,8 +316,8 @@ void IslandApp::on_click(int button, int state, double x, double y) {
             }
         }
 
-        // Volume Slider (y between 120 and 152)
-        if (y >= 120.0 && y <= 152.0) {
+        // Volume Slider (y between 140 and 172)
+        if (y >= 140.0 && y <= 172.0) {
             float bar_x = 16.0f;
             float bar_w = cur_w - 32.0f;
             float ratio = std::clamp((static_cast<float>(x) - bar_x) / bar_w, 0.0f, 1.0f);
@@ -309,8 +329,8 @@ void IslandApp::on_click(int button, int state, double x, double y) {
             return;
         }
 
-        // Brightness Slider (y between 154 and 188)
-        if (y >= 154.0 && y <= 188.0) {
+        // Brightness Slider (y between 174 and 206)
+        if (y >= 174.0 && y <= 206.0) {
             float bar_x = 16.0f;
             float bar_w = cur_w - 32.0f;
             float ratio = std::clamp((static_cast<float>(x) - bar_x) / bar_w, 0.0f, 1.0f);
@@ -319,17 +339,6 @@ void IslandApp::on_click(int button, int state, double x, double y) {
             active_drag_ = DragTarget::ControlBrightness;
             wayland_.request_frame_callback();
             return;
-        }
-
-        // Footer Actions: Screenshot and Lock
-        if (y >= 192.0 && y <= 228.0) {
-            if (x >= cur_w - 76.0f && x <= cur_w - 42.0f) {
-                int r = system("grim ~/Pictures/screenshot_$(date +%s).png &"); (void)r;
-                return;
-            } else if (x >= cur_w - 40.0f) {
-                int r = system("noctalia msg session lock &"); (void)r;
-                return;
-            }
         }
 
         return; // Don't collapse inside Control Center
@@ -468,7 +477,7 @@ void IslandApp::on_frame() {
 }
 
 void IslandApp::run() {
-    struct pollfd fds[4];
+    struct pollfd fds[6];
     int n_fds = 2;
     fds[0].fd = wayland_.get_fd();
     fds[0].events = POLLIN;
@@ -487,6 +496,14 @@ void IslandApp::run() {
     if (notifications_.get_fd() >= 0) {
         notif_idx = n_fds;
         fds[n_fds].fd = notifications_.get_fd();
+        fds[n_fds].events = POLLIN;
+        n_fds++;
+    }
+
+    int ipc_idx = -1;
+    if (ipc_.get_fd() >= 0) {
+        ipc_idx = n_fds;
+        fds[n_fds].fd = ipc_.get_fd();
         fds[n_fds].events = POLLIN;
         n_fds++;
     }
@@ -527,6 +544,12 @@ void IslandApp::run() {
             notifications_.update();
         }
 
+        if (ipc_idx >= 0 && (fds[ipc_idx].revents & POLLIN)) {
+            ipc_.process_pending([this](const std::string& cmd) -> std::string {
+                return handle_ipc_command(cmd);
+            });
+        }
+
         // Handle Mode expiry
         if ((current_mode_ == IslandMode::Notification && !notifications_.has_active()) ||
             (current_mode_ == IslandMode::HudOSD && !osd_.is_active())) {
@@ -539,6 +562,86 @@ void IslandApp::run() {
             wayland_.request_frame_callback();
         }
     }
+}
+
+std::string IslandApp::handle_ipc_command(const std::string& cmd) {
+    if (cmd == "toggle-control-center" || cmd == "cc") {
+        in_control_center_ = !in_control_center_;
+        if (in_control_center_) {
+            expanded_ = false;
+            update_control_center_info();
+        }
+        update_target_dimensions();
+        wayland_.request_frame_callback();
+        return in_control_center_ ? "Control Center opened\n" : "Control Center closed\n";
+    } else if (cmd == "toggle-media" || cmd == "expand") {
+        if (mpris_.info().active) {
+            expanded_ = !expanded_;
+            in_control_center_ = false;
+            update_target_dimensions();
+            wayland_.request_frame_callback();
+            return expanded_ ? "Media expanded\n" : "Media collapsed\n";
+        }
+        return "No active media\n";
+    } else if (cmd == "play-pause") {
+        mpris_.play_pause();
+        return "Toggled play/pause\n";
+    } else if (cmd == "next") {
+        mpris_.next();
+        return "Skipped to next\n";
+    } else if (cmd == "prev" || cmd == "previous") {
+        mpris_.previous();
+        return "Skipped to previous\n";
+    } else if (cmd == "toggle-mute") {
+        osd_.toggle_mute();
+        cc_state_.audio_muted = osd_.current_muted();
+        wayland_.request_frame_callback();
+        return cc_state_.audio_muted ? "Muted\n" : "Unmuted\n";
+    } else if (cmd == "toggle-wifi") {
+        if (cc_state_.wifi_enabled) {
+            int r = system("nmcli radio wifi off"); (void)r;
+            cc_state_.wifi_enabled = false;
+        } else {
+            int r = system("nmcli radio wifi on"); (void)r;
+            cc_state_.wifi_enabled = true;
+        }
+        wayland_.request_frame_callback();
+        return cc_state_.wifi_enabled ? "Wi-Fi on\n" : "Wi-Fi off\n";
+    } else if (cmd == "toggle-bluetooth" || cmd == "toggle-bt") {
+        if (cc_state_.bluetooth_enabled) {
+            int r = system("bluetoothctl power off"); (void)r;
+            cc_state_.bluetooth_enabled = false;
+        } else {
+            int r = system("bluetoothctl power on"); (void)r;
+            cc_state_.bluetooth_enabled = true;
+        }
+        wayland_.request_frame_callback();
+        return cc_state_.bluetooth_enabled ? "Bluetooth on\n" : "Bluetooth off\n";
+    } else if (cmd == "toggle-dnd") {
+        notifications_.toggle_dnd();
+        cc_state_.dnd_enabled = notifications_.dnd();
+        wayland_.request_frame_callback();
+        return cc_state_.dnd_enabled ? "DND on\n" : "DND off\n";
+    } else if (cmd == "close") {
+        if (in_control_center_ || expanded_) {
+            in_control_center_ = false;
+            expanded_ = false;
+            update_target_dimensions();
+            wayland_.request_frame_callback();
+            return "Closed panel\n";
+        }
+        return "Already closed\n";
+    } else if (cmd == "status") {
+        std::ostringstream ss;
+        ss << "Status: " << (in_control_center_ ? "Control Center" : (expanded_ ? "Music Expanded" : (mpris_.info().active ? "Music Compact" : "Idle"))) << "\n";
+        ss << "Media: " << (mpris_.info().active ? (mpris_.info().title + " - " + mpris_.info().artist) : "None") << "\n";
+        ss << "Volume: " << static_cast<int>(std::round(cc_state_.volume * 100)) << "%\n";
+        ss << "Battery: " << cc_state_.battery_percent << "%\n";
+        ss << "CPU: " << static_cast<int>(std::round(cc_state_.stats.cpu_percent)) << "%\n";
+        ss << "RAM: " << static_cast<int>(std::round(cc_state_.stats.ram_percent)) << "%\n";
+        return ss.str();
+    }
+    return "Unknown command: " + cmd + "\n";
 }
 
 } // namespace island
