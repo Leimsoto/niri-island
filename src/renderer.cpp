@@ -119,66 +119,36 @@ void Renderer::draw_rounded_rect(cairo_t* cr, double x, double y, double w, doub
     cairo_close_path(cr);
 }
 
-void Renderer::draw_glass_sheen(cairo_t* cr, float w, float h, double r) {
-    cairo_save(cr);
-    draw_rounded_rect(cr, 1.0, 1.0, w - 2.0, h - 2.0, r);
-    cairo_clip(cr);
-
-    float sheen_h = std::min(h * 0.45f, 40.0f);
-    cairo_pattern_t* pat = cairo_pattern_create_linear(0, 0, 0, sheen_h);
-    cairo_pattern_add_color_stop_rgba(pat, 0.0, 1.0, 1.0, 1.0, 0.12);
-    cairo_pattern_add_color_stop_rgba(pat, 0.5, 1.0, 1.0, 1.0, 0.04);
-    cairo_pattern_add_color_stop_rgba(pat, 1.0, 1.0, 1.0, 1.0, 0.0);
-    cairo_set_source(cr, pat);
-    cairo_rectangle(cr, 0, 0, w, sheen_h);
-    cairo_fill(cr);
-    cairo_pattern_destroy(pat);
-
-    cairo_restore(cr);
-}
-
-void Renderer::draw_lit_rim(cairo_t* cr, float w, float h, double r) {
-    cairo_save(cr);
-    draw_rounded_rect(cr, 1.0, 1.0, w - 2.0, h - 2.0, r);
-    cairo_pattern_t* rim_pat = cairo_pattern_create_linear(0, 0, 0, h);
-    cairo_pattern_add_color_stop_rgba(rim_pat, 0.0, 0.90, 0.85, 1.0, 0.35);
-    cairo_pattern_add_color_stop_rgba(rim_pat, 0.35, 0.60, 0.50, 0.75, 0.18);
-    cairo_pattern_add_color_stop_rgba(rim_pat, 1.0, 0.30, 0.25, 0.40, 0.12);
-    cairo_set_source(cr, rim_pat);
-    cairo_set_line_width(cr, 1.0);
-    cairo_stroke(cr);
-    cairo_pattern_destroy(rim_pat);
-    cairo_restore(cr);
-}
-
 void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode,
                     const MediaInfo& media, const OsdState& osd,
                     const NotificationItem& notif, const ControlCenterState& cc_state,
                     bool mic_active, float anim_time) {
     update_art(media.art_url);
 
-    double radius = std::min((double)height / 2.0, 22.0);
+    double radius = std::min((double)height / 2.0, 24.0);
 
-    // 1. Draw Island Body (Material 3 Dark Surface #131019)
+    // 1. Draw Island Body (Material 3 Dark Surface #141218)
     draw_rounded_rect(cr, 1.0, 1.0, width - 2.0, height - 2.0, radius);
-    cairo_set_source_rgba(cr, 0.075, 0.063, 0.098, 0.96);
-    cairo_fill(cr);
+    cairo_set_source_rgba(cr, 0.078, 0.071, 0.094, 0.98); // M3 Surface Container Lowest (#141218)
+    cairo_fill_preserve(cr);
 
-    // 2. Impasto Glass Sheen (Top-down physical lighting)
-    draw_glass_sheen(cr, width, height, radius);
-
-    // 3. Impasto Lit Rim (Edge highlight)
-    draw_lit_rim(cr, width, height, radius);
+    // Subtle Material Outline (#49454f at 28%)
+    cairo_set_source_rgba(cr, 0.40, 0.36, 0.48, 0.28);
+    cairo_set_line_width(cr, 1.0);
+    cairo_stroke(cr);
 
     // Clip content to rounded pill
     cairo_save(cr);
-    draw_rounded_rect(cr, 2.0, 2.0, width - 4.0, height - 4.0, radius - 1.0);
+    draw_rounded_rect(cr, 1.5, 1.5, width - 3.0, height - 3.0, radius - 0.5);
     cairo_clip(cr);
 
-    // 4. Draw Mode Content
+    // 2. Draw Mode Content
     switch (mode) {
         case IslandMode::Idle:
             draw_idle(cr, width, height);
+            break;
+        case IslandMode::IdleExpanded:
+            draw_idle_expanded(cr, width, height, cc_state);
             break;
         case IslandMode::MusicCompact:
             draw_music_compact(cr, width, height, media, anim_time);
@@ -257,6 +227,92 @@ void Renderer::draw_idle(cairo_t* cr, float w, float h) {
 
     pango_font_description_free(font_desc);
     g_object_unref(layout);
+}
+
+void Renderer::draw_idle_expanded(cairo_t* cr, float, float h, const ControlCenterState& cc_state) {
+    time_t now = time(nullptr);
+    struct tm* tm_info = localtime(&now);
+
+    char time_str[16];
+    char sec_str[8];
+    char day_name[32];
+    char date_full[48];
+
+    strftime(time_str, sizeof(time_str), "%H:%M", tm_info);
+    strftime(sec_str, sizeof(sec_str), "%S", tm_info);
+    strftime(day_name, sizeof(day_name), "%A", tm_info);
+    strftime(date_full, sizeof(date_full), "%d de %B", tm_info);
+
+    // Left: Big Digital Clock
+    PangoLayout* clk_layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* clk_font = pango_font_description_from_string("JetBrainsMono Nerd Font Bold 18");
+    pango_layout_set_font_description(clk_layout, clk_font);
+    pango_layout_set_text(clk_layout, time_str, -1);
+    PangoRectangle clk_ink, clk_log;
+    pango_layout_get_pixel_extents(clk_layout, &clk_ink, &clk_log);
+    float clk_x = 20.0f;
+    float clk_y = (h - clk_ink.height) / 2.0f - clk_ink.y;
+    cairo_move_to(cr, clk_x, clk_y);
+    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 1.0); // M3 On-Surface
+    pango_cairo_show_layout(cr, clk_layout);
+    pango_font_description_free(clk_font);
+    g_object_unref(clk_layout);
+
+    // Small Seconds next to clock
+    PangoLayout* sec_layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* sec_font = pango_font_description_from_string("JetBrainsMono Nerd Font 9.5");
+    pango_layout_set_font_description(sec_layout, sec_font);
+    pango_layout_set_text(sec_layout, sec_str, -1);
+    cairo_move_to(cr, clk_x + clk_ink.width + 4.0f, clk_y + 4.0f);
+    cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.85); // M3 Outline
+    pango_cairo_show_layout(cr, sec_layout);
+    pango_font_description_free(sec_font);
+    g_object_unref(sec_layout);
+
+    // Subtle Vertical Divider
+    float div_x = clk_x + clk_ink.width + 28.0f;
+    cairo_move_to(cr, div_x, 14.0f);
+    cairo_line_to(cr, div_x, h - 14.0f);
+    cairo_set_source_rgba(cr, 0.40, 0.36, 0.48, 0.25);
+    cairo_set_line_width(cr, 1.0);
+    cairo_stroke(cr);
+
+    // Right: Date & System Glance
+    float info_x = div_x + 14.0f;
+
+    // Day of week & date
+    PangoLayout* day_layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* day_font = pango_font_description_from_string("Sans Bold 10.5");
+    pango_layout_set_font_description(day_layout, day_font);
+    pango_layout_set_text(day_layout, day_name, -1);
+    cairo_move_to(cr, info_x, 14.0f);
+    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.98);
+    pango_cairo_show_layout(cr, day_layout);
+    pango_font_description_free(day_font);
+    g_object_unref(day_layout);
+
+    PangoLayout* dt_layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* dt_font = pango_font_description_from_string("Sans 9.5");
+    pango_layout_set_font_description(dt_layout, dt_font);
+    pango_layout_set_text(dt_layout, date_full, -1);
+    cairo_move_to(cr, info_x, 30.0f);
+    cairo_set_source_rgba(cr, 0.792, 0.769, 0.816, 0.85);
+    pango_cairo_show_layout(cr, dt_layout);
+    pango_font_description_free(dt_font);
+    g_object_unref(dt_layout);
+
+    // Minimal system status line: Battery & CPU
+    std::string sys_info = "󰁹 " + std::to_string(cc_state.battery_percent) + "%  •  󰍛 " + 
+                           std::to_string(static_cast<int>(std::round(cc_state.stats.cpu_percent))) + "%";
+    PangoLayout* sys_layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* sys_font = pango_font_description_from_string("JetBrainsMono Nerd Font 8.5");
+    pango_layout_set_font_description(sys_layout, sys_font);
+    pango_layout_set_text(sys_layout, sys_info.c_str(), -1);
+    cairo_move_to(cr, info_x, 46.0f);
+    cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.80);
+    pango_cairo_show_layout(cr, sys_layout);
+    pango_font_description_free(sys_font);
+    g_object_unref(sys_layout);
 }
 
 void Renderer::draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo& media, float anim_time) {
@@ -619,79 +675,79 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
     struct tm* tm_info = localtime(&now);
 
     char time_str[16];
-    char date_str[32];
+    char date_str[48];
     strftime(time_str, sizeof(time_str), "%H:%M", tm_info);
-    strftime(date_str, sizeof(date_str), "%a, %d %b", tm_info);
+    strftime(date_str, sizeof(date_str), "%A, %d de %B", tm_info);
 
-    // 1. Header (Time, Date, Quick Actions on top right)
+    // 1. Header (y = 16..46): Time, Date on left, Quick Actions on right
     PangoLayout* clock_layout = pango_cairo_create_layout(cr);
-    PangoFontDescription* clock_font = pango_font_description_from_string("JetBrainsMono Nerd Font Bold 12.5");
+    PangoFontDescription* clock_font = pango_font_description_from_string("JetBrainsMono Nerd Font Bold 16");
     pango_layout_set_font_description(clock_layout, clock_font);
     pango_layout_set_text(clock_layout, time_str, -1);
-    cairo_move_to(cr, 16.0, 13.0);
+    cairo_move_to(cr, 20.0, 14.0);
     cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 1.0); // M3 On-Surface
     pango_cairo_show_layout(cr, clock_layout);
     pango_font_description_free(clock_font);
     g_object_unref(clock_layout);
 
     PangoLayout* date_layout = pango_cairo_create_layout(cr);
-    PangoFontDescription* date_font = pango_font_description_from_string("Sans 9.0");
+    PangoFontDescription* date_font = pango_font_description_from_string("Sans 10");
     pango_layout_set_font_description(date_layout, date_font);
     pango_layout_set_text(date_layout, date_str, -1);
-    cairo_move_to(cr, 68.0, 16.0);
+    cairo_move_to(cr, 86.0, 18.0);
     cairo_set_source_rgba(cr, 0.792, 0.769, 0.816, 0.85); // M3 Muted
     pango_cairo_show_layout(cr, date_layout);
     pango_font_description_free(date_font);
     g_object_unref(date_layout);
 
-    // Header Quick Action Buttons
+    // Header Quick Action Buttons (26x26, 8px gap)
     auto draw_header_btn = [&](float x, const char* icon, bool highlight) {
-        float btn_sz = 22.0f;
-        draw_rounded_rect(cr, x, 12.0f, btn_sz, btn_sz, 11.0);
+        float btn_sz = 26.0f;
+        draw_rounded_rect(cr, x, 14.0f, btn_sz, btn_sz, 13.0);
         if (highlight) {
-            cairo_set_source_rgba(cr, 0.310, 0.216, 0.545, 0.85); // Primary Container
+            cairo_set_source_rgba(cr, 0.310, 0.216, 0.545, 0.90); // M3 Primary Container
         } else {
-            cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.85);
+            cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.90); // Surface Container High
         }
         cairo_fill_preserve(cr);
-        cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.35);
+        cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.30);
         cairo_set_line_width(cr, 0.8);
         cairo_stroke(cr);
 
         PangoLayout* ico = pango_cairo_create_layout(cr);
-        PangoFontDescription* f = pango_font_description_from_string("JetBrainsMono Nerd Font 10");
+        PangoFontDescription* f = pango_font_description_from_string("JetBrainsMono Nerd Font 11");
         pango_layout_set_font_description(ico, f);
         pango_layout_set_text(ico, icon, -1);
         PangoRectangle ink, log;
         pango_layout_get_pixel_extents(ico, &ink, &log);
         cairo_move_to(cr, x + (btn_sz - ink.width) / 2.0 - ink.x,
-                          12.0 + (btn_sz - ink.height) / 2.0 - ink.y);
+                          14.0 + (btn_sz - ink.height) / 2.0 - ink.y);
         cairo_set_source_rgba(cr, highlight ? 0.918 : 0.80, highlight ? 0.867 : 0.78, 1.0, 0.95);
         pango_cairo_show_layout(cr, ico);
         pango_font_description_free(f);
         g_object_unref(ico);
     };
 
-    // Close button (far right)
-    draw_header_btn(w - 34.0f, "󰅖", false);
-    // Lock button
-    draw_header_btn(w - 60.0f, "󰌾", false);
-    // Screenshot button
-    draw_header_btn(w - 86.0f, "󰄀", false);
-    // Media toggle button (if media active)
+    // Close button (far right: w - 42)
+    draw_header_btn(w - 42.0f, "󰅖", false);
+    // Lock button (w - 76)
+    draw_header_btn(w - 76.0f, "󰌾", false);
+    // Screenshot button (w - 110)
+    draw_header_btn(w - 110.0f, "󰄀", false);
+    // Media toggle button (if media active: w - 144)
     if (state.media_active) {
-        draw_header_btn(w - 112.0f, "󰎆", true);
+        draw_header_btn(w - 144.0f, "󰎆", true);
     }
 
-    // 2. Impasto System Stats Bar (CPU, RAM, Battery chips)
-    float stats_y = 40.0f;
-    float stat_chip_gap = 6.0f;
-    float stat_chip_w = (w - 32.0f - stat_chip_gap * 2.0f) / 3.0f;
-    float stat_chip_h = 24.0f;
+    // 2. System Stats Bar (y = 52..80, h = 28): CPU, RAM, Battery chips
+    float stats_y = 52.0f;
+    float stat_chip_gap = 8.0f;
+    float stat_chip_w = (w - 40.0f - stat_chip_gap * 2.0f) / 3.0f;
+    float stat_chip_h = 28.0f;
 
     auto draw_stat_chip = [&](float x, const char* icon, const std::string& val_str, double r, double g, double b) {
-        draw_rounded_rect(cr, x, stats_y, stat_chip_w, stat_chip_h, 7.0);
-        cairo_set_source_rgba(cr, 0.125, 0.106, 0.165, 0.85); // M3 Surface Container
+        draw_rounded_rect(cr, x, stats_y, stat_chip_w, stat_chip_h, 8.0);
+        cairo_set_source_rgba(cr, 0.125, 0.106, 0.165, 0.90); // Surface Container
         cairo_fill_preserve(cr);
         cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.22);
         cairo_set_line_width(cr, 0.8);
@@ -699,12 +755,12 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
 
         // Icon
         PangoLayout* il = pango_cairo_create_layout(cr);
-        PangoFontDescription* ifont = pango_font_description_from_string("JetBrainsMono Nerd Font 9.5");
+        PangoFontDescription* ifont = pango_font_description_from_string("JetBrainsMono Nerd Font 10");
         pango_layout_set_font_description(il, ifont);
         pango_layout_set_text(il, icon, -1);
         PangoRectangle ink, log;
         pango_layout_get_pixel_extents(il, &ink, &log);
-        cairo_move_to(cr, x + 7.0 - ink.x, stats_y + (stat_chip_h - ink.height) / 2.0 - ink.y);
+        cairo_move_to(cr, x + 8.0 - ink.x, stats_y + (stat_chip_h - ink.height) / 2.0 - ink.y);
         cairo_set_source_rgba(cr, r, g, b, 0.95);
         pango_cairo_show_layout(cr, il);
         pango_font_description_free(ifont);
@@ -712,12 +768,12 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
 
         // Value text
         PangoLayout* vl = pango_cairo_create_layout(cr);
-        PangoFontDescription* vfont = pango_font_description_from_string("JetBrainsMono Nerd Font Bold 8.5");
+        PangoFontDescription* vfont = pango_font_description_from_string("JetBrainsMono Nerd Font SemiBold 9.0");
         pango_layout_set_font_description(vl, vfont);
         pango_layout_set_text(vl, val_str.c_str(), -1);
         PangoRectangle vink, vlog;
         pango_layout_get_pixel_extents(vl, &vink, &vlog);
-        cairo_move_to(cr, x + 21.0, stats_y + (stat_chip_h - vink.height) / 2.0 - vink.y);
+        cairo_move_to(cr, x + 24.0, stats_y + (stat_chip_h - vink.height) / 2.0 - vink.y);
         cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.92);
         pango_cairo_show_layout(cr, vl);
         pango_font_description_free(vfont);
@@ -726,52 +782,52 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
 
     // CPU Stat
     std::string cpu_str = "CPU " + std::to_string(static_cast<int>(std::round(state.stats.cpu_percent))) + "%";
-    draw_stat_chip(16.0f, "󰍛", cpu_str, 0.502, 0.871, 0.773); // Mint green
+    draw_stat_chip(20.0f, "󰍛", cpu_str, 0.60, 0.85, 0.75); // Soft Mint
 
     // RAM Stat
     std::string ram_str = "RAM " + std::to_string(static_cast<int>(std::round(state.stats.ram_percent))) + "%";
-    draw_stat_chip(16.0f + stat_chip_w + stat_chip_gap, "󰘚", ram_str, 0.816, 0.737, 1.0); // Lavender
+    draw_stat_chip(20.0f + stat_chip_w + stat_chip_gap, "󰘚", ram_str, 0.82, 0.74, 1.0); // Soft Lavender
 
     // Battery Stat
     std::string bat_str = std::to_string(state.battery_percent) + "%";
-    draw_stat_chip(16.0f + (stat_chip_w + stat_chip_gap) * 2.0f,
-                   state.battery_charging ? "󰂄" : "󰁹", bat_str, 1.0, 0.824, 0.490); // Amber
+    draw_stat_chip(20.0f + (stat_chip_w + stat_chip_gap) * 2.0f,
+                   state.battery_charging ? "󰂄" : "󰁹", bat_str, 0.95, 0.85, 0.55); // Soft Amber
 
-    // 3. Tonal Toggle Chips (2x2 Grid)
-    float chip_w = (w - 32.0f - 10.0f) / 2.0f;
-    float chip_h = 30.0f;
-    float col1_x = 16.0f;
-    float col2_x = 16.0f + chip_w + 10.0f;
-    float row1_y = 70.0f;
-    float row2_y = 106.0f;
+    // 3. Tonal Toggle Chips (2x2 Grid) (y = 90..176)
+    float chip_w = (w - 40.0f - 12.0f) / 2.0f;
+    float chip_h = 38.0f;
+    float col1_x = 20.0f;
+    float col2_x = 20.0f + chip_w + 12.0f;
+    float row1_y = 90.0f;
+    float row2_y = 136.0f;
 
     auto draw_chip = [&](float x, float y, const char* icon, const std::string& label, bool active, bool alert = false) {
-        draw_rounded_rect(cr, x, y, chip_w, chip_h, 8.0);
+        draw_rounded_rect(cr, x, y, chip_w, chip_h, 10.0);
         if (alert && active) {
-            cairo_set_source_rgba(cr, 0.35, 0.12, 0.14, 0.90);
+            cairo_set_source_rgba(cr, 0.38, 0.14, 0.16, 0.92); // M3 Error Container
         } else if (active) {
-            cairo_set_source_rgba(cr, 0.310, 0.216, 0.545, 0.90); // M3 Primary Container
+            cairo_set_source_rgba(cr, 0.310, 0.216, 0.545, 0.92); // M3 Primary Container
         } else {
             cairo_set_source_rgba(cr, 0.125, 0.106, 0.165, 0.88); // M3 Surface Container
         }
         cairo_fill_preserve(cr);
 
-        cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, active ? 0.45 : 0.25);
+        cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, active ? 0.40 : 0.22);
         cairo_set_line_width(cr, 0.8);
         cairo_stroke(cr);
 
         // Icon
         PangoLayout* i_layout = pango_cairo_create_layout(cr);
-        PangoFontDescription* i_font = pango_font_description_from_string("JetBrainsMono Nerd Font 11");
+        PangoFontDescription* i_font = pango_font_description_from_string("JetBrainsMono Nerd Font 12");
         pango_layout_set_font_description(i_layout, i_font);
         pango_layout_set_text(i_layout, icon, -1);
         PangoRectangle i_ink, i_log;
         pango_layout_get_pixel_extents(i_layout, &i_ink, &i_log);
-        cairo_move_to(cr, x + 9.0 - i_ink.x, y + (chip_h - i_ink.height) / 2.0 - i_ink.y);
+        cairo_move_to(cr, x + 12.0 - i_ink.x, y + (chip_h - i_ink.height) / 2.0 - i_ink.y);
         if (alert && active) {
-            cairo_set_source_rgba(cr, 0.98, 0.58, 0.52, 1.0);
+            cairo_set_source_rgba(cr, 0.98, 0.65, 0.60, 1.0);
         } else if (active) {
-            cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 1.0);
+            cairo_set_source_rgba(cr, 0.90, 0.85, 1.0, 1.0);
         } else {
             cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.85);
         }
@@ -781,15 +837,15 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
 
         // Label
         PangoLayout* l_layout = pango_cairo_create_layout(cr);
-        PangoFontDescription* l_font = pango_font_description_from_string("Sans SemiBold 8.5");
+        PangoFontDescription* l_font = pango_font_description_from_string("Sans SemiBold 9.0");
         pango_layout_set_font_description(l_layout, l_font);
         pango_layout_set_text(l_layout, label.c_str(), -1);
         pango_layout_set_ellipsize(l_layout, PANGO_ELLIPSIZE_END);
-        pango_layout_set_width(l_layout, (chip_w - 36.0f) * PANGO_SCALE);
+        pango_layout_set_width(l_layout, (chip_w - 44.0f) * PANGO_SCALE);
 
         PangoRectangle l_ink, l_log;
         pango_layout_get_pixel_extents(l_layout, &l_ink, &l_log);
-        cairo_move_to(cr, x + 28.0, y + (chip_h - l_ink.height) / 2.0 - l_ink.y);
+        cairo_move_to(cr, x + 34.0, y + (chip_h - l_ink.height) / 2.0 - l_ink.y);
         cairo_set_source_rgba(cr, active ? 0.95 : 0.80, active ? 0.95 : 0.80, active ? 1.0 : 0.85, 0.95);
         pango_cairo_show_layout(cr, l_layout);
         pango_font_description_free(l_font);
@@ -812,20 +868,20 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
               state.audio_muted, true);
 
     // DND
-    draw_chip(col2_x, row2_y, state.dnd_enabled ? "󰍷" : "󰂚",
+    draw_chip(col2_x, row2_y, state.dnd_enabled ? "󰂛" : "󰂚",
               state.dnd_enabled ? "No Molestar" : "Notificaciones",
               state.dnd_enabled);
 
-    // 4. Impasto LevelRows (Volume & Brightness Sliders)
-    float s_x = 16.0f;
-    float s_w = w - 32.0f;
-    float s_h = 26.0f;
+    // 4. Material 3 LevelRows (Thick Sliders) (y = 188..270)
+    float s_x = 20.0f;
+    float s_w = w - 40.0f;
+    float s_h = 34.0f;
 
     auto draw_slider = [&](float y, const char* icon, float val, double r_fill, double g_fill, double b_fill) {
         val = std::clamp(val, 0.0f, 1.0f);
         // Track
-        draw_rounded_rect(cr, s_x, y, s_w, s_h, 13.0);
-        cairo_set_source_rgba(cr, 0.125, 0.106, 0.165, 0.90);
+        draw_rounded_rect(cr, s_x, y, s_w, s_h, 17.0);
+        cairo_set_source_rgba(cr, 0.125, 0.106, 0.165, 0.92); // Surface Container
         cairo_fill_preserve(cr);
         cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.20);
         cairo_set_line_width(cr, 0.8);
@@ -833,22 +889,22 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
 
         // Active fill
         if (val > 0.01f) {
-            float fill_w = std::max(26.0f, s_w * val);
-            draw_rounded_rect(cr, s_x, y, fill_w, s_h, 13.0);
+            float fill_w = std::max(34.0f, s_w * val);
+            draw_rounded_rect(cr, s_x, y, fill_w, s_h, 17.0);
             cairo_set_source_rgba(cr, r_fill, g_fill, b_fill, 0.95);
             cairo_fill(cr);
         }
 
         // Icon inside slider on the left
         PangoLayout* s_icon = pango_cairo_create_layout(cr);
-        PangoFontDescription* si_font = pango_font_description_from_string("JetBrainsMono Nerd Font 11");
+        PangoFontDescription* si_font = pango_font_description_from_string("JetBrainsMono Nerd Font 12");
         pango_layout_set_font_description(s_icon, si_font);
         pango_layout_set_text(s_icon, icon, -1);
         PangoRectangle si_ink, si_log;
         pango_layout_get_pixel_extents(s_icon, &si_ink, &si_log);
-        cairo_move_to(cr, s_x + 10.0 - si_ink.x, y + (s_h - si_ink.height) / 2.0 - si_ink.y);
-        if (val > 0.15f) {
-            cairo_set_source_rgba(cr, 0.15, 0.10, 0.22, 1.0); // High contrast on active bar
+        cairo_move_to(cr, s_x + 14.0 - si_ink.x, y + (s_h - si_ink.height) / 2.0 - si_ink.y);
+        if (val > 0.16f) {
+            cairo_set_source_rgba(cr, 0.12, 0.08, 0.18, 1.0); // Contrast on active bar
         } else {
             cairo_set_source_rgba(cr, r_fill, g_fill, b_fill, 0.95);
         }
@@ -859,12 +915,12 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
         // Percentage text inside slider on the right
         std::string pct_str = std::to_string(static_cast<int>(std::round(val * 100.0f))) + "%";
         PangoLayout* s_pct = pango_cairo_create_layout(cr);
-        PangoFontDescription* sp_font = pango_font_description_from_string("JetBrainsMono Nerd Font Bold 9.0");
+        PangoFontDescription* sp_font = pango_font_description_from_string("Sans Bold 9.5");
         pango_layout_set_font_description(s_pct, sp_font);
         pango_layout_set_text(s_pct, pct_str.c_str(), -1);
         PangoRectangle sp_ink, sp_log;
         pango_layout_get_pixel_extents(s_pct, &sp_ink, &sp_log);
-        cairo_move_to(cr, s_x + s_w - 12.0 - sp_ink.width - sp_ink.x, y + (s_h - sp_ink.height) / 2.0 - sp_ink.y);
+        cairo_move_to(cr, s_x + s_w - 14.0 - sp_ink.width - sp_ink.x, y + (s_h - sp_ink.height) / 2.0 - sp_ink.y);
         cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.95);
         pango_cairo_show_layout(cr, s_pct);
         pango_font_description_free(sp_font);
@@ -872,21 +928,21 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
     };
 
     // Volume Slider
-    draw_slider(144.0f, state.audio_muted ? "󰝟" : "󰕾", state.volume, 0.816, 0.737, 1.0);
+    draw_slider(188.0f, state.audio_muted ? "󰝟" : "󰕾", state.volume, 0.816, 0.737, 1.0);
 
     // Brightness Slider
-    draw_slider(176.0f, "󰃠", state.brightness, 1.0, 0.824, 0.490);
+    draw_slider(232.0f, "󰃠", state.brightness, 0.92, 0.78, 0.45);
 
-    // 5. Impasto Subtle System Identifier Footer
-    float foot_y = 214.0f;
+    // 5. Subtle System Identifier Footer (y = 284..310)
+    float foot_y = 286.0f;
     PangoLayout* foot_layout = pango_cairo_create_layout(cr);
-    PangoFontDescription* foot_font = pango_font_description_from_string("JetBrainsMono Nerd Font 8.5");
+    PangoFontDescription* foot_font = pango_font_description_from_string("JetBrainsMono Nerd Font 9.0");
     pango_layout_set_font_description(foot_layout, foot_font);
     pango_layout_set_text(foot_layout, "leimsoto@debian  •  niri", -1);
     PangoRectangle fi_ink, fi_log;
     pango_layout_get_pixel_extents(foot_layout, &fi_ink, &fi_log);
-    cairo_move_to(cr, (w - fi_ink.width) / 2.0 - fi_ink.x, foot_y + 4.0);
-    cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.70); // Subtle M3 Outline / Muted
+    cairo_move_to(cr, (w - fi_ink.width) / 2.0 - fi_ink.x, foot_y);
+    cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.70); // Subtle M3 Outline
     pango_cairo_show_layout(cr, foot_layout);
     pango_font_description_free(foot_font);
     g_object_unref(foot_layout);

@@ -84,11 +84,12 @@ void MprisClient::query_active_player() {
 
     while (sd_bus_message_read(reply, "s", &name) > 0) {
         if (strncmp(name, "org.mpris.MediaPlayer2.", 23) == 0) {
-            found_player = name;
-            // Prefer playing player
             query_player_properties(name);
-            if (info_.playing) {
-                break;
+            if (info_.active) {
+                found_player = name;
+                if (info_.playing) {
+                    break;
+                }
             }
         }
     }
@@ -96,7 +97,7 @@ void MprisClient::query_active_player() {
     sd_bus_message_exit_container(reply);
     sd_bus_message_unref(reply);
 
-    if (found_player.empty()) {
+    if (found_player.empty() || !info_.active) {
         info_.active = false;
         info_.playing = false;
         info_.title.clear();
@@ -216,6 +217,8 @@ void MprisClient::query_player_properties(const char* service) {
     }
 
     sd_bus_error_free(&error);
+
+    info_.active = !info_.title.empty();
 
     query_position();
 
