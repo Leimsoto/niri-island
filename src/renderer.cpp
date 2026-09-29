@@ -127,19 +127,14 @@ void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode,
 
     double radius = std::min((double)height / 2.0, 24.0);
 
-    // 1. Draw Island Body (Material 3 Dark Surface #141218)
-    draw_rounded_rect(cr, 1.0, 1.0, width - 2.0, height - 2.0, radius);
+    // 1. Draw Island Body (Material 3 Dark Surface #141218 - Pure seamless, no outer outline)
+    draw_rounded_rect(cr, 0.0, 0.0, width, height, radius);
     cairo_set_source_rgba(cr, 0.078, 0.071, 0.094, 0.98); // M3 Surface Container Lowest (#141218)
-    cairo_fill_preserve(cr);
-
-    // Subtle Material Outline (#49454f at 28%)
-    cairo_set_source_rgba(cr, 0.40, 0.36, 0.48, 0.28);
-    cairo_set_line_width(cr, 1.0);
-    cairo_stroke(cr);
+    cairo_fill(cr);
 
     // Clip content to rounded pill
     cairo_save(cr);
-    draw_rounded_rect(cr, 1.5, 1.5, width - 3.0, height - 3.0, radius - 0.5);
+    draw_rounded_rect(cr, 0.0, 0.0, width, height, radius);
     cairo_clip(cr);
 
     // 2. Draw Mode Content
@@ -168,28 +163,11 @@ void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode,
     }
 
     cairo_restore(cr);
-
-    // 3. Privacy Dot (Microphone Indicator)
-    if (mic_active) {
-        draw_privacy_dot(cr, width, height);
-    }
+    (void)mic_active;
 }
 
-void Renderer::draw_privacy_dot(cairo_t* cr, float w, float h) {
-    (void)h;
-    double dot_x = w - 12.0;
-    double dot_y = 10.0;
-    double dot_r = 2.8;
-
-    // Subtle Coral Glow Ring
-    cairo_arc(cr, dot_x, dot_y, dot_r + 2.0, 0, 2 * M_PI);
-    cairo_set_source_rgba(cr, 0.95, 0.55, 0.51, 0.30);
-    cairo_fill(cr);
-
-    // Center Dot
-    cairo_arc(cr, dot_x, dot_y, dot_r, 0, 2 * M_PI);
-    cairo_set_source_rgba(cr, 0.98, 0.58, 0.52, 0.95);
-    cairo_fill(cr);
+void Renderer::draw_privacy_dot(cairo_t*, float, float) {
+    // Disabled per user preference (no unwanted dots)
 }
 
 void Renderer::draw_idle(cairo_t* cr, float w, float h) {
@@ -207,18 +185,8 @@ void Renderer::draw_idle(cairo_t* cr, float w, float h) {
     PangoRectangle ink_rect, logical_rect;
     pango_layout_get_pixel_extents(layout, &ink_rect, &logical_rect);
 
-    double dot_radius = 3.2;
-    double spacing = 7.0;
-    double total_content_w = (dot_radius * 2.0) + spacing + ink_rect.width;
-    double start_x = (w - total_content_w) / 2.0;
-
-    // 1. M3 Lavender Pulse Dot (#d0bcff)
-    cairo_arc(cr, start_x + dot_radius, h / 2.0, dot_radius, 0, 2 * M_PI);
-    cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.92);
-    cairo_fill(cr);
-
-    // 2. Clock Text (M3 On-Surface #e6e0e9)
-    double text_x = start_x + (dot_radius * 2.0) + spacing - ink_rect.x;
+    // Clean, perfectly centered clock without any extra dots
+    double text_x = (w - ink_rect.width) / 2.0 - ink_rect.x;
     double text_y = (h - ink_rect.height) / 2.0 - ink_rect.y;
 
     cairo_move_to(cr, text_x, text_y);
