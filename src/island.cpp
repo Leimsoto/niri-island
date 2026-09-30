@@ -90,6 +90,9 @@ bool IslandApp::init() {
     wayland_.create_surface(initial_total_w, 32);
     last_frame_time_ = std::chrono::steady_clock::now();
 
+    ws_pill_spring_.value = static_cast<float>(workspaces_.active_slot());
+    ws_pill_spring_.set_target(static_cast<float>(workspaces_.active_slot()));
+
     // Set MPRIS callback
     mpris_.on_change = [this](const MediaInfo& info) {
         if (info.active && !info.title.empty()) {
@@ -156,6 +159,50 @@ bool IslandApp::init() {
     return true;
 }
 
+void IslandApp::activate_app(const std::string& app_name) {
+    if (app_name.empty()) return;
+
+    FILE* fp = popen("niri msg --json windows 2>/dev/null", "r");
+    if (fp) {
+        std::string out;
+        char buf[512];
+        while (fgets(buf, sizeof(buf), fp)) out += buf;
+        pclose(fp);
+
+        std::string target = app_name;
+        std::transform(target.begin(), target.end(), target.begin(), ::tolower);
+
+        size_t pos = 0;
+        int matched_id = -1;
+        while ((pos = out.find('{', pos)) != std::string::npos) {
+            size_t end = out.find('}', pos);
+            if (end == std::string::npos) break;
+            std::string win = out.substr(pos, end - pos + 1);
+            pos = end + 1;
+
+            std::string win_lower = win;
+            std::transform(win_lower.begin(), win_lower.end(), win_lower.begin(), ::tolower);
+
+            if (win_lower.find(target) != std::string::npos) {
+                size_t id_pos = win.find("\"id\":");
+                if (id_pos != std::string::npos) {
+                    matched_id = std::atoi(win.c_str() + id_pos + 5);
+                    break;
+                }
+            }
+        }
+
+        if (matched_id >= 0) {
+            std::string cmd = "niri msg action focus-window --id " + std::to_string(matched_id) + " &";
+            int r = system(cmd.c_str()); (void)r;
+            return;
+        }
+    }
+
+    std::string cmd = "gtk-launch " + app_name + " 2>/dev/null || " + app_name + " &";
+    int r = system(cmd.c_str()); (void)r;
+}
+
 void IslandApp::update_target_dimensions() {
     workspaces_.update();
     ws_bubble_w_ = in_control_center_ ? 0.0f : workspaces_.bubble_width();
@@ -169,8 +216,13 @@ void IslandApp::update_target_dimensions() {
         height_spring_.set_target(536.0f);
         current_mode_ = IslandMode::ControlCenter;
     } else if (notifications_.has_active()) {
-        width_spring_.set_target(330.0f);
-        height_spring_.set_target(70.0f);
+        if (has_media) {
+            width_spring_.set_target(340.0f);
+            height_spring_.set_target(86.0f);
+        } else {
+            width_spring_.set_target(320.0f);
+            height_spring_.set_target(72.0f);
+        }
         current_mode_ = IslandMode::Notification;
     } else if (osd_.is_active()) {
         width_spring_.set_target(210.0f);
@@ -178,8 +230,8 @@ void IslandApp::update_target_dimensions() {
         current_mode_ = IslandMode::HudOSD;
     } else if (expanded_) {
         if (has_media) {
-            width_spring_.set_target(330.0f);
-            height_spring_.set_target(136.0f);
+            width_spring_.set_target(340.0f);
+            height_spring_.set_target(138.0f);
             current_mode_ = IslandMode::MusicExpanded;
         } else {
             width_spring_.set_target(280.0f);
@@ -279,9 +331,13 @@ void IslandApp::on_click(int button, int state, double x, double y) {
         if (button == 272 && state == 1) { // Left Click
             const auto& ws_list = workspaces_.workspaces();
             if (!ws_list.empty()) {
-                float per_ws = ws_bubble_w_ / static_cast<float>(ws_list.size());
-                int ws_idx = std::clamp(static_cast<int>((x - ws_x) / per_ws), 0, static_cast<int>(ws_list.size()) - 1);
-                workspaces_.focus_workspace(ws_list[ws_idx].idx);
+                float pad = 14.0f;
+                float step = (ws_bubble_w_ - 2.0f * pad) / (ws_list.size() > 1 ? static_cast<float>(ws_list.size() - 1) : 1.0f);
+                float rel_x = static_cast<float>(x - ws_x) - pad;
+                int target_slot = std::clamp(static_cast<int>(std::round(rel_x / step)), 0, static_cast<int>(ws_list.size()) - 1);
+                workspaces_.focus_workspace(ws_list[target_slot].idx);
+                ws_bounce_spring_.value = -8.0f;
+                ws_bounce_spring_.set_target(0.0f);
                 wayland_.request_frame_callback();
             }
         }
@@ -296,18 +352,39 @@ void IslandApp::on_click(int button, int state, double x, double y) {
 
     // Right Click handler
     if (button == 273 && state == 1) {
-        if (in_control_center_ && y >= 50.0 && y <= 100.0 && cur_x <= 276.0f) {
-            float chip_w = 122.0f;
-            float col1_x = 16.0f;
-            float col2_x = 146.0f;
-            if (cur_x >= col1_x && cur_x <= col1_x + chip_w) {
-                // Right click on Wi-Fi: open network manager / nmtui
-                int r = system("ghostty -e nmtui & || nm-connection-editor &"); (void)r;
-                return;
-            } else if (cur_x >= col2_x && cur_x <= col2_x + chip_w) {
-                // Right click on Bluetooth: open bluetoothctl / blueman
-                int r = system("ghostty -e bluetoothctl & || blueman-manager &"); (void)r;
-                return;
+        // Right click in closed island notification mode launches/focuses sending app
+        if (current_mode_ == IslandMode::Notification) {
+            activate_app(notifications_.current().app_name);
+            notifications_.dismiss();
+            update_target_dimensions();
+            wayland_.request_frame_callback();
+            return;
+        }
+
+        if (in_control_center_) {
+            // Check if right clicked on notification card in Col 3
+            if (cur_x >= 584.0f && cur_x <= 802.0f) {
+                float card_y = 100.0f;
+                float card_h = 78.0f + notif_expand_spring_.value * 72.0f;
+                if (y >= card_y && y <= card_y + card_h && notifications_.has_active()) {
+                    activate_app(notifications_.current().app_name);
+                    return;
+                }
+            }
+
+            if (y >= 50.0 && y <= 100.0 && cur_x <= 276.0f) {
+                float chip_w = 122.0f;
+                float col1_x = 16.0f;
+                float col2_x = 146.0f;
+                if (cur_x >= col1_x && cur_x <= col1_x + chip_w) {
+                    // Right click on Wi-Fi: open network manager / nmtui
+                    int r = system("ghostty -e nmtui & || nm-connection-editor &"); (void)r;
+                    return;
+                } else if (cur_x >= col2_x && cur_x <= col2_x + chip_w) {
+                    // Right click on Bluetooth: open bluetoothctl / blueman
+                    int r = system("ghostty -e bluetoothctl & || blueman-manager &"); (void)r;
+                    return;
+                }
             }
         }
 
@@ -327,8 +404,8 @@ void IslandApp::on_click(int button, int state, double x, double y) {
     // Button release: finish drag and release tactile press
     if (state == 0) {
         if (active_drag_ == DragTarget::MusicSeek) {
-            float bar_x = in_control_center_ ? 298.0f : 16.0f;
-            float bar_w = in_control_center_ ? 244.0f : (width_spring_.value - 32.0f);
+            float bar_x = in_control_center_ ? 298.0f : 50.0f;
+            float bar_w = in_control_center_ ? 244.0f : (width_spring_.value - 100.0f);
             float left_wing = (ws_bubble_w_ > 0.0f) ? (ws_bubble_w_ + 8.0f) : 0.0f;
             float cur_x = static_cast<float>(x) - left_wing;
             float ratio = std::clamp((cur_x - bar_x) / bar_w, 0.0f, 1.0f);
@@ -345,8 +422,8 @@ void IslandApp::on_click(int button, int state, double x, double y) {
     }
 
     // Button press:
-    // Dismiss notification on click
-    if (notifications_.has_active()) {
+    // Dismiss notification on click in compact mode
+    if (current_mode_ == IslandMode::Notification && notifications_.has_active()) {
         notifications_.dismiss();
         update_target_dimensions();
         wayland_.request_frame_callback();
@@ -530,14 +607,55 @@ void IslandApp::on_click(int button, int state, double x, double y) {
                     return;
                 }
             }
+
+            // Calendar Card (y: 318..520)
+            if (y >= 318.0 && y <= 520.0) {
+                if (y >= 322.0 && y <= 346.0) {
+                    float btn_prev_x = 284.0f + 272.0f - 46.0f;
+                    float btn_next_x = 284.0f + 272.0f - 24.0f;
+                    if (cur_x >= btn_prev_x && cur_x < btn_next_x) {
+                        cal_month_offset_--;
+                        wayland_.request_frame_callback();
+                        return;
+                    } else if (cur_x >= btn_next_x && cur_x <= btn_next_x + 22.0f) {
+                        cal_month_offset_++;
+                        wayland_.request_frame_callback();
+                        return;
+                    } else if (cur_x >= 284.0f + 10.0f && cur_x <= 284.0f + 160.0f) {
+                        cal_month_offset_ = 0;
+                        wayland_.request_frame_callback();
+                        return;
+                    }
+                }
+                return;
+            }
         }
 
         // ===================================
         // COLUMN 3: RIGHT (cur_x >= 568.0f)
         // ===================================
         if (cur_x >= 568.0f) {
-            notifications_.dismiss();
-            wayland_.request_frame_callback();
+            if (notifications_.has_active()) {
+                float card_x = 584.0f;
+                float card_w = 218.0f;
+                float card_y = 100.0f;
+                float card_h = 78.0f + notif_expand_spring_.value * 72.0f;
+                if (cur_x >= card_x && cur_x <= card_x + card_w && y >= card_y && y <= card_y + card_h) {
+                    // Mini "X" close button at top right
+                    if (cur_x >= card_x + card_w - 26.0f && y <= card_y + 26.0f) {
+                        notifications_.dismiss();
+                        notif_expanded_ = false;
+                        notif_expand_spring_.set_target(0.0f);
+                        wayland_.request_frame_callback();
+                        return;
+                    }
+                    // Toggle expansion of body text
+                    notif_expanded_ = !notif_expanded_;
+                    notif_expand_spring_.set_target(notif_expanded_ ? 1.0f : 0.0f);
+                    wayland_.request_frame_callback();
+                    return;
+                }
+            }
             return;
         }
 
@@ -554,20 +672,10 @@ void IslandApp::on_click(int button, int state, double x, double y) {
 
     // 2. Music Expanded Interactions
     if (expanded_) {
-        // Control Center button in top right
-        if (cur_x >= cur_w - 36.0f && y <= 36.0f) {
-            expanded_ = false;
-            in_control_center_ = true;
-            update_control_center_info();
-            update_target_dimensions();
-            wayland_.request_frame_callback();
-            return;
-        }
-
-        // Interactive seek on progress bar
-        if (y >= 60.0 && y <= 86.0) {
-            float bar_x = 16.0f;
-            float bar_w = cur_w - 32.0f;
+        // Interactive seek on progress bar (row_y = 80.0f)
+        if (y >= 68.0 && y <= 92.0) {
+            float bar_x = 50.0f;
+            float bar_w = cur_w - 100.0f;
             float ratio = std::clamp((static_cast<float>(cur_x) - bar_x) / bar_w, 0.0f, 1.0f);
             active_drag_ = DragTarget::MusicSeek;
             mpris_.set_scrubbing(true);
@@ -576,12 +684,12 @@ void IslandApp::on_click(int button, int state, double x, double y) {
             return;
         }
 
-        // Control buttons row: y around 90 - 126
-        if (y > 88.0) {
+        // Control buttons row: y around 96 - 134
+        if (y > 94.0) {
             float mid_x = cur_w / 2.0f;
-            if (cur_x < mid_x - 25.0f) {
+            if (cur_x < mid_x - 22.0f) {
                 mpris_.previous();
-            } else if (cur_x > mid_x + 25.0f) {
+            } else if (cur_x > mid_x + 22.0f) {
                 mpris_.next();
             } else {
                 mpris_.play_pause();
@@ -633,8 +741,8 @@ void IslandApp::on_motion(double x, double y) {
     (void)y;
 
     if (active_drag_ == DragTarget::MusicSeek) {
-        float bar_x = in_control_center_ ? 298.0f : 16.0f;
-        float bar_w = in_control_center_ ? 244.0f : (cur_w - 32.0f);
+        float bar_x = in_control_center_ ? 298.0f : 50.0f;
+        float bar_w = in_control_center_ ? 244.0f : (cur_w - 100.0f);
         float ratio = std::clamp((cur_x - bar_x) / bar_w, 0.0f, 1.0f);
         mpris_.preview_position_ratio(ratio);
         wayland_.request_frame_callback();
@@ -698,17 +806,25 @@ void IslandApp::on_frame() {
         update_target_dimensions();
     }
 
+    int act_slot = workspaces_.active_slot();
+    ws_pill_spring_.set_target(static_cast<float>(act_slot));
+
     bool animating_w = width_spring_.update(dt);
     bool animating_h = height_spring_.update(dt);
     bool animating_vp = volume_press_spring_.update(dt);
     bool animating_vb = volume_bounce_spring_.update(dt);
     bool animating_bp = brightness_press_spring_.update(dt);
     bool animating_bb = brightness_bounce_spring_.update(dt);
+    bool animating_ws_pill = ws_pill_spring_.update(dt);
+    bool animating_ws_bounce = ws_bounce_spring_.update(dt);
+    bool animating_notif_exp = notif_expand_spring_.update(dt);
 
     cc_state_.volume_press = volume_press_spring_.value;
     cc_state_.volume_bounce = volume_bounce_spring_.value;
     cc_state_.brightness_press = brightness_press_spring_.value;
     cc_state_.brightness_bounce = brightness_bounce_spring_.value;
+    cc_state_.cal_month_offset = cal_month_offset_;
+    cc_state_.notif_expand = notif_expand_spring_.value;
 
     int island_w = std::max(20, (int)std::round(width_spring_.value));
     float left_wing = (ws_bubble_w_ > 0.0f) ? (ws_bubble_w_ + 8.0f) : 0.0f;
@@ -734,13 +850,15 @@ void IslandApp::on_frame() {
         renderer_.draw(cr, cur_w, cur_h, current_mode_, mpris_.info(), 
                        osd_.state(), notifications_.current(), cc_state_,
                        osd_.is_mic_active(), anim_time_,
-                       ws_bubble_w_, workspaces_.workspaces(), workspaces_.active_idx());
+                       ws_bubble_w_, workspaces_.workspaces(), workspaces_.active_idx(),
+                       ws_pill_spring_.value, ws_pill_spring_.velocity, ws_bounce_spring_.value);
         wayland_.commit_frame(cur_w, cur_h);
     }
 
     // Continue frame loop if animations or interactions are active
     bool needs_next_frame = animating_w || animating_h || 
                            animating_vp || animating_vb || animating_bp || animating_bb ||
+                           animating_ws_pill || animating_ws_bounce || animating_notif_exp ||
                            osd_.is_active() || notifications_.has_active() ||
                            (mpris_.info().active && !mpris_.info().title.empty() && mpris_.info().playing) ||
                            (active_drag_ != DragTarget::None);
@@ -751,7 +869,7 @@ void IslandApp::on_frame() {
 }
 
 void IslandApp::run() {
-    struct pollfd fds[6];
+    struct pollfd fds[8];
     int n_fds = 2;
     fds[0].fd = wayland_.get_fd();
     fds[0].events = POLLIN;
@@ -778,6 +896,14 @@ void IslandApp::run() {
     if (ipc_.get_fd() >= 0) {
         ipc_idx = n_fds;
         fds[n_fds].fd = ipc_.get_fd();
+        fds[n_fds].events = POLLIN;
+        n_fds++;
+    }
+
+    int ws_idx = -1;
+    if (workspaces_.get_fd() >= 0) {
+        ws_idx = n_fds;
+        fds[n_fds].fd = workspaces_.get_fd();
         fds[n_fds].events = POLLIN;
         n_fds++;
     }
@@ -829,6 +955,12 @@ void IslandApp::run() {
             ipc_.process_pending([this](const std::string& cmd) -> std::string {
                 return handle_ipc_command(cmd);
             });
+        }
+
+        if (ws_idx >= 0 && (fds[ws_idx].revents & POLLIN)) {
+            workspaces_.handle_event();
+            update_target_dimensions();
+            wayland_.request_frame_callback();
         }
 
         // Handle Mode expiry

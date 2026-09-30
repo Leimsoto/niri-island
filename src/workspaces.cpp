@@ -17,6 +17,10 @@ WorkspaceManager::~WorkspaceManager() {
         close(socket_fd_);
         socket_fd_ = -1;
     }
+    if (event_fd_ >= 0) {
+        close(event_fd_);
+        event_fd_ = -1;
+    }
 }
 
 bool WorkspaceManager::init() {
@@ -32,16 +36,50 @@ bool WorkspaceManager::init() {
         }
     }
 
+    event_fd_ = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (event_fd_ >= 0) {
+        struct sockaddr_un addr{};
+        addr.sun_family = AF_UNIX;
+        strncpy(addr.sun_path, socket_path_.c_str(), sizeof(addr.sun_path) - 1);
+        if (connect(event_fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
+            const char* req = "\"EventStream\"\n";
+            if (write(event_fd_, req, strlen(req)) > 0) {
+                int flags = fcntl(event_fd_, F_GETFL, 0);
+                fcntl(event_fd_, F_SETFL, flags | O_NONBLOCK);
+            }
+        } else {
+            close(event_fd_);
+            event_fd_ = -1;
+        }
+    }
+
     query_workspaces();
     return !workspaces_.empty();
+}
+
+void WorkspaceManager::handle_event() {
+    if (event_fd_ < 0) return;
+    char buf[2048];
+    while (read(event_fd_, buf, sizeof(buf)) > 0) {}
+    last_poll_time_ = std::chrono::steady_clock::time_point{}; // force query
+    query_workspaces();
 }
 
 float WorkspaceManager::bubble_width() const {
     size_t count = workspaces_.empty() ? 4 : workspaces_.size();
     if (count < 1) count = 1;
-    // 10px pad left/right + (count - 1) * 14px + active pill 20px
-    float w = 20.0f + static_cast<float>(count - 1) * 14.0f + 20.0f;
-    return std::max(60.0f, w);
+    // 14px padding each side + 20px spacing between slot centers
+    float w = 28.0f + static_cast<float>(count - 1) * 20.0f;
+    return std::max(76.0f, w);
+}
+
+int WorkspaceManager::active_slot() const {
+    for (size_t i = 0; i < workspaces_.size(); ++i) {
+        if (workspaces_[i].idx == active_idx_ || workspaces_[i].is_active || workspaces_[i].is_focused) {
+            return static_cast<int>(i);
+        }
+    }
+    return 0;
 }
 
 void WorkspaceManager::query_workspaces() {

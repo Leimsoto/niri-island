@@ -26,11 +26,15 @@ public:
 
     const std::vector<WorkspaceInfo>& workspaces() const { return workspaces_; }
     uint32_t active_idx() const { return active_idx_; }
+    int active_slot() const;
     float bubble_width() const;
+    int get_fd() const { return event_fd_; }
+    void handle_event();
 
 private:
     std::string socket_path_;
     int socket_fd_ = -1;
+    int event_fd_ = -1;
     std::vector<WorkspaceInfo> workspaces_;
     uint32_t active_idx_ = 1;
     std::chrono::steady_clock::time_point last_poll_time_;

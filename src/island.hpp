@@ -47,6 +47,17 @@ private:
     Spring brightness_press_spring_{0.0f, 320.0f, 26.0f};
     Spring brightness_bounce_spring_{0.0f, 280.0f, 20.0f};
 
+    // Workspace Elastic Springs
+    Spring ws_pill_spring_{0.0f, 300.0f, 22.0f};
+    Spring ws_bounce_spring_{0.0f, 260.0f, 18.0f};
+
+    // Notification Elastic Expansion Spring
+    Spring notif_expand_spring_{0.0f, 320.0f, 26.0f};
+    bool notif_expanded_ = false;
+
+    // Interactive Calendar Offset
+    int cal_month_offset_ = 0;
+
     float ws_bubble_w_ = 0.0f;
 
     IslandMode current_mode_ = IslandMode::Idle;
@@ -61,6 +72,7 @@ private:
     std::chrono::steady_clock::time_point last_cc_poll_time_;
     float anim_time_ = 0.0f;
 
+    void activate_app(const std::string& app_name);
     void update_target_dimensions();
     void update_control_center_info();
     void on_frame();

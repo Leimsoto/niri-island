@@ -192,7 +192,8 @@ void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode,
                     const MediaInfo& media, const OsdState& osd,
                     const NotificationItem& notif, const ControlCenterState& cc_state,
                     bool mic_active, float anim_time,
-                    float ws_bubble_w, const std::vector<WorkspaceInfo>& workspaces, uint32_t active_ws_idx) {
+                    float ws_bubble_w, const std::vector<WorkspaceInfo>& workspaces, uint32_t active_ws_idx,
+                    float ws_pill_pos, float ws_pill_vel, float ws_bounce) {
     if (media.active && !media.title.empty()) {
         update_art(media.art_url);
     } else {
@@ -210,7 +211,8 @@ void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode,
 
     if (effective_ws_w > 0.0f) {
         float ws_x = wing - 8.0f - effective_ws_w;
-        draw_workspace_bubble(cr, ws_x, 0.0f, effective_ws_w, 32.0f, workspaces, active_ws_idx);
+        draw_workspace_bubble(cr, ws_x, 0.0f, effective_ws_w, 32.0f, workspaces, active_ws_idx,
+                              ws_pill_pos, ws_pill_vel, ws_bounce);
     }
 
     double radius = std::min((double)height / 2.0, 24.0);
@@ -248,7 +250,7 @@ void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode,
             draw_hud_osd(cr, main_w, height, osd);
             break;
         case IslandMode::Notification:
-            draw_notification(cr, main_w, height, notif);
+            draw_notification(cr, main_w, height, notif, media, anim_time);
             break;
     }
 
@@ -256,45 +258,50 @@ void Renderer::draw(cairo_t* cr, float width, float height, IslandMode mode,
 }
 
 void Renderer::draw_workspace_bubble(cairo_t* cr, float x, float y, float w, float h,
-                                     const std::vector<WorkspaceInfo>& workspaces, uint32_t active_idx) {
+                                     const std::vector<WorkspaceInfo>& workspaces, uint32_t active_idx,
+                                     float pill_pos, float pill_vel, float pill_bounce) {
+    (void)active_idx;
     double radius = std::min((double)h / 2.0, 16.0);
     draw_rounded_rect(cr, x, y, w, h, radius);
     cairo_set_source_rgba(cr, 0.078, 0.071, 0.094, 0.98); // M3 Dark Surface #141218
-    cairo_fill(cr);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.25);
+    cairo_set_line_width(cr, 0.8);
+    cairo_stroke(cr);
 
-    if (workspaces.empty()) return;
+    size_t count = workspaces.empty() ? 4 : workspaces.size();
+    if (count < 1) return;
 
-    size_t count = workspaces.size();
-    float dot_size = 6.0f;
-    float active_pill_w = 18.0f;
-    float gap = 6.0f;
-    float total_content_w = 0.0f;
-
-    for (const auto& ws : workspaces) {
-        bool is_act = (ws.idx == active_idx || ws.is_active || ws.is_focused);
-        total_content_w += is_act ? active_pill_w : dot_size;
-    }
-    total_content_w += (count - 1) * gap;
-
-    float cur_x = x + (w - total_content_w) / 2.0f;
+    float pad = 14.0f;
+    float step = (w - 2.0f * pad) / (count > 1 ? static_cast<float>(count - 1) : 1.0f);
     float center_y = y + h / 2.0f;
 
-    for (const auto& ws : workspaces) {
-        bool is_act = (ws.idx == active_idx || ws.is_active || ws.is_focused);
-        if (is_act) {
-            // Active elongated capsule in M3 Primary Lavender
-            draw_rounded_rect(cr, cur_x, center_y - 3.0f, active_pill_w, 6.0f, 3.0);
-            cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.95);
+    // 1. Draw Inactive Dots (8px diameter) with smooth proximity fade
+    for (size_t i = 0; i < count; ++i) {
+        float slot_cx = x + pad + static_cast<float>(i) * step;
+        float dist = std::abs(pill_pos - static_cast<float>(i));
+        float alpha_factor = std::clamp((dist - 0.25f) / 0.35f, 0.0f, 1.0f);
+        if (alpha_factor > 0.02f) {
+            cairo_arc(cr, slot_cx, center_y, 4.0, 0, 2 * M_PI); // 8px diameter
+            cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.60 * alpha_factor);
             cairo_fill(cr);
-            cur_x += active_pill_w + gap;
-        } else {
-            // Inactive subtle dot in M3 Muted Gray
-            cairo_arc(cr, cur_x + dot_size / 2.0f, center_y, dot_size / 2.0f, 0, 2 * M_PI);
-            cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.65);
-            cairo_fill(cr);
-            cur_x += dot_size + gap;
         }
     }
+
+    // 2. Draw Elastic Active Pill (Elevator gliding & dynamic stretch + bounce)
+    float clamped_pos = std::clamp(pill_pos, 0.0f, static_cast<float>(count - 1));
+    float pill_cx = x + pad + clamped_pos * step;
+    float stretch = std::clamp(std::abs(pill_vel) * 0.035f, 0.0f, 12.0f);
+    float cur_pill_w = 26.0f + stretch + pill_bounce * 0.4f;
+    float cur_pill_h = std::clamp(9.0f - stretch * 0.15f - pill_bounce * 0.2f, 6.0f, 11.0f);
+
+    draw_rounded_rect(cr, pill_cx - cur_pill_w / 2.0f, center_y - cur_pill_h / 2.0f,
+                      cur_pill_w, cur_pill_h, cur_pill_h / 2.0f);
+    cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.98); // M3 Primary Lavender
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.40);
+    cairo_set_line_width(cr, 0.6);
+    cairo_stroke(cr);
 }
 
 void Renderer::draw_privacy_dot(cairo_t*, float, float) {
@@ -505,15 +512,15 @@ void Renderer::draw_music_compact(cairo_t* cr, float w, float h, const MediaInfo
     }
 }
 
-void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInfo& media, float) {
+void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInfo& media, float anim_time) {
     (void)h;
     float art_x = 16.0f;
     float art_y = 14.0f;
-    float art_size = 48.0f;
+    float art_size = 52.0f;
 
     // 1. Album Art box (Material rounded square with subtle border & glass effect)
     cairo_save(cr);
-    draw_rounded_rect(cr, art_x, art_y, art_size, art_size, 10.0);
+    draw_rounded_rect(cr, art_x, art_y, art_size, art_size, 12.0);
     cairo_clip(cr);
 
     if (art_surface_) {
@@ -528,7 +535,7 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
         cairo_pattern_destroy(pat);
 
         PangoLayout* art_icon = pango_cairo_create_layout(cr);
-        PangoFontDescription* art_font = pango_font_description_from_string("JetBrainsMono Nerd Font 16");
+        PangoFontDescription* art_font = pango_font_description_from_string("JetBrainsMono Nerd Font 18");
         pango_layout_set_font_description(art_icon, art_font);
         pango_layout_set_text(art_icon, "󰎆", -1);
 
@@ -543,75 +550,33 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
     }
     cairo_restore(cr);
 
-    draw_rounded_rect(cr, art_x, art_y, art_size, art_size, 10.0);
+    draw_rounded_rect(cr, art_x, art_y, art_size, art_size, 12.0);
     cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.35);
     cairo_set_line_width(cr, 1.0);
     cairo_stroke(cr);
 
-    // 2. Impasto IslandSummary Top Right Header: Clock, Date & CC Button
-    float cc_btn_x = w - 34.0f;
-    float cc_btn_y = 14.0f;
-    float cc_btn_size = 22.0f;
-    draw_rounded_rect(cr, cc_btn_x, cc_btn_y, cc_btn_size, cc_btn_size, 11.0);
-    cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.90); // Surface Container High
-    cairo_fill_preserve(cr);
-    cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.35);
-    cairo_set_line_width(cr, 0.8);
-    cairo_stroke(cr);
-
-    PangoLayout* cc_icon = pango_cairo_create_layout(cr);
-    PangoFontDescription* cc_font = pango_font_description_from_string("JetBrainsMono Nerd Font 10");
-    pango_layout_set_font_description(cc_icon, cc_font);
-    pango_layout_set_text(cc_icon, "󰕮", -1);
-    PangoRectangle cc_ink, cc_log;
-    pango_layout_get_pixel_extents(cc_icon, &cc_ink, &cc_log);
-    cairo_move_to(cr, cc_btn_x + (cc_btn_size - cc_ink.width) / 2.0 - cc_ink.x,
-                      cc_btn_y + (cc_btn_size - cc_ink.height) / 2.0 - cc_ink.y);
-    cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.90);
-    pango_cairo_show_layout(cr, cc_icon);
-    pango_font_description_free(cc_font);
-    g_object_unref(cc_icon);
-
-    // Clock & Date Stack (Impasto style)
-    time_t now = time(nullptr);
-    struct tm* tm_info = localtime(&now);
-    char time_str[16];
-    char date_str[16];
-    strftime(time_str, sizeof(time_str), "%H:%M", tm_info);
-    strftime(date_str, sizeof(date_str), "%a %d", tm_info);
-
-    PangoLayout* clk_layout = pango_cairo_create_layout(cr);
-    PangoFontDescription* clk_font = pango_font_description_from_string("JetBrainsMono Nerd Font Bold 10");
-    pango_layout_set_font_description(clk_layout, clk_font);
-    pango_layout_set_text(clk_layout, time_str, -1);
-    PangoRectangle clk_ink, clk_log;
-    pango_layout_get_pixel_extents(clk_layout, &clk_ink, &clk_log);
-    float clk_x = cc_btn_x - clk_ink.width - 10.0f;
-    cairo_move_to(cr, clk_x, 14.0f - clk_ink.y);
-    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.95);
-    pango_cairo_show_layout(cr, clk_layout);
-    pango_font_description_free(clk_font);
-    g_object_unref(clk_layout);
-
-    PangoLayout* dt_layout = pango_cairo_create_layout(cr);
-    PangoFontDescription* dt_font = pango_font_description_from_string("Sans 8.0");
-    pango_layout_set_font_description(dt_layout, dt_font);
-    pango_layout_set_text(dt_layout, date_str, -1);
-    PangoRectangle dt_ink, dt_log;
-    pango_layout_get_pixel_extents(dt_layout, &dt_ink, &dt_log);
-    cairo_move_to(cr, cc_btn_x - dt_ink.width - 10.0f, 26.0f - dt_ink.y);
-    cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.85);
-    pango_cairo_show_layout(cr, dt_layout);
-    pango_font_description_free(dt_font);
-    g_object_unref(dt_layout);
+    // 2. Animated Soundwave on top right (Replaces unwanted CC button & clock)
+    float wave_end_x = w - 18.0f;
+    float wave_y = 35.0f;
+    for (int i = 0; i < 5; ++i) {
+        float bar_h = 4.0f;
+        if (media.playing) {
+            float phase = anim_time * 7.0f + i * 1.2f;
+            bar_h = 4.0f + 12.0f * (0.5f + 0.5f * std::sin(phase));
+        }
+        float bx = wave_end_x - (4 - i) * 6.0f;
+        draw_rounded_rect(cr, bx, wave_y - bar_h / 2.0f, 3.0f, bar_h, 1.5);
+        cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.85);
+        cairo_fill(cr);
+    }
 
     // 3. Song Title & Artist in Material 3
-    float info_x = art_x + art_size + 12.0f;
-    float info_w = clk_x - info_x - 8.0f;
+    float info_x = art_x + art_size + 14.0f;
+    float info_w = wave_end_x - 32.0f - info_x - 10.0f;
     if (info_w < 50.0f) info_w = 50.0f;
 
     PangoLayout* title_layout = pango_cairo_create_layout(cr);
-    PangoFontDescription* title_font = pango_font_description_from_string("Sans Bold 10.5");
+    PangoFontDescription* title_font = pango_font_description_from_string("Sans Bold 11.5");
     pango_layout_set_font_description(title_layout, title_font);
     pango_layout_set_text(title_layout, media.title.empty() ? "Sin reproducción" : media.title.c_str(), -1);
     pango_layout_set_ellipsize(title_layout, PANGO_ELLIPSIZE_END);
@@ -619,10 +584,10 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
 
     PangoRectangle title_ink, title_log;
     pango_layout_get_pixel_extents(title_layout, &title_ink, &title_log);
-    double title_y = art_y + 6.0 - title_ink.y;
+    double title_y = art_y + 8.0 - title_ink.y;
 
     cairo_move_to(cr, info_x, title_y);
-    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 1.0); // M3 On-Surface
+    cairo_set_source_rgba(cr, 0.95, 0.95, 0.98, 1.0); // Clean White
     pango_cairo_show_layout(cr, title_layout);
     pango_font_description_free(title_font);
     g_object_unref(title_layout);
@@ -636,43 +601,16 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
 
     PangoRectangle artist_ink, artist_log;
     pango_layout_get_pixel_extents(artist_layout, &artist_ink, &artist_log);
-    double artist_y = art_y + 25.0 - artist_ink.y;
+    double artist_y = art_y + 28.0 - artist_ink.y;
 
     cairo_move_to(cr, info_x, artist_y);
-    cairo_set_source_rgba(cr, 0.792, 0.769, 0.816, 0.85); // M3 Muted
+    cairo_set_source_rgba(cr, 0.75, 0.72, 0.80, 0.85); // Muted lavender
     pango_cairo_show_layout(cr, artist_layout);
     pango_font_description_free(artist_font);
     g_object_unref(artist_layout);
 
-    // 4. Impasto / M3 Capsule Progress Slider (LevelRow style)
-    float bar_x = 16.0f;
-    float bar_y = 68.0f;
-    float bar_w = w - 32.0f;
-    float bar_h = 7.0f;
-
-    // Track
-    draw_rounded_rect(cr, bar_x, bar_y, bar_w, bar_h, 3.5);
-    cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.95); // Surface Container High
-    cairo_fill(cr);
-
-    float fill_ratio = 0.0f;
-    if (media.length_us > 0) {
-        fill_ratio = std::clamp(static_cast<float>(media.position_us) / static_cast<float>(media.length_us), 0.0f, 1.0f);
-    }
-
-    if (fill_ratio > 0.005f) {
-        float active_w = std::max(7.0f, bar_w * fill_ratio);
-        draw_rounded_rect(cr, bar_x, bar_y, active_w, bar_h, 3.5);
-        cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.98); // M3 Lavender Fill
-        cairo_fill(cr);
-
-        // Tactile Thumb handle
-        cairo_arc(cr, bar_x + active_w - 3.5f, bar_y + bar_h / 2.0f, 4.0, 0, 2 * M_PI);
-        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
-        cairo_fill(cr);
-    }
-
-    // 5. Time Timestamps (Elapsed & Total)
+    // 4. Horizontal Progress Row: [ Elapsed ] [========O========] [ Total ]
+    float row_y = 80.0f;
     int64_t cur_sec = media.position_us / 1000000;
     int64_t tot_sec = media.length_us / 1000000;
 
@@ -682,14 +620,16 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
     tot_oss << std::setfill('0') << std::setw(2) << (tot_sec / 60) << ":"
             << std::setfill('0') << std::setw(2) << (tot_sec % 60);
 
-    PangoFontDescription* time_font = pango_font_description_from_string("JetBrainsMono Nerd Font 8.0");
+    PangoFontDescription* time_font = pango_font_description_from_string("JetBrainsMono Nerd Font 8.5");
 
     // Elapsed
     PangoLayout* cur_time_layout = pango_cairo_create_layout(cr);
     pango_layout_set_font_description(cur_time_layout, time_font);
     pango_layout_set_text(cur_time_layout, cur_oss.str().c_str(), -1);
-    cairo_move_to(cr, bar_x, bar_y + 9.0);
-    cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.90);
+    PangoRectangle cur_t_ink, cur_t_log;
+    pango_layout_get_pixel_extents(cur_time_layout, &cur_t_ink, &cur_t_log);
+    cairo_move_to(cr, 16.0, row_y - cur_t_ink.height / 2.0 - cur_t_ink.y);
+    cairo_set_source_rgba(cr, 0.65, 0.62, 0.72, 0.90);
     pango_cairo_show_layout(cr, cur_time_layout);
     g_object_unref(cur_time_layout);
 
@@ -697,23 +637,51 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
     PangoLayout* tot_time_layout = pango_cairo_create_layout(cr);
     pango_layout_set_font_description(tot_time_layout, time_font);
     pango_layout_set_text(tot_time_layout, tot_oss.str().c_str(), -1);
-    PangoRectangle tot_ink, tot_log;
-    pango_layout_get_pixel_extents(tot_time_layout, &tot_ink, &tot_log);
-    cairo_move_to(cr, bar_x + bar_w - tot_ink.width - tot_ink.x, bar_y + 9.0);
-    cairo_set_source_rgba(cr, 0.584, 0.557, 0.612, 0.90);
+    PangoRectangle tot_t_ink, tot_t_log;
+    pango_layout_get_pixel_extents(tot_time_layout, &tot_t_ink, &tot_t_log);
+    cairo_move_to(cr, w - 16.0 - tot_t_ink.width - tot_t_ink.x, row_y - tot_t_ink.height / 2.0 - tot_t_ink.y);
+    cairo_set_source_rgba(cr, 0.65, 0.62, 0.72, 0.90);
     pango_cairo_show_layout(cr, tot_time_layout);
     g_object_unref(tot_time_layout);
     pango_font_description_free(time_font);
 
-    // 6. Media Control Buttons (Material 3 Circular Tonal Chips)
+    // Slider between timestamps
+    float bar_x = 16.0f + cur_t_ink.width + 10.0f;
+    float bar_w = (w - 16.0f - tot_t_ink.width - 10.0f) - bar_x;
+    float bar_h = 5.0f;
+    float bar_y = row_y - bar_h / 2.0f;
+
+    draw_rounded_rect(cr, bar_x, bar_y, bar_w, bar_h, 2.5);
+    cairo_set_source_rgba(cr, 0.20, 0.18, 0.25, 0.85); // Track
+    cairo_fill(cr);
+
+    float fill_ratio = 0.0f;
+    if (media.length_us > 0) {
+        fill_ratio = std::clamp(static_cast<float>(media.position_us) / static_cast<float>(media.length_us), 0.0f, 1.0f);
+    }
+
+    if (fill_ratio > 0.005f) {
+        float active_w = std::max(5.0f, bar_w * fill_ratio);
+        draw_rounded_rect(cr, bar_x, bar_y, active_w, bar_h, 2.5);
+        cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.98); // M3 Lavender Fill
+        cairo_fill(cr);
+
+        // Tactile Thumb handle
+        cairo_arc(cr, bar_x + active_w, row_y, 4.0, 0, 2 * M_PI);
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
+        cairo_fill(cr);
+    }
+
+    // 5. Media Control Buttons Centered at Bottom
     PangoLayout* btn_layout = pango_cairo_create_layout(cr);
     PangoFontDescription* btn_font = pango_font_description_from_string("JetBrainsMono Nerd Font 13");
     pango_layout_set_font_description(btn_layout, btn_font);
 
-    double btn_center_y = 107.0;
+    double btn_center_y = 114.0;
+    float mid_x = w / 2.0f;
 
     // Previous Button
-    float prev_x = w / 2.0f - 50.0f;
+    float prev_x = mid_x - 46.0f;
     draw_rounded_rect(cr, prev_x - 14.0f, btn_center_y - 14.0f, 28.0f, 28.0f, 14.0);
     cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.85);
     cairo_fill(cr);
@@ -726,8 +694,8 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
     cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.95);
     pango_cairo_show_layout(cr, btn_layout);
 
-    // Play/Pause Button (Prominent M3 Primary Container #4f378b)
-    float play_x = w / 2.0f;
+    // Play/Pause Button
+    float play_x = mid_x;
     draw_rounded_rect(cr, play_x - 17.0f, btn_center_y - 17.0f, 34.0f, 34.0f, 17.0);
     cairo_set_source_rgba(cr, 0.310, 0.216, 0.545, 0.95);
     cairo_fill_preserve(cr);
@@ -744,7 +712,7 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
     pango_cairo_show_layout(cr, btn_layout);
 
     // Next Button
-    float next_x = w / 2.0f + 50.0f;
+    float next_x = mid_x + 46.0f;
     draw_rounded_rect(cr, next_x - 14.0f, btn_center_y - 14.0f, 28.0f, 28.0f, 14.0);
     cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.85);
     cairo_fill(cr);
@@ -761,7 +729,7 @@ void Renderer::draw_music_expanded(cairo_t* cr, float w, float h, const MediaInf
     g_object_unref(btn_layout);
 }
 
-void Renderer::draw_calendar(cairo_t* cr, float x, float y, float w, float h, struct tm* tm_info) {
+void Renderer::draw_calendar(cairo_t* cr, float x, float y, float w, float h, struct tm* tm_info, int month_offset) {
     draw_rounded_rect(cr, x, y, w, h, 14.0);
     cairo_set_source_rgba(cr, 0.086, 0.082, 0.106, 0.96); // #16151b
     cairo_fill_preserve(cr);
@@ -773,16 +741,13 @@ void Renderer::draw_calendar(cairo_t* cr, float x, float y, float w, float h, st
         "January", "February", "March", "April", "May", "June",
         "July", "August", "September", "October", "November", "December"
     };
-    static const char* days_en[] = {
-        "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
-    };
 
-    int cur_year = tm_info->tm_year + 1900;
-    int cur_mon = tm_info->tm_mon;
-    int cur_day = tm_info->tm_mday;
-    int cur_wday = tm_info->tm_wday;
+    int raw_mon = tm_info->tm_mon + month_offset;
+    int cur_year = tm_info->tm_year + 1900 + (raw_mon >= 0 ? raw_mon / 12 : (raw_mon - 11) / 12);
+    int cur_mon = (raw_mon % 12 + 12) % 12;
+    int today_mday = (month_offset == 0) ? tm_info->tm_mday : -1;
 
-    // Header
+    // Header Month & Year
     std::string header_str = std::string(months_en[cur_mon]) + " " + std::to_string(cur_year);
     PangoLayout* hl = pango_cairo_create_layout(cr);
     PangoFontDescription* hf = pango_font_description_from_string("Sans Bold 10.5");
@@ -794,27 +759,37 @@ void Renderer::draw_calendar(cairo_t* cr, float x, float y, float w, float h, st
     pango_font_description_free(hf);
     g_object_unref(hl);
 
-    // Day of week + Arrows
-    std::string day_str = days_en[cur_wday];
-    PangoLayout* dl = pango_cairo_create_layout(cr);
-    PangoFontDescription* df = pango_font_description_from_string("Sans SemiBold 9.0");
-    pango_layout_set_font_description(dl, df);
-    pango_layout_set_text(dl, day_str.c_str(), -1);
-    PangoRectangle d_ink, d_log;
-    pango_layout_get_pixel_extents(dl, &d_ink, &d_log);
-    cairo_move_to(cr, x + w - 48.0 - d_ink.width, y + 11.0);
-    cairo_set_source_rgba(cr, 0.38, 0.54, 0.85, 0.95);
-    pango_cairo_show_layout(cr, dl);
-    pango_font_description_free(df);
-    g_object_unref(dl);
-
+    // Navigation Arrow Buttons: Left (󰅁) and Right (󰅂)
     PangoLayout* arr = pango_cairo_create_layout(cr);
-    PangoFontDescription* af = pango_font_description_from_string("JetBrainsMono Nerd Font 9.5");
+    PangoFontDescription* af = pango_font_description_from_string("JetBrainsMono Nerd Font 10.0");
     pango_layout_set_font_description(arr, af);
-    pango_layout_set_text(arr, "󰅁  󰅂", -1);
-    cairo_move_to(cr, x + w - 40.0, y + 11.0);
-    cairo_set_source_rgba(cr, 0.65, 0.65, 0.70, 0.85);
+
+    // Left Arrow Box
+    float btn_prev_x = x + w - 46.0f;
+    float btn_y = y + 7.0f;
+    draw_rounded_rect(cr, btn_prev_x, btn_y, 18.0f, 18.0f, 6.0);
+    cairo_set_source_rgba(cr, 0.16, 0.15, 0.20, 0.85);
+    cairo_fill(cr);
+    pango_layout_set_text(arr, "󰅁", -1);
+    PangoRectangle a_ink, a_log;
+    pango_layout_get_pixel_extents(arr, &a_ink, &a_log);
+    cairo_move_to(cr, btn_prev_x + (18.0 - a_ink.width) / 2.0 - a_ink.x,
+                      btn_y + (18.0 - a_ink.height) / 2.0 - a_ink.y);
+    cairo_set_source_rgba(cr, 0.85, 0.83, 0.90, 0.95);
     pango_cairo_show_layout(cr, arr);
+
+    // Right Arrow Box
+    float btn_next_x = x + w - 24.0f;
+    draw_rounded_rect(cr, btn_next_x, btn_y, 18.0f, 18.0f, 6.0);
+    cairo_set_source_rgba(cr, 0.16, 0.15, 0.20, 0.85);
+    cairo_fill(cr);
+    pango_layout_set_text(arr, "󰅂", -1);
+    pango_layout_get_pixel_extents(arr, &a_ink, &a_log);
+    cairo_move_to(cr, btn_next_x + (18.0 - a_ink.width) / 2.0 - a_ink.x,
+                      btn_y + (18.0 - a_ink.height) / 2.0 - a_ink.y);
+    cairo_set_source_rgba(cr, 0.85, 0.83, 0.90, 0.95);
+    pango_cairo_show_layout(cr, arr);
+
     pango_font_description_free(af);
     g_object_unref(arr);
 
@@ -845,8 +820,11 @@ void Renderer::draw_calendar(cairo_t* cr, float x, float y, float w, float h, st
         days_in_month[1] = 29;
     }
 
-    struct tm first_tm = *tm_info;
+    struct tm first_tm{};
+    first_tm.tm_year = cur_year - 1900;
+    first_tm.tm_mon = cur_mon;
     first_tm.tm_mday = 1;
+    first_tm.tm_hour = 12;
     mktime(&first_tm);
     int start_col = (first_tm.tm_wday + 6) % 7;
 
@@ -877,7 +855,7 @@ void Renderer::draw_calendar(cairo_t* cr, float x, float y, float w, float h, st
             } else if (cur_day_num <= days_in_month[cur_mon]) {
                 cell_val = cur_day_num;
                 is_current_month = true;
-                if (cell_val == cur_day) is_today = true;
+                if (cell_val == today_mday) is_today = true;
                 cur_day_num++;
             } else {
                 cell_val = next_day_num++;
@@ -887,11 +865,7 @@ void Renderer::draw_calendar(cairo_t* cr, float x, float y, float w, float h, st
 
             if (is_today) {
                 draw_rounded_rect(cr, cell_cx - 10.5, cell_cy - 10.5, 21.0, 21.0, 10.5);
-                cairo_set_source_rgba(cr, 0.23, 0.35, 0.60, 0.95);
-                cairo_fill(cr);
-
-                cairo_arc(cr, cell_cx, cell_cy + 13.0, 1.2, 0, 2 * M_PI);
-                cairo_set_source_rgba(cr, 0.45, 0.65, 0.95, 0.95);
+                cairo_set_source_rgba(cr, 0.310, 0.216, 0.545, 0.95); // M3 Primary
                 cairo_fill(cr);
 
                 pango_layout_set_font_description(nl, nf_bold);
@@ -931,8 +905,8 @@ void Renderer::draw_weather_card(cairo_t* cr, float x, float y, float w, float h
     cairo_stroke(cr);
 
     std::string temp_str = "21°";
-    std::string desc_str = "Overcast  •  feels 24°";
-    std::string loc_str = "📍 Kyoto, Japan  •  7 min ago";
+    std::string desc_str = "Soleado  •  sensación 24°";
+    std::string loc_str = "󰍎 Kyoto, Japan"; // Strictly Nerd Font icon, NO emoji!
     std::string icon_str = "󰖐";
     std::string hi_lo_str = "29° / 21°";
 
@@ -970,7 +944,7 @@ void Renderer::draw_weather_card(cairo_t* cr, float x, float y, float w, float h
                 while (loc_pos < content.size() && (content[loc_pos] == ' ' || content[loc_pos] == '\"')) loc_pos++;
                 size_t loc_end = content.find("\"", loc_pos);
                 if (loc_end != std::string::npos) {
-                    loc_str = "📍 " + content.substr(loc_pos, loc_end - loc_pos);
+                    loc_str = "󰍎 " + content.substr(loc_pos, loc_end - loc_pos);
                 }
             }
             size_t c_pos = content.find("\"weather_code\":");
@@ -986,13 +960,24 @@ void Renderer::draw_weather_card(cairo_t* cr, float x, float y, float w, float h
         }
     }
 
-    // Top Weather Icon
+    // Top Weather Icon Badge (Squircle)
+    float badge_sz = 40.0f;
+    draw_rounded_rect(cr, x + 14.0f, y + 12.0f, badge_sz, badge_sz, 10.0);
+    cairo_set_source_rgba(cr, 0.14, 0.13, 0.18, 0.95);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0.35, 0.32, 0.45, 0.30);
+    cairo_set_line_width(cr, 0.8);
+    cairo_stroke(cr);
+
     PangoLayout* il = pango_cairo_create_layout(cr);
-    PangoFontDescription* ifont = pango_font_description_from_string("JetBrainsMono Nerd Font 24");
+    PangoFontDescription* ifont = pango_font_description_from_string("JetBrainsMono Nerd Font 18");
     pango_layout_set_font_description(il, ifont);
     pango_layout_set_text(il, icon_str.c_str(), -1);
-    cairo_move_to(cr, x + 16.0, y + 10.0);
-    cairo_set_source_rgba(cr, 0.38, 0.54, 0.85, 0.95);
+    PangoRectangle i_ink, i_log;
+    pango_layout_get_pixel_extents(il, &i_ink, &i_log);
+    cairo_move_to(cr, x + 14.0f + (badge_sz - i_ink.width) / 2.0 - i_ink.x,
+                      y + 12.0f + (badge_sz - i_ink.height) / 2.0 - i_ink.y);
+    cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.95);
     pango_cairo_show_layout(cr, il);
     pango_font_description_free(ifont);
     g_object_unref(il);
@@ -1002,52 +987,68 @@ void Renderer::draw_weather_card(cairo_t* cr, float x, float y, float w, float h
     PangoFontDescription* tf = pango_font_description_from_string("Sans Bold 20");
     pango_layout_set_font_description(tl, tf);
     pango_layout_set_text(tl, temp_str.c_str(), -1);
-    cairo_move_to(cr, x + 54.0, y + 8.0);
+    PangoRectangle t_ink, t_log;
+    pango_layout_get_pixel_extents(tl, &t_ink, &t_log);
+    cairo_move_to(cr, x + 62.0, y + 10.0 - t_ink.y);
     cairo_set_source_rgba(cr, 0.95, 0.95, 0.98, 1.0);
     pango_cairo_show_layout(cr, tl);
     pango_font_description_free(tf);
     g_object_unref(tl);
 
-    // Hi / Lo
+    // Hi / Lo (top right)
     PangoLayout* hl = pango_cairo_create_layout(cr);
     PangoFontDescription* hf = pango_font_description_from_string("Sans 8.5");
     pango_layout_set_font_description(hl, hf);
     pango_layout_set_text(hl, hi_lo_str.c_str(), -1);
     PangoRectangle h_ink, h_log;
     pango_layout_get_pixel_extents(hl, &h_ink, &h_log);
-    cairo_move_to(cr, x + w - 16.0 - h_ink.width, y + 12.0);
-    cairo_set_source_rgba(cr, 0.55, 0.53, 0.60, 0.80);
+    cairo_move_to(cr, x + w - 14.0 - h_ink.width, y + 12.0);
+    cairo_set_source_rgba(cr, 0.55, 0.53, 0.60, 0.85);
     pango_cairo_show_layout(cr, hl);
     pango_font_description_free(hf);
     g_object_unref(hl);
 
-    // Condition line
+    // Condition line: positioned safely at y + 33.0, NO overlap!
     PangoLayout* cl = pango_cairo_create_layout(cr);
     PangoFontDescription* cf = pango_font_description_from_string("Sans 8.5");
     pango_layout_set_font_description(cl, cf);
     pango_layout_set_text(cl, desc_str.c_str(), -1);
-    cairo_move_to(cr, x + 54.0, y + 32.0);
-    cairo_set_source_rgba(cr, 0.65, 0.63, 0.70, 0.90);
+    pango_layout_set_ellipsize(cl, PANGO_ELLIPSIZE_END);
+    pango_layout_set_width(cl, (w - 76.0f) * PANGO_SCALE);
+    cairo_move_to(cr, x + 62.0, y + 33.0);
+    cairo_set_source_rgba(cr, 0.72, 0.70, 0.78, 0.90);
     pango_cairo_show_layout(cr, cl);
     pango_font_description_free(cf);
     g_object_unref(cl);
 
-    // Location line
+    // Location line: positioned at y + 47.0 with clean Nerd Font icon
     PangoLayout* ll = pango_cairo_create_layout(cr);
     PangoFontDescription* lf = pango_font_description_from_string("Sans 8.0");
     pango_layout_set_font_description(ll, lf);
     pango_layout_set_text(ll, loc_str.c_str(), -1);
-    cairo_move_to(cr, x + 54.0, y + 46.0);
-    cairo_set_source_rgba(cr, 0.50, 0.48, 0.56, 0.85);
+    pango_layout_set_ellipsize(ll, PANGO_ELLIPSIZE_END);
+    pango_layout_set_width(ll, (w - 76.0f) * PANGO_SCALE);
+    cairo_move_to(cr, x + 62.0, y + 47.0);
+    cairo_set_source_rgba(cr, 0.52, 0.50, 0.58, 0.85);
     pango_cairo_show_layout(cr, ll);
     pango_font_description_free(lf);
     g_object_unref(ll);
 
-    // Hourly forecast row
-    float forecast_y = y + 74.0f;
-    float col_w = (w - 24.0f) / 4.0f;
+    // Sleek Hourly forecast inner box
+    float box_x = x + 10.0f;
+    float box_y = y + 66.0f;
+    float box_w = w - 20.0f;
+    float box_h = 50.0f;
+    draw_rounded_rect(cr, box_x, box_y, box_w, box_h, 8.0);
+    cairo_set_source_rgba(cr, 0.06, 0.05, 0.08, 0.65);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0.35, 0.32, 0.42, 0.15);
+    cairo_set_line_width(cr, 0.6);
+    cairo_stroke(cr);
+
+    float col_w = box_w / 4.0f;
     for (size_t i = 0; i < 4; ++i) {
-        float fc_cx = x + 12.0f + i * col_w + col_w / 2.0f;
+        float fc_cx = box_x + i * col_w + col_w / 2.0f;
 
         // Time
         PangoLayout* ftime = pango_cairo_create_layout(cr);
@@ -1056,47 +1057,47 @@ void Renderer::draw_weather_card(cairo_t* cr, float x, float y, float w, float h
         pango_layout_set_text(ftime, fhours[i].time.c_str(), -1);
         PangoRectangle tink, tlog;
         pango_layout_get_pixel_extents(ftime, &tink, &tlog);
-        cairo_move_to(cr, fc_cx - tink.width / 2.0 - tink.x, forecast_y);
-        cairo_set_source_rgba(cr, 0.55, 0.53, 0.60, 0.80);
+        cairo_move_to(cr, fc_cx - tink.width / 2.0 - tink.x, box_y + 4.0);
+        cairo_set_source_rgba(cr, 0.55, 0.53, 0.60, 0.85);
         pango_cairo_show_layout(cr, ftime);
         pango_font_description_free(ftf);
         g_object_unref(ftime);
 
         // Icon
         PangoLayout* fico = pango_cairo_create_layout(cr);
-        PangoFontDescription* fif = pango_font_description_from_string("JetBrainsMono Nerd Font 10.0");
+        PangoFontDescription* fif = pango_font_description_from_string("JetBrainsMono Nerd Font 9.0");
         pango_layout_set_font_description(fico, fif);
         pango_layout_set_text(fico, fhours[i].icon.c_str(), -1);
         PangoRectangle iink, ilog;
         pango_layout_get_pixel_extents(fico, &iink, &ilog);
-        cairo_move_to(cr, fc_cx - iink.width / 2.0 - iink.x, forecast_y + 14.0);
-        cairo_set_source_rgba(cr, 0.38, 0.54, 0.85, 0.90);
+        cairo_move_to(cr, fc_cx - iink.width / 2.0 - iink.x, box_y + 16.0);
+        cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.90);
         pango_cairo_show_layout(cr, fico);
         pango_font_description_free(fif);
         g_object_unref(fico);
 
         // Temp
         PangoLayout* ftmp = pango_cairo_create_layout(cr);
-        PangoFontDescription* ftpf = pango_font_description_from_string("Sans 8.0");
+        PangoFontDescription* ftpf = pango_font_description_from_string("Sans Bold 8.0");
         pango_layout_set_font_description(ftmp, ftpf);
         pango_layout_set_text(ftmp, fhours[i].temp.c_str(), -1);
         PangoRectangle tmp_ink, tmp_log;
         pango_layout_get_pixel_extents(ftmp, &tmp_ink, &tmp_log);
-        cairo_move_to(cr, fc_cx - tmp_ink.width / 2.0 - tmp_ink.x, forecast_y + 28.0);
-        cairo_set_source_rgba(cr, 0.85, 0.83, 0.90, 0.90);
+        cairo_move_to(cr, fc_cx - tmp_ink.width / 2.0 - tmp_ink.x, box_y + 27.0);
+        cairo_set_source_rgba(cr, 0.90, 0.88, 0.95, 0.95);
         pango_cairo_show_layout(cr, ftmp);
         pango_font_description_free(ftpf);
         g_object_unref(ftmp);
 
         // Pop %
         PangoLayout* fpop = pango_cairo_create_layout(cr);
-        PangoFontDescription* fpf = pango_font_description_from_string("Sans 7.5");
+        PangoFontDescription* fpf = pango_font_description_from_string("Sans 7.0");
         pango_layout_set_font_description(fpop, fpf);
         pango_layout_set_text(fpop, fhours[i].pop.c_str(), -1);
         PangoRectangle pop_ink, pop_log;
         pango_layout_get_pixel_extents(fpop, &pop_ink, &pop_log);
-        cairo_move_to(cr, fc_cx - pop_ink.width / 2.0 - pop_ink.x, forecast_y + 41.0);
-        cairo_set_source_rgba(cr, 0.35, 0.48, 0.75, 0.80);
+        cairo_move_to(cr, fc_cx - pop_ink.width / 2.0 - pop_ink.x, box_y + 38.0);
+        cairo_set_source_rgba(cr, 0.48, 0.65, 0.92, 0.85);
         pango_cairo_show_layout(cr, fpop);
         pango_font_description_free(fpf);
         g_object_unref(fpop);
@@ -1591,7 +1592,7 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
     draw_weather_card(cr, col2_x, 186.0f, col2_w, 124.0f);
 
     // 3. Monthly Calendar Card (y = 318..520, h = 202)
-    draw_calendar(cr, col2_x, 318.0f, col2_w, 202.0f, tm_info);
+    draw_calendar(cr, col2_x, 318.0f, col2_w, 202.0f, tm_info, state.cal_month_offset);
 
     // ==========================================
     // COLUMN 3: RIGHT (x = 572, w = 242)
@@ -1624,7 +1625,13 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
         float card_x = col3_x + 12.0f;
         float card_y = col3_y + 48.0f;
         float card_w = col3_w - 24.0f;
-        float card_h = 80.0f;
+        float card_h_compact = 78.0f;
+        float card_h_expanded = 150.0f;
+        float card_h = card_h_compact + state.notif_expand * (card_h_expanded - card_h_compact);
+
+        cairo_save(cr);
+        draw_rounded_rect(cr, card_x, card_y, card_w, card_h, 10.0);
+        cairo_clip(cr);
 
         draw_rounded_rect(cr, card_x, card_y, card_w, card_h, 10.0);
         cairo_set_source_rgba(cr, 0.12, 0.11, 0.15, 0.95);
@@ -1633,6 +1640,7 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
         cairo_set_line_width(cr, 0.8);
         cairo_stroke(cr);
 
+        // App Name on left
         PangoLayout* anl = pango_cairo_create_layout(cr);
         PangoFontDescription* anf = pango_font_description_from_string("Sans Bold 8.5");
         pango_layout_set_font_description(anl, anf);
@@ -1643,29 +1651,58 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
         pango_font_description_free(anf);
         g_object_unref(anl);
 
+        // Mini "X" dismiss button on top right
+        float close_x = card_x + card_w - 22.0f;
+        float close_y = card_y + 6.0f;
+        draw_rounded_rect(cr, close_x, close_y, 16.0f, 16.0f, 4.0);
+        cairo_set_source_rgba(cr, 0.20, 0.18, 0.24, 0.80);
+        cairo_fill(cr);
+
+        PangoLayout* xl = pango_cairo_create_layout(cr);
+        PangoFontDescription* xf = pango_font_description_from_string("JetBrainsMono Nerd Font 8.5");
+        pango_layout_set_font_description(xl, xf);
+        pango_layout_set_text(xl, "󰅖", -1);
+        PangoRectangle x_ink, x_log;
+        pango_layout_get_pixel_extents(xl, &x_ink, &x_log);
+        cairo_move_to(cr, close_x + (16.0 - x_ink.width) / 2.0 - x_ink.x,
+                          close_y + (16.0 - x_ink.height) / 2.0 - x_ink.y);
+        cairo_set_source_rgba(cr, 0.80, 0.78, 0.85, 0.90);
+        pango_cairo_show_layout(cr, xl);
+        pango_font_description_free(xf);
+        g_object_unref(xl);
+
+        // Summary
         PangoLayout* sml = pango_cairo_create_layout(cr);
         PangoFontDescription* smf = pango_font_description_from_string("Sans SemiBold 9.0");
         pango_layout_set_font_description(sml, smf);
         pango_layout_set_text(sml, notif.summary.c_str(), -1);
         pango_layout_set_ellipsize(sml, PANGO_ELLIPSIZE_END);
-        pango_layout_set_width(sml, (card_w - 20.0f) * PANGO_SCALE);
+        pango_layout_set_width(sml, (card_w - 38.0f) * PANGO_SCALE);
         cairo_move_to(cr, card_x + 10.0, card_y + 24.0);
         cairo_set_source_rgba(cr, 0.92, 0.90, 0.95, 0.95);
         pango_cairo_show_layout(cr, sml);
         pango_font_description_free(smf);
         g_object_unref(sml);
 
+        // Body: smoothly adapts between compact 2-line ellipsize and fully expanded wrapping
         PangoLayout* bdl = pango_cairo_create_layout(cr);
         PangoFontDescription* bdf = pango_font_description_from_string("Sans 8.0");
         pango_layout_set_font_description(bdl, bdf);
         pango_layout_set_text(bdl, notif.body.c_str(), -1);
-        pango_layout_set_ellipsize(bdl, PANGO_ELLIPSIZE_END);
         pango_layout_set_width(bdl, (card_w - 20.0f) * PANGO_SCALE);
+        if (state.notif_expand < 0.3f) {
+            pango_layout_set_ellipsize(bdl, PANGO_ELLIPSIZE_END);
+            pango_layout_set_height(bdl, 28 * PANGO_SCALE);
+        } else {
+            pango_layout_set_wrap(bdl, PANGO_WRAP_WORD_CHAR);
+        }
         cairo_move_to(cr, card_x + 10.0, card_y + 44.0);
-        cairo_set_source_rgba(cr, 0.65, 0.63, 0.70, 0.85);
+        cairo_set_source_rgba(cr, 0.70, 0.68, 0.75, 0.85);
         pango_cairo_show_layout(cr, bdl);
         pango_font_description_free(bdf);
         g_object_unref(bdl);
+
+        cairo_restore(cr);
     } else {
         PangoLayout* empty_l = pango_cairo_create_layout(cr);
         PangoFontDescription* ef = pango_font_description_from_string("Sans 9.5");
@@ -1785,70 +1822,194 @@ void Renderer::draw_hud_osd(cairo_t* cr, float w, float h, const OsdState& osd) 
     }
 }
 
-void Renderer::draw_notification(cairo_t* cr, float w, float h, const NotificationItem& notif) {
+void Renderer::draw_notification(cairo_t* cr, float w, float h, const NotificationItem& notif,
+                                const MediaInfo& media, float anim_time) {
     (void)h;
-    // 1. Notification Icon / Badge on Left
-    float badge_x = 16.0f;
-    float badge_y = 15.0f;
-    float badge_size = 38.0f;
+    bool has_media = media.active && !media.title.empty();
 
-    draw_rounded_rect(cr, badge_x, badge_y, badge_size, badge_size, 10.0);
-    cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.95);
-    cairo_fill_preserve(cr);
-    cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.35);
-    cairo_set_line_width(cr, 1.0);
-    cairo_stroke(cr);
+    time_t now = time(nullptr);
+    struct tm* tm_info = localtime(&now);
+    char time_str[16];
+    strftime(time_str, sizeof(time_str), "%H:%M", tm_info);
 
-    // Bell / Message icon
-    PangoLayout* bell_layout = pango_cairo_create_layout(cr);
-    PangoFontDescription* bell_font = pango_font_description_from_string("JetBrainsMono Nerd Font 15");
-    pango_layout_set_font_description(bell_layout, bell_font);
-    pango_layout_set_text(bell_layout, "󰂚", -1);
+    if (has_media) {
+        // Dual-tier: Media on top row, Notification on bottom row!
+        // 1. Top row (y = 0..34): Media compact preview + clock
+        float mini_art_x = 12.0f;
+        float mini_art_y = 6.0f;
+        float mini_art_sz = 22.0f;
 
-    PangoRectangle bell_ink, bell_log;
-    pango_layout_get_pixel_extents(bell_layout, &bell_ink, &bell_log);
-    cairo_move_to(cr, badge_x + (badge_size - bell_ink.width) / 2.0 - bell_ink.x,
-                      badge_y + (badge_size - bell_ink.height) / 2.0 - bell_ink.y);
-    cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.95);
-    pango_cairo_show_layout(cr, bell_layout);
-    pango_font_description_free(bell_font);
-    g_object_unref(bell_layout);
+        draw_rounded_rect(cr, mini_art_x, mini_art_y, mini_art_sz, mini_art_sz, 6.0);
+        cairo_save(cr);
+        cairo_clip(cr);
+        if (mini_art_surface_) {
+            cairo_set_source_surface(cr, mini_art_surface_, mini_art_x, mini_art_y);
+            cairo_paint(cr);
+        } else {
+            cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.95);
+            cairo_paint(cr);
+        }
+        cairo_restore(cr);
 
-    // 2. Summary & App Name
-    float text_x = badge_x + badge_size + 12.0f;
-    float text_w = w - text_x - 14.0f;
+        PangoLayout* mtl = pango_cairo_create_layout(cr);
+        PangoFontDescription* mtf = pango_font_description_from_string("Sans Bold 9.0");
+        pango_layout_set_font_description(mtl, mtf);
+        pango_layout_set_text(mtl, media.title.c_str(), -1);
+        pango_layout_set_ellipsize(mtl, PANGO_ELLIPSIZE_END);
+        pango_layout_set_width(mtl, 130 * PANGO_SCALE);
+        cairo_move_to(cr, mini_art_x + mini_art_sz + 8.0, mini_art_y + 3.0);
+        cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 0.95);
+        pango_cairo_show_layout(cr, mtl);
+        pango_font_description_free(mtf);
+        g_object_unref(mtl);
 
-    PangoLayout* title_layout = pango_cairo_create_layout(cr);
-    PangoFontDescription* title_font = pango_font_description_from_string("Sans Bold 10.5");
-    pango_layout_set_font_description(title_layout, title_font);
-    pango_layout_set_text(title_layout, notif.summary.empty() ? "Notificación" : notif.summary.c_str(), -1);
-    pango_layout_set_ellipsize(title_layout, PANGO_ELLIPSIZE_END);
-    pango_layout_set_width(title_layout, text_w * PANGO_SCALE);
+        // Soundwave
+        float wave_x = 190.0f;
+        float wave_y = 17.0f;
+        for (int i = 0; i < 4; ++i) {
+            float bar_h = 3.0f;
+            if (media.playing) {
+                float phase = anim_time * 7.0f + i * 1.3f;
+                bar_h = 3.0f + 8.0f * (0.5f + 0.5f * std::sin(phase));
+            }
+            draw_rounded_rect(cr, wave_x + i * 5.0f, wave_y - bar_h / 2.0f, 2.5f, bar_h, 1.25);
+            cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.85);
+            cairo_fill(cr);
+        }
 
-    cairo_move_to(cr, text_x, badge_y + 2.0);
-    cairo_set_source_rgba(cr, 0.902, 0.878, 0.914, 1.0);
-    pango_cairo_show_layout(cr, title_layout);
-    pango_font_description_free(title_font);
-    g_object_unref(title_layout);
+        // Clock at far right
+        PangoLayout* clk = pango_cairo_create_layout(cr);
+        PangoFontDescription* cfont = pango_font_description_from_string("Sans Bold 9.5");
+        pango_layout_set_font_description(clk, cfont);
+        pango_layout_set_text(clk, time_str, -1);
+        PangoRectangle c_ink, c_log;
+        pango_layout_get_pixel_extents(clk, &c_ink, &c_log);
+        cairo_move_to(cr, w - 14.0 - c_ink.width - c_ink.x, mini_art_y + 3.0);
+        cairo_set_source_rgba(cr, 0.95, 0.95, 0.98, 0.95);
+        pango_cairo_show_layout(cr, clk);
+        pango_font_description_free(cfont);
+        g_object_unref(clk);
 
-    // 3. Body text
-    std::string body_text = notif.body;
-    if (body_text.empty() && !notif.app_name.empty()) {
-        body_text = notif.app_name;
+        // Thin Separator line
+        cairo_move_to(cr, 12.0, 34.0);
+        cairo_line_to(cr, w - 12.0, 34.0);
+        cairo_set_source_rgba(cr, 0.35, 0.32, 0.42, 0.25);
+        cairo_set_line_width(cr, 0.8);
+        cairo_stroke(cr);
+
+        // 2. Bottom row: Notification badge, summary, body
+        float notif_badge_x = 12.0f;
+        float notif_badge_y = 44.0f;
+        float notif_badge_sz = 30.0f;
+
+        draw_rounded_rect(cr, notif_badge_x, notif_badge_y, notif_badge_sz, notif_badge_sz, 8.0);
+        cairo_set_source_rgba(cr, 0.169, 0.145, 0.212, 0.95);
+        cairo_fill_preserve(cr);
+        cairo_set_source_rgba(cr, 0.40, 0.35, 0.48, 0.35);
+        cairo_set_line_width(cr, 0.8);
+        cairo_stroke(cr);
+
+        PangoLayout* bell = pango_cairo_create_layout(cr);
+        PangoFontDescription* bfont = pango_font_description_from_string("JetBrainsMono Nerd Font 13");
+        pango_layout_set_font_description(bell, bfont);
+        pango_layout_set_text(bell, "󰂚", -1);
+        PangoRectangle b_ink, b_log;
+        pango_layout_get_pixel_extents(bell, &b_ink, &b_log);
+        cairo_move_to(cr, notif_badge_x + (notif_badge_sz - b_ink.width) / 2.0 - b_ink.x,
+                          notif_badge_y + (notif_badge_sz - b_ink.height) / 2.0 - b_ink.y);
+        cairo_set_source_rgba(cr, 0.816, 0.737, 1.0, 0.95);
+        pango_cairo_show_layout(cr, bell);
+        pango_font_description_free(bfont);
+        g_object_unref(bell);
+
+        float text_x = notif_badge_x + notif_badge_sz + 10.0f;
+        float text_w = w - text_x - 14.0f;
+
+        PangoLayout* sml = pango_cairo_create_layout(cr);
+        PangoFontDescription* smf = pango_font_description_from_string("Sans Bold 9.5");
+        pango_layout_set_font_description(sml, smf);
+        pango_layout_set_text(sml, notif.summary.empty() ? "Notificación" : notif.summary.c_str(), -1);
+        pango_layout_set_ellipsize(sml, PANGO_ELLIPSIZE_END);
+        pango_layout_set_width(sml, text_w * PANGO_SCALE);
+        cairo_move_to(cr, text_x, notif_badge_y + 1.0);
+        cairo_set_source_rgba(cr, 0.95, 0.95, 0.98, 1.0);
+        pango_cairo_show_layout(cr, sml);
+        pango_font_description_free(smf);
+        g_object_unref(sml);
+
+        std::string body_text = notif.body.empty() ? notif.app_name : notif.body;
+        PangoLayout* bdl = pango_cairo_create_layout(cr);
+        PangoFontDescription* bdf = pango_font_description_from_string("Sans 8.5");
+        pango_layout_set_font_description(bdl, bdf);
+        pango_layout_set_text(bdl, body_text.c_str(), -1);
+        pango_layout_set_ellipsize(bdl, PANGO_ELLIPSIZE_END);
+        pango_layout_set_width(bdl, text_w * PANGO_SCALE);
+        cairo_move_to(cr, text_x, notif_badge_y + 16.0);
+        cairo_set_source_rgba(cr, 0.75, 0.73, 0.80, 0.85);
+        pango_cairo_show_layout(cr, bdl);
+        pango_font_description_free(bdf);
+        g_object_unref(bdl);
+    } else {
+        // Single tier expanded vertically: Top line has app name & clock, bottom has notification
+        // App badge
+        PangoLayout* anl = pango_cairo_create_layout(cr);
+        PangoFontDescription* anf = pango_font_description_from_string("Sans Bold 9.0");
+        pango_layout_set_font_description(anl, anf);
+        std::string app_str = "󰂚 " + (notif.app_name.empty() ? "Sistema" : notif.app_name);
+        pango_layout_set_text(anl, app_str.c_str(), -1);
+        cairo_move_to(cr, 14.0, 8.0);
+        cairo_set_source_rgba(cr, 0.45, 0.65, 0.95, 0.95);
+        pango_cairo_show_layout(cr, anl);
+        pango_font_description_free(anf);
+        g_object_unref(anl);
+
+        // Clock on right
+        PangoLayout* clk = pango_cairo_create_layout(cr);
+        PangoFontDescription* cfont = pango_font_description_from_string("Sans Bold 9.5");
+        pango_layout_set_font_description(clk, cfont);
+        pango_layout_set_text(clk, time_str, -1);
+        PangoRectangle c_ink, c_log;
+        pango_layout_get_pixel_extents(clk, &c_ink, &c_log);
+        cairo_move_to(cr, w - 14.0 - c_ink.width - c_ink.x, 8.0);
+        cairo_set_source_rgba(cr, 0.95, 0.95, 0.98, 0.95);
+        pango_cairo_show_layout(cr, clk);
+        pango_font_description_free(cfont);
+        g_object_unref(clk);
+
+        // Separator line
+        cairo_move_to(cr, 12.0, 27.0);
+        cairo_line_to(cr, w - 12.0, 27.0);
+        cairo_set_source_rgba(cr, 0.35, 0.32, 0.42, 0.20);
+        cairo_set_line_width(cr, 0.8);
+        cairo_stroke(cr);
+
+        // Summary
+        PangoLayout* sml = pango_cairo_create_layout(cr);
+        PangoFontDescription* smf = pango_font_description_from_string("Sans Bold 9.5");
+        pango_layout_set_font_description(sml, smf);
+        pango_layout_set_text(sml, notif.summary.empty() ? "Notificación" : notif.summary.c_str(), -1);
+        pango_layout_set_ellipsize(sml, PANGO_ELLIPSIZE_END);
+        pango_layout_set_width(sml, (w - 28.0f) * PANGO_SCALE);
+        cairo_move_to(cr, 14.0, 32.0);
+        cairo_set_source_rgba(cr, 0.95, 0.95, 0.98, 1.0);
+        pango_cairo_show_layout(cr, sml);
+        pango_font_description_free(smf);
+        g_object_unref(sml);
+
+        // Body
+        std::string body_text = notif.body.empty() ? notif.app_name : notif.body;
+        PangoLayout* bdl = pango_cairo_create_layout(cr);
+        PangoFontDescription* bdf = pango_font_description_from_string("Sans 8.5");
+        pango_layout_set_font_description(bdl, bdf);
+        pango_layout_set_text(bdl, body_text.c_str(), -1);
+        pango_layout_set_ellipsize(bdl, PANGO_ELLIPSIZE_END);
+        pango_layout_set_width(bdl, (w - 28.0f) * PANGO_SCALE);
+        cairo_move_to(cr, 14.0, 48.0);
+        cairo_set_source_rgba(cr, 0.75, 0.73, 0.80, 0.85);
+        pango_cairo_show_layout(cr, bdl);
+        pango_font_description_free(bdf);
+        g_object_unref(bdl);
     }
-
-    PangoLayout* body_layout = pango_cairo_create_layout(cr);
-    PangoFontDescription* body_font = pango_font_description_from_string("Sans 9.5");
-    pango_layout_set_font_description(body_layout, body_font);
-    pango_layout_set_text(body_layout, body_text.c_str(), -1);
-    pango_layout_set_ellipsize(body_layout, PANGO_ELLIPSIZE_END);
-    pango_layout_set_width(body_layout, text_w * PANGO_SCALE);
-
-    cairo_move_to(cr, text_x, badge_y + 21.0);
-    cairo_set_source_rgba(cr, 0.792, 0.769, 0.816, 0.85);
-    pango_cairo_show_layout(cr, body_layout);
-    pango_font_description_free(body_font);
-    g_object_unref(body_layout);
 }
 
 } // namespace island
