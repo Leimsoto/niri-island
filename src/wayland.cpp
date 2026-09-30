@@ -38,6 +38,7 @@ void Buffer::destroy() {
 WaylandContext::WaylandContext() = default;
 
 WaylandContext::~WaylandContext() {
+    set_click_shield(false);
     buffers_[0].destroy();
     buffers_[1].destroy();
 
@@ -90,27 +91,41 @@ static const struct wl_registry_listener registry_listener = {
 };
 
 static const struct wl_pointer_listener pointer_listener = {
-    .enter = [](void* data, struct wl_pointer*, uint32_t, struct wl_surface*, wl_fixed_t sx, wl_fixed_t sy) {
+    .enter = [](void* data, struct wl_pointer*, uint32_t, struct wl_surface* surface, wl_fixed_t sx, wl_fixed_t sy) {
         auto* self = static_cast<WaylandContext*>(data);
-        self->hovered_ = true;
+        self->current_pointer_surface_ = surface;
+        self->hovered_ = (surface == self->surface_);
         self->pointer_x_ = wl_fixed_to_double(sx);
         self->pointer_y_ = wl_fixed_to_double(sy);
-        if (self->on_hover) self->on_hover(true);
-        if (self->on_motion) self->on_motion(self->pointer_x_, self->pointer_y_);
+        if (self->hovered_ && self->on_hover) self->on_hover(true);
+        if (self->hovered_ && self->on_motion) self->on_motion(self->pointer_x_, self->pointer_y_);
     },
-    .leave = [](void* data, struct wl_pointer*, uint32_t, struct wl_surface*) {
+    .leave = [](void* data, struct wl_pointer*, uint32_t, struct wl_surface* surface) {
         auto* self = static_cast<WaylandContext*>(data);
-        self->hovered_ = false;
-        if (self->on_hover) self->on_hover(false);
+        if (surface == self->surface_) {
+            self->hovered_ = false;
+            if (self->on_hover) self->on_hover(false);
+        }
+        if (self->current_pointer_surface_ == surface) {
+            self->current_pointer_surface_ = nullptr;
+        }
     },
     .motion = [](void* data, struct wl_pointer*, uint32_t, wl_fixed_t sx, wl_fixed_t sy) {
         auto* self = static_cast<WaylandContext*>(data);
         self->pointer_x_ = wl_fixed_to_double(sx);
         self->pointer_y_ = wl_fixed_to_double(sy);
-        if (self->on_motion) self->on_motion(self->pointer_x_, self->pointer_y_);
+        if (self->current_pointer_surface_ == self->surface_ && self->on_motion) {
+            self->on_motion(self->pointer_x_, self->pointer_y_);
+        }
     },
     .button = [](void* data, struct wl_pointer*, uint32_t, uint32_t, uint32_t button, uint32_t state) {
         auto* self = static_cast<WaylandContext*>(data);
+        if (self->current_pointer_surface_ == self->shield_surface_) {
+            if (state == 1 && self->on_outside_click) {
+                self->on_outside_click();
+            }
+            return;
+        }
         if (self->on_click) self->on_click(button, state, self->pointer_x_, self->pointer_y_);
     },
     .axis = [](void*, struct wl_pointer*, uint32_t, uint32_t, wl_fixed_t) {},
@@ -219,6 +234,102 @@ void WaylandContext::set_input_regions(const std::vector<InputRect>& rects) {
     }
     wl_surface_set_input_region(surface_, region);
     wl_region_destroy(region);
+}
+
+static const struct zwlr_layer_surface_v1_listener shield_layer_surface_listener = {
+    .configure = [](void* data, struct zwlr_layer_surface_v1* surface, uint32_t serial, uint32_t width, uint32_t height) {
+        auto* self = static_cast<WaylandContext*>(data);
+        zwlr_layer_surface_v1_ack_configure(surface, serial);
+        self->on_shield_configure(width, height);
+    },
+    .closed = [](void* data, struct zwlr_layer_surface_v1*) {
+        auto* self = static_cast<WaylandContext*>(data);
+        self->set_click_shield(false);
+    }
+};
+
+void WaylandContext::on_shield_configure(uint32_t width, uint32_t height) {
+    if (!shield_surface_) return;
+    if (shield_w_ == (int)width && shield_h_ == (int)height && shield_buffer_) {
+        return;
+    }
+    if (shield_buffer_) {
+        wl_buffer_destroy(shield_buffer_);
+        shield_buffer_ = nullptr;
+    }
+    shield_w_ = (width > 0) ? (int)width : 1920;
+    shield_h_ = (height > 0) ? (int)height : 1080;
+
+    size_t size = shield_w_ * shield_h_ * 4;
+    int fd = syscall(SYS_memfd_create, "island-shield", MFD_CLOEXEC);
+    if (fd >= 0) {
+        if (ftruncate(fd, size) == 0) {
+            struct wl_shm_pool* pool = wl_shm_create_pool(shm_, fd, size);
+            shield_buffer_ = wl_shm_pool_create_buffer(pool, 0, shield_w_, shield_h_, shield_w_ * 4, WL_SHM_FORMAT_ARGB8888);
+            wl_shm_pool_destroy(pool);
+        }
+        close(fd);
+    }
+
+    if (shield_buffer_) {
+        wl_surface_attach(shield_surface_, shield_buffer_, 0, 0);
+        wl_surface_damage_buffer(shield_surface_, 0, 0, shield_w_, shield_h_);
+        wl_surface_commit(shield_surface_);
+        std::cout << "[Shield] Attached buffer: " << shield_w_ << "x" << shield_h_ << "\n";
+    }
+}
+
+void WaylandContext::set_click_shield(bool enabled) {
+    if (!enabled) {
+        if (shield_layer_surface_) {
+            zwlr_layer_surface_v1_destroy(shield_layer_surface_);
+            shield_layer_surface_ = nullptr;
+        }
+        if (shield_surface_) {
+            wl_surface_destroy(shield_surface_);
+            shield_surface_ = nullptr;
+        }
+        if (shield_buffer_) {
+            wl_buffer_destroy(shield_buffer_);
+            shield_buffer_ = nullptr;
+        }
+        shield_w_ = 0;
+        shield_h_ = 0;
+        if (current_pointer_surface_ == shield_surface_) {
+            current_pointer_surface_ = nullptr;
+        }
+        if (display_) {
+            wl_display_flush(display_);
+        }
+    } else {
+        if (shield_surface_ || !layer_shell_ || !compositor_) return;
+
+        shield_surface_ = wl_compositor_create_surface(compositor_);
+        shield_layer_surface_ = zwlr_layer_shell_v1_get_layer_surface(
+            layer_shell_,
+            shield_surface_,
+            nullptr,
+            ZWLR_LAYER_SHELL_V1_LAYER_TOP,
+            "island-click-shield"
+        );
+
+        zwlr_layer_surface_v1_add_listener(shield_layer_surface_, &shield_layer_surface_listener, this);
+        zwlr_layer_surface_v1_set_anchor(
+            shield_layer_surface_,
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT
+        );
+        zwlr_layer_surface_v1_set_size(shield_layer_surface_, 0, 0);
+        zwlr_layer_surface_v1_set_exclusive_zone(shield_layer_surface_, -1);
+        zwlr_layer_surface_v1_set_keyboard_interactivity(
+            shield_layer_surface_,
+            ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE
+        );
+
+        wl_surface_commit(shield_surface_);
+        wl_display_roundtrip(display_);
+        std::cout << "[Shield] Created fullscreen click shield\n";
+    }
 }
 
 void WaylandContext::roundtrip() {

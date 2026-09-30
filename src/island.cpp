@@ -76,6 +76,14 @@ bool IslandApp::init() {
         on_hover(hovered);
     };
 
+    wayland_.on_outside_click = [this]() {
+        if (in_control_center_) {
+            in_control_center_ = false;
+            update_target_dimensions();
+            wayland_.request_frame_callback();
+        }
+    };
+
     workspaces_.init();
     ws_bubble_w_ = workspaces_.bubble_width();
     int initial_total_w = (int)std::round(ws_bubble_w_ + 8.0f + 110.0f);
@@ -154,9 +162,11 @@ void IslandApp::update_target_dimensions() {
 
     bool has_media = mpris_.info().active && !mpris_.info().title.empty();
 
+    wayland_.set_click_shield(in_control_center_);
+
     if (in_control_center_) {
-        width_spring_.set_target(820.0f);
-        height_spring_.set_target(484.0f);
+        width_spring_.set_target(830.0f);
+        height_spring_.set_target(536.0f);
         current_mode_ = IslandMode::ControlCenter;
     } else if (notifications_.has_active()) {
         width_spring_.set_target(330.0f);
@@ -286,24 +296,18 @@ void IslandApp::on_click(int button, int state, double x, double y) {
 
     // Right Click handler
     if (button == 273 && state == 1) {
-        if (in_control_center_) {
-            // Check if right click was on Wi-Fi or Bluetooth chips!
-            float chip_w = (cur_w - 40.0f - 12.0f) / 2.0f;
-            float chip_h = 38.0f;
-            float col1_x = 20.0f;
-            float col2_x = 20.0f + chip_w + 12.0f;
-            float row1_y = 90.0f;
-
-            if (y >= row1_y && y <= row1_y + chip_h) {
-                if (cur_x >= col1_x && cur_x <= col1_x + chip_w) {
-                    // Right click on Wi-Fi: open network manager / nmtui
-                    int r = system("ghostty -e nmtui & || nm-connection-editor &"); (void)r;
-                    return;
-                } else if (cur_x >= col2_x && cur_x <= col2_x + chip_w) {
-                    // Right click on Bluetooth: open bluetoothctl / blueman
-                    int r = system("ghostty -e bluetoothctl & || blueman-manager &"); (void)r;
-                    return;
-                }
+        if (in_control_center_ && y >= 50.0 && y <= 100.0 && cur_x <= 276.0f) {
+            float chip_w = 122.0f;
+            float col1_x = 16.0f;
+            float col2_x = 146.0f;
+            if (cur_x >= col1_x && cur_x <= col1_x + chip_w) {
+                // Right click on Wi-Fi: open network manager / nmtui
+                int r = system("ghostty -e nmtui & || nm-connection-editor &"); (void)r;
+                return;
+            } else if (cur_x >= col2_x && cur_x <= col2_x + chip_w) {
+                // Right click on Bluetooth: open bluetoothctl / blueman
+                int r = system("ghostty -e bluetoothctl & || blueman-manager &"); (void)r;
+                return;
             }
         }
 
@@ -324,7 +328,7 @@ void IslandApp::on_click(int button, int state, double x, double y) {
     if (state == 0) {
         if (active_drag_ == DragTarget::MusicSeek) {
             float bar_x = in_control_center_ ? 298.0f : 16.0f;
-            float bar_w = in_control_center_ ? 240.0f : (width_spring_.value - 32.0f);
+            float bar_w = in_control_center_ ? 244.0f : (width_spring_.value - 32.0f);
             float left_wing = (ws_bubble_w_ > 0.0f) ? (ws_bubble_w_ + 8.0f) : 0.0f;
             float cur_x = static_cast<float>(x) - left_wing;
             float ratio = std::clamp((cur_x - bar_x) / bar_w, 0.0f, 1.0f);
@@ -353,8 +357,8 @@ void IslandApp::on_click(int button, int state, double x, double y) {
 
     // 1. Control Center Interactions
     if (in_control_center_) {
-        // Top Action Bar (y <= 38.0)
-        if (y <= 38.0) {
+        // Top Action Bar (y <= 40.0)
+        if (y <= 40.0) {
             // Right-most button (Settings / Close)
             if (cur_x >= cur_w - 55.0f) {
                 in_control_center_ = false;
@@ -393,8 +397,8 @@ void IslandApp::on_click(int button, int state, double x, double y) {
             float col1_x = 16.0f;
             float col2_x = 146.0f;
 
-            // Row 0 (y: 48..90): Wi-Fi (Col 1), Bluetooth (Col 2)
-            if (y >= 48.0 && y <= 90.0) {
+            // Row 0 (y: 50..100): Wi-Fi (Col 1), Bluetooth (Col 2)
+            if (y >= 50.0 && y <= 100.0) {
                 if (cur_x >= col1_x && cur_x <= col1_x + tile_w) {
                     if (cc_state_.wifi_enabled) {
                         int r = system("nmcli radio wifi off"); (void)r;
@@ -420,8 +424,8 @@ void IslandApp::on_click(int button, int state, double x, double y) {
                 }
             }
 
-            // Row 1 (y: 94..136): Power (Col 1), Focus / DND (Col 2)
-            if (y >= 94.0 && y <= 136.0) {
+            // Row 1 (y: 102..152): Power (Col 1), Focus / DND (Col 2)
+            if (y >= 102.0 && y <= 152.0) {
                 if (cur_x >= col1_x && cur_x <= col1_x + tile_w) {
                     int r = system("powerprofilesctl set performance 2>/dev/null || powerprofilesctl set balanced 2>/dev/null &"); (void)r;
                     return;
@@ -433,8 +437,8 @@ void IslandApp::on_click(int button, int state, double x, double y) {
                 }
             }
 
-            // Row 2 (y: 140..182): Microphone (Col 1), Airplane (Col 2)
-            if (y >= 140.0 && y <= 182.0) {
+            // Row 2 (y: 154..204): Microphone (Col 1), Airplane (Col 2)
+            if (y >= 154.0 && y <= 204.0) {
                 if (cur_x >= col1_x && cur_x <= col1_x + tile_w) {
                     int r = system("pactl set-source-mute @DEFAULT_SOURCE@ toggle &"); (void)r;
                     wayland_.request_frame_callback();
@@ -445,8 +449,8 @@ void IslandApp::on_click(int button, int state, double x, double y) {
                 }
             }
 
-            // Volume Slider (y: 196..238)
-            if (y >= 196.0 && y < 238.0) {
+            // Volume Slider (y: 222..264)
+            if (y >= 222.0 && y <= 264.0) {
                 float bar_x = 16.0f;
                 float bar_w = 252.0f;
                 float raw_ratio = (static_cast<float>(cur_x) - bar_x) / bar_w;
@@ -467,8 +471,8 @@ void IslandApp::on_click(int button, int state, double x, double y) {
                 return;
             }
 
-            // Brightness Slider (y: 240..282)
-            if (y >= 240.0 && y <= 282.0) {
+            // Brightness Slider (y: 266..310)
+            if (y >= 266.0 && y <= 310.0) {
                 float bar_x = 16.0f;
                 float bar_w = 252.0f;
                 float raw_ratio = (static_cast<float>(cur_x) - bar_x) / bar_w;
@@ -488,23 +492,23 @@ void IslandApp::on_click(int button, int state, double x, double y) {
                 return;
             }
 
-            // Appearance card click (y >= 286): cycle wallpaper
-            if (y >= 286.0) {
+            // Appearance card click (y >= 316..524): cycle wallpaper
+            if (y >= 316.0 && y <= 524.0) {
                 int r = system("skwd-wall-v2 --next 2>/dev/null &"); (void)r;
                 return;
             }
         }
 
         // ===================================
-        // COLUMN 2: CENTER (cur_x: 280..560)
+        // COLUMN 2: CENTER (cur_x: 280..564)
         // ===================================
-        if (cur_x >= 280.0f && cur_x <= 560.0f) {
-            // Media Card (y: 48..166)
-            if (y >= 48.0 && y <= 166.0) {
-                // Seek Bar (y: 104..124)
-                if (y >= 104.0 && y <= 124.0) {
+        if (cur_x >= 280.0f && cur_x <= 564.0f) {
+            // Media Card (y: 50..180)
+            if (y >= 50.0 && y <= 180.0) {
+                // Seek Bar (y: 116..136)
+                if (y >= 116.0 && y <= 136.0) {
                     float bar_x = 298.0f;
-                    float bar_w = 240.0f;
+                    float bar_w = 244.0f;
                     float ratio = std::clamp((static_cast<float>(cur_x) - bar_x) / bar_w, 0.0f, 1.0f);
                     active_drag_ = DragTarget::MusicSeek;
                     mpris_.set_scrubbing(true);
@@ -512,9 +516,9 @@ void IslandApp::on_click(int button, int state, double x, double y) {
                     wayland_.request_frame_callback();
                     return;
                 }
-                // Media Controls (y: 124..166)
-                if (y > 124.0) {
-                    float mid_x = 284.0f + 134.0f;
+                // Media Controls (y: 136..178)
+                if (y > 136.0) {
+                    float mid_x = 284.0f + 136.0f;
                     if (cur_x < mid_x - 18.0f) {
                         mpris_.previous();
                     } else if (cur_x > mid_x + 18.0f) {
@@ -529,10 +533,18 @@ void IslandApp::on_click(int button, int state, double x, double y) {
         }
 
         // ===================================
-        // COLUMN 3: RIGHT (cur_x >= 564.0f)
+        // COLUMN 3: RIGHT (cur_x >= 568.0f)
         // ===================================
-        if (cur_x >= 564.0f) {
+        if (cur_x >= 568.0f) {
             notifications_.dismiss();
+            wayland_.request_frame_callback();
+            return;
+        }
+
+        // Click outside interactive bounds inside CC panel dismisses it
+        if (y > 524.0f) {
+            in_control_center_ = false;
+            update_target_dimensions();
             wayland_.request_frame_callback();
             return;
         }
@@ -622,7 +634,7 @@ void IslandApp::on_motion(double x, double y) {
 
     if (active_drag_ == DragTarget::MusicSeek) {
         float bar_x = in_control_center_ ? 298.0f : 16.0f;
-        float bar_w = in_control_center_ ? 240.0f : (cur_w - 32.0f);
+        float bar_w = in_control_center_ ? 244.0f : (cur_w - 32.0f);
         float ratio = std::clamp((cur_x - bar_x) / bar_w, 0.0f, 1.0f);
         mpris_.preview_position_ratio(ratio);
         wayland_.request_frame_callback();

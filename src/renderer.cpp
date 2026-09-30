@@ -172,7 +172,7 @@ void Renderer::update_wallpaper_thumb() {
             wallpaper_thumb_ = nullptr;
         }
         current_wallpaper_path_ = wall_path;
-        wallpaper_thumb_ = load_image_scaled(wall_path, 252, 182);
+        wallpaper_thumb_ = load_image_scaled(wall_path, 252, 202);
     } catch (...) {}
 }
 
@@ -823,7 +823,7 @@ void Renderer::draw_calendar(cairo_t* cr, float x, float y, float w, float h, st
     float grid_x = x + 14.0f;
     float grid_w = w - 28.0f;
     float col_w = grid_w / 7.0f;
-    float row_y = y + 34.0f;
+    float row_y = y + 36.0f;
 
     PangoLayout* wl = pango_cairo_create_layout(cr);
     PangoFontDescription* wf = pango_font_description_from_string("Sans Bold 8.5");
@@ -854,7 +854,7 @@ void Renderer::draw_calendar(cairo_t* cr, float x, float y, float w, float h, st
     int prev_max_days = days_in_month[prev_mon];
 
     float start_grid_y = row_y + 18.0f;
-    float row_h = 19.0f;
+    float row_h = 23.0f;
 
     PangoLayout* nl = pango_cairo_create_layout(cr);
     PangoFontDescription* nf = pango_font_description_from_string("Sans 8.5");
@@ -886,11 +886,11 @@ void Renderer::draw_calendar(cairo_t* cr, float x, float y, float w, float h, st
             std::string val_str = std::to_string(cell_val);
 
             if (is_today) {
-                draw_rounded_rect(cr, cell_cx - 9.5, cell_cy - 9.5, 19.0, 19.0, 9.5);
+                draw_rounded_rect(cr, cell_cx - 10.5, cell_cy - 10.5, 21.0, 21.0, 10.5);
                 cairo_set_source_rgba(cr, 0.23, 0.35, 0.60, 0.95);
                 cairo_fill(cr);
 
-                cairo_arc(cr, cell_cx, cell_cy + 11.5, 1.2, 0, 2 * M_PI);
+                cairo_arc(cr, cell_cx, cell_cy + 13.0, 1.2, 0, 2 * M_PI);
                 cairo_set_source_rgba(cr, 0.45, 0.65, 0.95, 0.95);
                 cairo_fill(cr);
 
@@ -1044,7 +1044,7 @@ void Renderer::draw_weather_card(cairo_t* cr, float x, float y, float w, float h
     g_object_unref(ll);
 
     // Hourly forecast row
-    float forecast_y = y + 64.0f;
+    float forecast_y = y + 74.0f;
     float col_w = (w - 24.0f) / 4.0f;
     for (size_t i = 0; i < 4; ++i) {
         float fc_cx = x + 12.0f + i * col_w + col_w / 2.0f;
@@ -1069,7 +1069,7 @@ void Renderer::draw_weather_card(cairo_t* cr, float x, float y, float w, float h
         pango_layout_set_text(fico, fhours[i].icon.c_str(), -1);
         PangoRectangle iink, ilog;
         pango_layout_get_pixel_extents(fico, &iink, &ilog);
-        cairo_move_to(cr, fc_cx - iink.width / 2.0 - iink.x, forecast_y + 12.0);
+        cairo_move_to(cr, fc_cx - iink.width / 2.0 - iink.x, forecast_y + 14.0);
         cairo_set_source_rgba(cr, 0.38, 0.54, 0.85, 0.90);
         pango_cairo_show_layout(cr, fico);
         pango_font_description_free(fif);
@@ -1082,7 +1082,7 @@ void Renderer::draw_weather_card(cairo_t* cr, float x, float y, float w, float h
         pango_layout_set_text(ftmp, fhours[i].temp.c_str(), -1);
         PangoRectangle tmp_ink, tmp_log;
         pango_layout_get_pixel_extents(ftmp, &tmp_ink, &tmp_log);
-        cairo_move_to(cr, fc_cx - tmp_ink.width / 2.0 - tmp_ink.x, forecast_y + 24.0);
+        cairo_move_to(cr, fc_cx - tmp_ink.width / 2.0 - tmp_ink.x, forecast_y + 28.0);
         cairo_set_source_rgba(cr, 0.85, 0.83, 0.90, 0.90);
         pango_cairo_show_layout(cr, ftmp);
         pango_font_description_free(ftpf);
@@ -1095,7 +1095,7 @@ void Renderer::draw_weather_card(cairo_t* cr, float x, float y, float w, float h
         pango_layout_set_text(fpop, fhours[i].pop.c_str(), -1);
         PangoRectangle pop_ink, pop_log;
         pango_layout_get_pixel_extents(fpop, &pop_ink, &pop_log);
-        cairo_move_to(cr, fc_cx - pop_ink.width / 2.0 - pop_ink.x, forecast_y + 35.0);
+        cairo_move_to(cr, fc_cx - pop_ink.width / 2.0 - pop_ink.x, forecast_y + 41.0);
         cairo_set_source_rgba(cr, 0.35, 0.48, 0.75, 0.80);
         pango_cairo_show_layout(cr, fpop);
         pango_font_description_free(fpf);
@@ -1111,7 +1111,7 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
     struct tm* tm_info = localtime(&now);
 
     // Panel background (Obsidian Dark with subtle border)
-    draw_rounded_rect(cr, 0.0, 0.0, w, h, 22.0);
+    draw_rounded_rect(cr, 0.0, 0.0, w, h, 24.0);
     cairo_set_source_rgba(cr, 0.067, 0.071, 0.086, 0.98); // #111216
     cairo_fill_preserve(cr);
     cairo_set_source_rgba(cr, 0.28, 0.26, 0.35, 0.35);
@@ -1157,7 +1157,7 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
 
     // Quick Settings Tiles (2x3 Grid)
     float tile_w = 122.0f;
-    float tile_h = 42.0f;
+    float tile_h = 46.0f;
     float tile_gap = 8.0f;
 
     struct TileData {
@@ -1196,9 +1196,9 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
         int r = i / 2;
         int c = i % 2;
         float tx = col1_x + c * (tile_w + tile_gap);
-        float ty = 48.0f + r * (tile_h + 4.0f);
+        float ty = 52.0f + r * (tile_h + 6.0f);
 
-        draw_rounded_rect(cr, tx, ty, tile_w, tile_h, 10.0);
+        draw_rounded_rect(cr, tx, ty, tile_w, tile_h, 11.0);
         if (tiles[i].active) {
             cairo_set_source_rgba(cr, 0.106, 0.133, 0.204, 0.95); // #1b2234
             cairo_fill_preserve(cr);
@@ -1213,8 +1213,8 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
 
         // Circular badge for icon
         float badge_x = tx + 8.0f;
-        float badge_y = ty + (tile_h - 26.0f) / 2.0f;
-        draw_rounded_rect(cr, badge_x, badge_y, 26.0f, 26.0f, 13.0);
+        float badge_y = ty + (tile_h - 28.0f) / 2.0f;
+        draw_rounded_rect(cr, badge_x, badge_y, 28.0f, 28.0f, 14.0);
         if (tiles[i].active) {
             cairo_set_source_rgba(cr, 0.231, 0.349, 0.596, 0.95); // #3b5998
         } else {
@@ -1226,8 +1226,8 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
         pango_layout_set_text(tl_ico, tiles[i].icon, -1);
         PangoRectangle ink, log;
         pango_layout_get_pixel_extents(tl_ico, &ink, &log);
-        cairo_move_to(cr, badge_x + 13.0 - ink.width / 2.0 - ink.x,
-                          badge_y + 13.0 - ink.height / 2.0 - ink.y);
+        cairo_move_to(cr, badge_x + 14.0 - ink.width / 2.0 - ink.x,
+                          badge_y + 14.0 - ink.height / 2.0 - ink.y);
         if (tiles[i].active) {
             cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
         } else {
@@ -1237,15 +1237,15 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
 
         // Title
         pango_layout_set_text(tl_title, tiles[i].title.c_str(), -1);
-        cairo_move_to(cr, tx + 40.0, ty + 7.0);
+        cairo_move_to(cr, tx + 42.0, ty + 8.0);
         cairo_set_source_rgba(cr, 0.92, 0.90, 0.95, 0.95);
         pango_cairo_show_layout(cr, tl_title);
 
         // Subtitle
         pango_layout_set_text(tl_sub, tiles[i].subtitle.c_str(), -1);
         pango_layout_set_ellipsize(tl_sub, PANGO_ELLIPSIZE_END);
-        pango_layout_set_width(tl_sub, (tile_w - 48.0f) * PANGO_SCALE);
-        cairo_move_to(cr, tx + 40.0, ty + 22.0);
+        pango_layout_set_width(tl_sub, (tile_w - 50.0f) * PANGO_SCALE);
+        cairo_move_to(cr, tx + 42.0, ty + 25.0);
         if (tiles[i].active) {
             cairo_set_source_rgba(cr, 0.38, 0.54, 0.85, 0.95);
         } else {
@@ -1273,13 +1273,13 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
     g_object_unref(tl_title);
     g_object_unref(tl_sub);
 
-    // Pagination Dots (y = 188)
+    // Pagination Dots (y = 214)
     float dot_cx = col1_x + col1_w / 2.0f;
-    cairo_arc(cr, dot_cx - 10.0, 188.0, 2.2, 0, 2 * M_PI);
+    cairo_arc(cr, dot_cx - 10.0, 214.0, 2.2, 0, 2 * M_PI);
     cairo_set_source_rgba(cr, 0.90, 0.90, 0.95, 0.95); // Active dot
     cairo_fill(cr);
 
-    cairo_arc(cr, dot_cx, 188.0, 2.0, 0, 2 * M_PI);
+    cairo_arc(cr, dot_cx, 214.0, 2.0, 0, 2 * M_PI);
     cairo_set_source_rgba(cr, 0.45, 0.42, 0.52, 0.60);
     cairo_fill(cr);
 
@@ -1287,16 +1287,16 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
     PangoFontDescription* paf = pango_font_description_from_string("JetBrainsMono Nerd Font 7.5");
     pango_layout_set_font_description(p_arr, paf);
     pango_layout_set_text(p_arr, "󰅂", -1);
-    cairo_move_to(cr, dot_cx + 8.0, 183.0);
+    cairo_move_to(cr, dot_cx + 8.0, 209.0);
     cairo_set_source_rgba(cr, 0.45, 0.42, 0.52, 0.60);
     pango_cairo_show_layout(cr, p_arr);
     pango_font_description_free(paf);
     g_object_unref(p_arr);
 
-    // Sliders (Volume: y = 202, Brightness: y = 244)
+    // Sliders (Volume: y = 226, Brightness: y = 270)
     auto draw_slider = [&](float y, const char* icon, float val, float press, float bounce) {
         val = std::clamp(val, 0.0f, 1.0f);
-        float s_h = 34.0f;
+        float s_h = 36.0f;
         float h_press = s_h - (press * 2.0f);
         float y_press = y + (press * 1.0f);
         float r_press = h_press / 2.0f;
@@ -1349,12 +1349,12 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
         g_object_unref(sp);
     };
 
-    draw_slider(202.0f, state.audio_muted ? "󰝟" : "󰕾", state.volume, state.volume_press, state.volume_bounce);
-    draw_slider(244.0f, "󰃠", state.brightness, state.brightness_press, state.brightness_bounce);
+    draw_slider(226.0f, state.audio_muted ? "󰝟" : "󰕾", state.volume, state.volume_press, state.volume_bounce);
+    draw_slider(270.0f, "󰃠", state.brightness, state.brightness_press, state.brightness_bounce);
 
-    // Appearance / Wallpaper Card (y = 286..468, h = 182)
-    float app_y = 286.0f;
-    float app_h = 182.0f;
+    // Appearance / Wallpaper Card (y = 318..520, h = 202)
+    float app_y = 318.0f;
+    float app_h = 202.0f;
 
     cairo_save(cr);
     draw_rounded_rect(cr, col1_x, app_y, col1_w, app_h, 14.0);
@@ -1369,7 +1369,7 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
     }
 
     // Bottom dark gradient overlay for text readability
-    cairo_pattern_t* grad = cairo_pattern_create_linear(col1_x, app_y + 90.0, col1_x, app_y + app_h);
+    cairo_pattern_t* grad = cairo_pattern_create_linear(col1_x, app_y + 100.0, col1_x, app_y + app_h);
     cairo_pattern_add_color_stop_rgba(grad, 0.0, 0.0, 0.0, 0.0, 0.0);
     cairo_pattern_add_color_stop_rgba(grad, 0.5, 0.05, 0.05, 0.07, 0.65);
     cairo_pattern_add_color_stop_rgba(grad, 1.0, 0.04, 0.04, 0.06, 0.94);
@@ -1433,14 +1433,14 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
     cairo_restore(cr);
 
     // ==========================================
-    // COLUMN 2: CENTER (x = 284, w = 268)
+    // COLUMN 2: CENTER (x = 284, w = 272)
     // ==========================================
     float col2_x = 284.0f;
-    float col2_w = 268.0f;
+    float col2_w = 272.0f;
 
-    // 1. Media Player Card (y = 48..166, h = 118)
-    float media_y = 48.0f;
-    float media_h = 118.0f;
+    // 1. Media Player Card (y = 52..178, h = 126)
+    float media_y = 52.0f;
+    float media_h = 126.0f;
 
     draw_rounded_rect(cr, col2_x, media_y, col2_w, media_h, 14.0);
     cairo_set_source_rgba(cr, 0.086, 0.082, 0.106, 0.96);
@@ -1508,7 +1508,7 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
     // Slim Progress Bar
     float pbar_x = col2_x + 14.0f;
     float pbar_w = col2_w - 28.0f;
-    float pbar_y = media_y + 70.0f;
+    float pbar_y = media_y + 72.0f;
     float pbar_h = 3.0f;
     float progress = (media.length_us > 0) ? std::clamp(static_cast<float>(media.position_us) / static_cast<float>(media.length_us), 0.0f, 1.0f) : 0.48f;
 
@@ -1523,7 +1523,7 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
     }
 
     // Media Controls & Timestamps
-    float ctrl_y = media_y + 88.0f;
+    float ctrl_y = media_y + 92.0f;
 
     int64_t cur_total_sec = media.position_us / 1000000;
     int cur_m = static_cast<int>(cur_total_sec / 60);
@@ -1587,20 +1587,21 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
     pango_font_description_free(mbf);
     g_object_unref(mbtn);
 
-    // 2. Weather Card (y = 174..286, h = 112)
-    draw_weather_card(cr, col2_x, 174.0f, col2_w, 112.0f);
+    // 2. Weather Card (y = 186..310, h = 124)
+    draw_weather_card(cr, col2_x, 186.0f, col2_w, 124.0f);
 
-    // 3. Monthly Calendar Card (y = 294..468, h = 174)
-    draw_calendar(cr, col2_x, 294.0f, col2_w, 174.0f, tm_info);
+    // 3. Monthly Calendar Card (y = 318..520, h = 202)
+    draw_calendar(cr, col2_x, 318.0f, col2_w, 202.0f, tm_info);
 
     // ==========================================
-    // COLUMN 3: RIGHT (x = 568, w = 236)
+    // COLUMN 3: RIGHT (x = 572, w = 242)
     // ==========================================
-    float col3_x = 568.0f;
-    float col3_w = 236.0f;
-    float col3_h = 420.0f;
+    float col3_x = 572.0f;
+    float col3_w = 242.0f;
+    float col3_y = 52.0f;
+    float col3_h = 468.0f;
 
-    draw_rounded_rect(cr, col3_x, 48.0f, col3_w, col3_h, 14.0);
+    draw_rounded_rect(cr, col3_x, col3_y, col3_w, col3_h, 14.0);
     cairo_set_source_rgba(cr, 0.086, 0.082, 0.106, 0.96);
     cairo_fill_preserve(cr);
     cairo_set_source_rgba(cr, 0.35, 0.32, 0.42, 0.20);
@@ -1612,7 +1613,7 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
     PangoFontDescription* nhf = pango_font_description_from_string("Sans Bold 11");
     pango_layout_set_font_description(nhl, nhf);
     pango_layout_set_text(nhl, "Notifications", -1);
-    cairo_move_to(cr, col3_x + 16.0, 48.0f + 16.0);
+    cairo_move_to(cr, col3_x + 16.0, col3_y + 16.0);
     cairo_set_source_rgba(cr, 0.95, 0.95, 0.98, 0.98);
     pango_cairo_show_layout(cr, nhl);
     pango_font_description_free(nhf);
@@ -1621,9 +1622,9 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
     // Content: Active card or "Nothing new"
     if (!notif.summary.empty() || !notif.body.empty()) {
         float card_x = col3_x + 12.0f;
-        float card_y = 48.0f + 48.0f;
+        float card_y = col3_y + 48.0f;
         float card_w = col3_w - 24.0f;
-        float card_h = 74.0f;
+        float card_h = 80.0f;
 
         draw_rounded_rect(cr, card_x, card_y, card_w, card_h, 10.0);
         cairo_set_source_rgba(cr, 0.12, 0.11, 0.15, 0.95);
@@ -1673,7 +1674,7 @@ void Renderer::draw_control_center(cairo_t* cr, float w, float h, const ControlC
         PangoRectangle eink, elog;
         pango_layout_get_pixel_extents(empty_l, &eink, &elog);
         cairo_move_to(cr, col3_x + (col3_w - eink.width) / 2.0 - eink.x,
-                          48.0f + (col3_h - eink.height) / 2.0 - eink.y);
+                          col3_y + (col3_h - eink.height) / 2.0 - eink.y);
         cairo_set_source_rgba(cr, 0.50, 0.48, 0.56, 0.65);
         pango_cairo_show_layout(cr, empty_l);
         pango_font_description_free(ef);
