@@ -1,79 +1,140 @@
 # niri-island 🏝️
 
-Una **Dynamic Island** minimalista, ultra-rápida y autónoma construida en **C++20** nativo para el compositor Wayland **Niri** (y cualquier compositor compatible con `wlr-layer-shell`).
+Un shell completo para el compositor Wayland **niri**, nativo en **C++20** (Cairo + Pango + layer-shell), alrededor
+de una **isla dinámica**: una cápsula que cambia de forma y se convierte en reloj, reproductor, notificaciones, OSD,
+centro de control, lanzador, calendario, tareas, notas y más. Inspirado en
+[impasto](https://github.com/andreumassanet/impasto) (diseño y animaciones) y en
+[noctalia](https://github.com/noctalia-dev/noctalia) (backend nativo basado en `poll`). **Sin Qt, sin QML, sin JS.**
 
-Inspirada en el concepto de iOS, Noctalia y k4, pero sin runtimes pesados: **sin QML, sin Qt, sin Node/JS ni Electron**.
-
----
-
-## ⚡ Especificaciones Técnicas
-
-- **Lenguaje:** C++20 puro.
-- **Tamaño del binario:** ~104 KB (stripped).
-- **Consumo de memoria:** ~15-20 MB RAM (vs 200+ MB de suites basadas en web/Qt).
-- **Arquitectura:**
-  - **Wayland Client & Layer-Shell:** Manejo directo de buffers compartidos (`memfd_create` + `wl_shm`) usando `zwlr_layer_shell_v1` en capa `OVERLAY`.
-  - **Física de resortes (Spring Physics):** Oscilador armónico amortiguado (`stiffness: 260.0`, `damping: 22.0`) para transiciones fluidas de tamaño y forma.
-  - **Renderizado vectorial:** Cairo + Pango para tipografía nítida y curvas continuas anti-aliasing con estética *glass/matte*. Centrado óptico pixel-perfect con `ink_rect`.
-  - **Carátulas de Álbum Reales:** Soporte integrado vía `gdk-pixbuf` + `webp-pixbuf-loader` para imágenes `.webp`, `.png`, `.jpg`, `.svg`.
-  - **Integración Multimedia:** Escucha en tiempo real de reproductores MPRIS (Spotify, Psysonic, Brave, Firefox, etc.) mediante `sd-bus` de `systemd`, con posición y seek interactivo.
-  - **HUD OSD Integrado:** Monitoreo en tiempo real de **Volumen** vía `libpulse` (PipeWire/PulseAudio), **Brillo** vía uevents del kernel con `libudev` y **Batería/Cargador** (`power_supply`).
-  - **Notificaciones Flotantes:** Interceptación nativa de `org.freedesktop.Notifications` sin interferir con otros demonios.
-  - **Indicadores de Privacidad:** Detección de micrófono activo mediante `libpulse` (punto naranja estilo iOS).
+Sustituye por sí solo a la barra, el demonio de notificaciones, el gestor de fondos, la bandeja del sistema y la
+pantalla de bloqueo.
 
 ---
 
-## 🚀 Estados y Comportamiento
+## Arquitectura
 
-1. **Modo Idle (En reposo):**
-   - Pastilla oscura redondeada centrada en el borde superior (110x32 px).
-   - Muestra la hora actual y un indicador de estado verde sutil perfectamente centrados.
-2. **Modo Compacto con Música:**
-   - Detecta automáticamente el reproductor activo vía MPRIS.
-   - Muestra la **mini carátula de álbum (22x22 px)** a la izquierda, título/artista centrado al píxel y ecualizador de ondas animado en verde neón a la derecha.
-3. **Modo Expandido con Seek (Hover / Click):**
-   - Al pasar el cursor o hacer clic sobre la isla, se abre suavemente a 330x125 px.
-   - Presenta carátula completa (48x48 px), título, artista, **barra de progreso real con minuteros transcurridos/totales** y controles clicables (`Prev`, `Play/Pause`, `Next`).
-   - **Seek táctil/ratón:** Haz clic en cualquier punto de la barra de progreso para saltar al segundo exacto de la canción.
-4. **Modo Notificación:**
-   - Al llegar un mensaje (Telegram, Discord, alertas de terminal, etc.), la isla se despliega elásticamente a 330x70 px mostrando el ícono de la app, el remitente y el mensaje.
-   - Desaparece automáticamente a los 4.5 segundos o al hacer clic sobre ella.
-5. **Modo HUD OSD (Volumen, Brillo y Batería):**
-   - Al pulsar tus teclas de volumen o brillo, o al conectar el cargador, la isla se morphing elásticamente a 210x34 px.
-   - Muestra el icono temático (󰕾 / 󰝟 / 󰃠 / 󰂄), una barra de progreso líquida con acento de color y el porcentaje exacto.
-   - A los 2 segundos de inactividad, se encoge suavemente de regreso a su estado normal.
-6. **Punto Naranja de Privacidad:**
-   - Si alguna aplicación activa el micrófono, se enciende un punto naranja sutil en la esquina superior derecha de la pastilla con un suave resplandor.
-
----
-
-## 🛠️ Compilación
-
-### Dependencias
-```bash
-sudo apt install build-essential cmake ninja-build libwayland-client-dev \
-    wayland-protocols wayland-scanner libcairo2-dev libpango1.0-dev \
-    libgdk-pixbuf-2.0-dev webp-pixbuf-loader libsystemd-dev libpulse-dev libudev-dev
+```
+src/
+├── core/       bucle de eventos, procesos seguros, IPC, Wayland (layer-shell, session-lock, blur), config, inotify
+├── services/   MPRIS, notificaciones, audio (PulseAudio), energía, red, Bluetooth, niri, clima, temporizador,
+│               SQLite, lanzador/calculadora, cava, imágenes/iconos, bandeja del sistema (StatusNotifierItem)
+├── ui/         tema (paleta adaptativa), pintor (Cairo/Pango), regiones de clic, widgets
+├── views/      cada capa y panel de la isla, módulos de la barra, ajustes
+├── suite/      overlays a pantalla completa: fondos (backdrop + selector), capturas, protector, bloqueo
+└── island/     la app: arbitraje de capas, morph, entrada, comandos IPC, barras de las esquinas
 ```
 
-### Compilar e Instalar
+- **Un solo hilo de estado.** Todo pasa por un bucle `poll` (Wayland, D-Bus de sesión y sistema, udev, inotify,
+  niri, IPC, temporizadores). Lo lento (nmcli, descargas, decodificar y escalar imágenes, PAM) va a workers y vuelve
+  al hilo principal.
+- **Procesos sin shell** (`fork/exec` con argumentos separados) y timeouts para los hijos colgados.
+- **Regiones de clic registradas al dibujar**: el hit-testing usa exactamente lo que se ve.
+- **Rendimiento**: cachés de sombras, sprites, miniaturas recortadas y brillos; los overlays se funden desde una
+  instantánea; las barras de las esquinas solo se redibujan cuando cambia lo que muestran. La isla va a 1–3 ms por
+  frame y los overlays a 5–10 ms.
+
+## La isla y la barra
+
+- **Reposo**: reloj centrado y, a los lados, lo que está en marcha (carátula y espectro de audio, temporizador o
+  cronómetro, micrófono en uso, grabación).
+- **Resumen** al posar el puntero: hora, fecha, clima, batería, CPU/RAM, próxima tarea, o el **reproductor** con el
+  color de la carátula. Si hay un temporizador activo aparece en una franja con sus controles.
+- **Módulos de la barra** (Ajustes → Barra e isla): espacios de trabajo, ventana activa, buscador, bandeja del
+  sistema, notificaciones, red, Bluetooth (solo si está activo), volumen y batería (con o sin porcentaje; rayo al
+  cargar). Cada uno se activa o desactiva, se coloca a la izquierda o a la derecha y se ordena.
+- **Distribuciones**: agrupada (cápsulas junto a la isla), extendida (en las esquinas; los paneles caen bajo su
+  botón) o una sola isla. La isla puede flotar o acoplarse al borde (con o sin las laterales).
+- **Aspecto**: altura de las píldoras, redondez, sombras (control circular de dirección, distancia, suavidad y
+  opacidad), cristal translúcido y desenfoque de niri con o sin xray, separación con las ventanas.
+- **Paleta adaptativa**: los colores salen del fondo de pantalla (matugen) y cambian con un fundido.
+
+## Paneles
+
+Centro de control, Wi-Fi (QR para compartir), Bluetooth, sonido tipo pavucontrol (salidas, entradas y apps, mover una
+app a otra salida), clima, calendario y tareas, tablero kanban, notas manuscritas, sistema, sesión (navegable con ← →),
+temporizador y cronómetro con vueltas, **notificaciones** (historial y No molestar: avisos, discreto o total),
+**bandeja del sistema** (iconos de las apps en la barra; clic abre, clic derecho muestra su menú), **portapapeles**
+(lista y vista completa, imágenes incluidas; doble clic pega en la ventana que tenía el foco) y **ajustes** con buscador.
+
+**Lanzador** (`niri-island launcher`): aplicaciones; `=` calculadora, `@` ventanas, `!` temporizador, `>` acciones,
+`'` portapapeles, `?` buscar en la web.
+
+## Suite
+
+- **Fondos de pantalla propios**: la isla pinta el fondo (imágenes; vídeos con `mpvpaper`), lo recuerda y genera la
+  paleta. Selector al estilo skwd-wall: carrusel de slices retroiluminados que sale de la isla, filtros por tipo y
+  color, y aplicación instantánea. Modo **wallhaven**: cuadrícula desplazable, búsqueda, orden, color, contenido
+  +18 opcional (marcado en rojo) y descarga a `~/Imágenes/wallpapers/wallhaven`.
+- **Capturas** con editor (región, formas, flechas, texto, pixelado, contador, deshacer) y **grabación** con pausa,
+  audio del sistema y/o micrófono, VA-API y MP4/MKV/GIF.
+- **Protector de pantalla** "Burbujas" (a lo Windows Vista): salen en fila soplando, se dispersan y rebotan.
+- **Pantalla de bloqueo** propia sobre `ext-session-lock`: fondo difuminado, fecha, reloj grande, avatar
+  (`~/.face`) y contraseña comprobada con PAM. Si la isla se cerrara, la sesión sigue bloqueada.
+
+## Compilar
+
 ```bash
-cd ~/Projects/niri-island
+sudo apt install build-essential cmake ninja-build libwayland-dev wayland-protocols \
+    libcairo2-dev libpango1.0-dev libgdk-pixbuf-2.0-dev libsystemd-dev libpulse-dev libudev-dev \
+    libxkbcommon-dev libsqlite3-dev libcurl4-openssl-dev libqrencode-dev nlohmann-json3-dev libpam0g-dev
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
+sudo cp /etc/pam.d/swaylock /etc/pam.d/niri-island   # servicio PAM del bloqueo (o uno con "auth include login")
 ```
 
-Para instalar el binario globalmente:
-```bash
-sudo cp build/niri-island /usr/local/bin/
-```
+Opcionales en tiempo de ejecución: `nmcli`, `cava`, `cliphist` + `wl-clipboard` + `wtype` (portapapeles),
+`matugen` (paleta), `mpvpaper` (fondos de vídeo), `wf-recorder` + `ffmpeg` (grabación), `grim`, `swayidle`
+(protector e inactividad), `brightnessctl`, `power-profiles-daemon`.
 
----
+## Integración con niri
 
-## 🖥️ Integración con Niri
-
-Para iniciar automáticamente `niri-island` al iniciar sesión en Niri, agrega la siguiente línea a tu archivo `~/.config/niri/cfg/startup.kdl`:
+`startup.kdl`:
 
 ```kdl
-spawn-at-startup "/home/leimsoto/Projects/niri-island/build/niri-island"
+spawn-at-startup "niri-island"
+spawn-at-startup "swayidle" "-w" "timeout" "300" "niri-island screensaver" "resume" "niri-island screensaver stop" "before-sleep" "niri-island lock"
 ```
+
+La isla escribe sus propias reglas en `~/.config/niri/cfg/niri-island.kdl` (fondo detrás de la vista general,
+desenfoque); inclúyelo desde `config.kdl` con `include "cfg/niri-island.kdl"`.
+
+Atajos sugeridos (`binds.kdl`):
+
+```kdl
+Mod+D       { spawn-sh "niri-island launcher"; }
+Mod+Z       { spawn-sh "niri-island cc"; }
+Mod+V       { spawn-sh "niri-island clipboard"; }
+Mod+P       { spawn-sh "niri-island settings"; }
+Mod+W       { spawn-sh "niri-island wallpapers"; }
+Mod+L       { spawn-sh "niri-island lock"; }
+Mod+Shift+E { spawn-sh "niri-island session"; }
+Print       { spawn-sh "niri-island screenshot region"; }
+Mod+Print   { spawn-sh "niri-island record"; }
+XF86MonBrightnessUp   { spawn-sh "niri-island brightness-up"; }
+XF86MonBrightnessDown { spawn-sh "niri-island brightness-down"; }
+```
+
+Todos los paneles se cierran con el mismo atajo que los abre.
+
+## Comandos
+
+`niri-island help` lista todo. Los principales:
+
+```
+paneles   cc launcher [texto] wifi bt sound weather calendar tasks notes note-new stats session clipboard
+          notifications tray timer stopwatch settings [sección] glance close back
+suite     wallpapers | wallpaper [current|next|prev|set <ruta>] | screenshot [region|screen|window] |
+          record [...] | screensaver [stop] | lock [--preview <s>] | lock-state
+media     play-pause next prev
+niveles   volume-up volume-down volume <n> mute mic-mute brightness-up brightness-down
+toggles   toggle-wifi toggle-bluetooth dnd [off|discreet|total|cycle] toggle-airplane power-profile [nombre]
+otros     notify <app> <resumen> <cuerpo> notifications-clear battery tray-list reload status
+```
+
+## Configuración
+
+`~/.config/niri-island/config.json` se crea la primera vez y se recarga solo al guardarlo; casi todo se edita desde
+**Ajustes** (`Mod+P`). Datos en `~/.local/state/niri-island/` (tareas y notas en SQLite, notificaciones, fondo actual)
+y cachés en `~/.cache/niri-island/`.
+
+Depuración: `NIRI_ISLAND_DEBUG=1` imprime fps y ms por frame de la isla; `NIRI_ISLAND_OVLOG=1` los de los overlays.

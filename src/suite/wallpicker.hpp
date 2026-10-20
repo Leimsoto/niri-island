@@ -1,0 +1,136 @@
+#pragma once
+
+#include <functional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "suite/overlay.hpp"
+
+namespace island {
+
+struct Wallpaper {
+    std::string path, name, thumb;  // remote: path is the full image's URL, thumb its preview URL
+    bool video = false;
+    bool remote = false;            // from wallhaven, not downloaded yet
+    std::string resolution;
+    bool mature = false;            // wallhaven sketchy / nsfw
+    float hue = -1, sat = 0, val = 0;  // of the thumbnail's dominant colour
+    int64_t mtime = 0;
+};
+
+// Every wallpaper in the folders, two ways: a carousel of skewed, backlit
+// slices (the default, like skwd-wall) or a honeycomb grid with filters.
+// Applying goes through the island's backdrop (or a configured command).
+class WallPicker : public Overlay {
+public:
+    explicit WallPicker(Wayland& wl) : Overlay(wl) {}
+    ~WallPicker() override;
+    void show();
+    void prewarm();
+    void backdrop_shown(const std::string& path);
+    void dismiss() {
+        if (slices_) slices_close(false);
+        else close();
+    }
+    std::function<void(const std::string& msg)> on_toast;
+    std::function<void(const std::string& path)> on_apply;  // the island's own backdrop
+
+protected:
+    void draw(cairo_t* cr, float w, float h, float dt) override;
+    void key(xkb_keysym_t sym, const std::string& utf8, uint32_t mods) override;
+    void canvas_scroll(float dy) override;
+    void opened() override;
+    void closed() override;
+    bool animating() const override;
+    bool instant_open() const override { return slices_; }  // it animates itself out of the island
+    void canvas_button(Button b, bool pressed, float x, float y) override;
+    const char* name() const override { return "niri-island-wallpapers"; }
+
+private:
+    std::vector<Wallpaper> walls_;
+    std::vector<int> visible_;
+    bool scanning_ = false;
+    int thumbs_left_ = 0;
+    int kind_ = 0;          // 0 all, 1 images, 2 videos
+    int hue_ = -1;          // -1 any, 0..11 hue buckets, 12 greys
+    std::string search_;
+    int sel_ = -1;
+    Spring scroll_{0, 300, 34};
+    float content_h_ = 0;
+    int cols_ = 1;
+    float grid_y0_ = 0, row_step_ = 0, radius_ = 100, top_clip_ = 0, bottom_clip_ = 0, max_scroll_ = 0;
+    double opened_at_ = 0;
+    std::string current_;
+    bool entering_ = false;
+
+    // ── slices (the default style) ──
+    bool slices_ = true;
+    Spring pos_{0, 460, 34};          // carousel position (float index)
+    bool moved_ = false;
+    double open_t0_ = 0, leave_t0_ = 0, filter_t0_ = 0;
+    bool leaving_ = false, left_ = false;
+    float last_w_ = 0, last_h_ = 0;
+    // applying: the chosen slice straightens and grows to fill the screen
+    bool inserting_ = false, inserted_ = false;
+    double ins_t0_ = 0;
+    int ins_index_ = -1;
+    std::string applied_path_;
+    bool backdrop_ready_ = false;
+    // Everything heavy is made off the main thread and kept between openings.
+    cairo_surface_t* big_fit_ = nullptr;
+    std::string big_path_, big_loading_;
+    std::unordered_map<std::string, cairo_surface_t*> slice_cache_, glow_cache_, shape_cache_;
+    std::unordered_map<std::string, bool> pending_;
+    int inflight_ = 0;
+    cairo_surface_t* veil_ = nullptr;
+    std::string veil_key_;
+    void free_caches();
+    cairo_surface_t* slice_image(const std::string& thumb, int w, int h, float sk);  // nullptr until made
+    cairo_surface_t* glow_image(float w, float h, float sk, Color c);
+    cairo_surface_t* shape_image(float w, float h, float sk);
+    void make_async(const std::string& key, std::function<cairo_surface_t*()> work,
+                    std::unordered_map<std::string, cairo_surface_t*>* into);
+    void request_big();
+    void draw_slices(cairo_t* cr, float w, float h, float dt);
+    void draw_filter_bar(cairo_t* cr, float W, float H, float t_in);
+    void key_slices(xkb_keysym_t sym, const std::string& utf8);
+    void slices_move(int delta);
+    void slices_close(bool apply);
+    void set_filter(int kind, int hue);
+
+    // ── wallhaven: browse and download (the carousel shows the results) ──
+    bool remote_ = false;
+    std::vector<Wallpaper> local_walls_;  // the folders' list, kept while browsing
+    int wh_sort_ = 0;
+    int wh_mature_ = 0;                   // 0 SFW, 1 + sketchy, 2 + NSFW (needs an API key)                     // 0 top, 1 latest, 2 random, 3 views
+    int wh_page_ = 0, wh_last_page_ = 1, wh_gen_ = 0;
+    bool wh_loading_ = false, wh_failed_ = false;
+    std::string wh_query_;
+    uint64_t wh_timer_ = 0;
+    std::string wh_seed_;
+    bool downloading_ = false;
+    void set_remote(bool on);
+    void wh_fetch(bool more);
+    void wh_apply(int index);
+    void wh_thumbs(int gen);
+    // wallhaven shows as a scrolling grid of cards
+    int grid_cols_ = 5;
+    float grid_row_h_ = 0, grid_top_ = 0, grid_view_h_ = 0;
+    Spring grid_scroll_{0, 320, 30};
+    double grid_t0_ = 0;
+    void draw_wh_grid(cairo_t* cr, float W, float H, float ie);
+    void grid_reveal(int index);
+    float grid_content_h() const {
+        int rows = (static_cast<int>(visible_.size()) + grid_cols_ - 1) / std::max(1, grid_cols_);
+        return rows * grid_row_h_;
+    }
+
+    void scan();
+    void refilter();
+    void apply(int index, bool stay);
+    void ensure_visible(int pos);
+    std::string current_wallpaper() const;
+};
+
+}  // namespace island

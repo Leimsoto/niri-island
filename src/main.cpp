@@ -1,64 +1,89 @@
-#include "island.hpp"
-#include "ipc.hpp"
+#include <clocale>
 #include <csignal>
+#include <cstring>
 #include <iostream>
-#include <string>
+#include <poll.h>
+#include <sys/signalfd.h>
+#include <unistd.h>
 
-static island::IslandApp* g_app = nullptr;
-
-static void signal_handler(int sig) {
-    (void)sig;
-    std::cout << "\nTerminating niri-island...\n";
-    exit(0);
-}
+#include "core/ipc.hpp"
+#include "core/loop.hpp"
+#include "island/app.hpp"
 
 int main(int argc, char* argv[]) {
-    // If command arguments are provided, act as IPC client to running daemon
+    // Dates and month names in the user's language; numbers stay "C" so
+    // parsing and font strings never meet a decimal comma.
+    setlocale(LC_ALL, "");
+    setlocale(LC_NUMERIC, "C");
+    // With arguments we are a client of the running daemon.
     if (argc > 1) {
-        std::string cmd = argv[1];
-        if (cmd == "--help" || cmd == "-h" || cmd == "help") {
-            std::cout << "Usage: niri-island [command]\n\n"
-                      << "Commands:\n"
-                      << "  toggle-control-center, cc   Toggle the Control Center panel\n"
-                      << "  toggle-media, expand        Toggle expanded music view\n"
-                      << "  play-pause                  Toggle media play/pause\n"
-                      << "  next                        Play next track\n"
-                      << "  prev                        Play previous track\n"
-                      << "  toggle-mute                 Toggle audio mute\n"
-                      << "  toggle-wifi                 Toggle Wi-Fi radio\n"
-                      << "  toggle-bluetooth            Toggle Bluetooth power\n"
-                      << "  toggle-dnd                  Toggle Do Not Disturb\n"
-                      << "  close                       Collapse island to idle\n"
-                      << "  status                      Print current daemon status\n\n"
-                      << "Without arguments: starts the niri-island Wayland daemon.\n";
+        std::string cmd;
+        for (int i = 1; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (i > 1) cmd += ' ';
+            if (arg.find(' ') != std::string::npos) cmd += "\"" + arg + "\"";
+            else cmd += arg;
+        }
+        if (cmd == "--version" || cmd == "-v") {
+            std::cout << "niri-island 2.0\n";
             return 0;
         }
-
         std::string reply;
-        if (island::IpcServer::send_client_command(cmd, reply)) {
-            std::cout << reply;
-            return 0;
-        } else {
-            std::cerr << "niri-island daemon is not running.\n";
+        if (!island::IpcServer::send(cmd, reply)) {
+            if (cmd == "help" || cmd == "--help" || cmd == "-h") {
+                std::cout << "niri-island: run without arguments to start the island; with a command to control it.\n";
+                return 0;
+            }
+            std::cerr << "niri-island is not running.\n";
             return 1;
         }
+        // "lock" returns once the screen really is locked (swayidle's
+        // before-sleep waits for us, so the desktop never shows on resume).
+        if (cmd.rfind("lock", 0) == 0 && reply == "locking") {
+            for (int i = 0; i < 60; ++i) {
+                std::string st;
+                if (!island::IpcServer::send("lock-state", st) || st.rfind("locked", 0) == 0 || st.rfind("unlocked", 0) == 0)
+                    break;
+                usleep(50000);
+            }
+        }
+        std::cout << reply;
+        if (!reply.empty() && reply.back() != '\n') std::cout << '\n';
+        return 0;
     }
 
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
-
-    std::cout << "Starting niri-island (C++20 Dynamic Island for Wayland)...\n";
-
-    island::IslandApp app;
-    g_app = &app;
-
-    if (!app.init()) {
-        std::cerr << "Initialization failed!\n";
+    if (island::IpcServer::instance_running()) {
+        std::cerr << "niri-island is already running.\n";
         return 1;
     }
 
-    std::cout << "niri-island running on Wayland layer-shell.\n";
-    app.run();
+    // Signals arrive as a readable fd: no work inside a signal handler, and
+    // the destructors run (socket removed, notes saved).
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGTERM);
+    sigaddset(&mask, SIGHUP);
+    sigprocmask(SIG_BLOCK, &mask, nullptr);
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGCHLD, SIG_DFL);
+    int sfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
 
+    island::App app;
+    if (!app.init()) {
+        std::cerr << "niri-island: initialisation failed\n";
+        return 1;
+    }
+    island::Loop::get().watch(sfd, POLLIN, [sfd](short) {
+        signalfd_siginfo si;
+        while (read(sfd, &si, sizeof(si)) == sizeof(si)) {
+            if (si.ssi_signo == SIGHUP) continue;  // reserved for reload via IPC
+            island::Loop::get().quit();
+        }
+    });
+    std::cout << "niri-island running\n";
+    app.run();
+    island::Loop::get().unwatch(sfd);
+    close(sfd);
     return 0;
 }

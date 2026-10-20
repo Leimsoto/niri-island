@@ -1,0 +1,286 @@
+#include "suite/backdrop.hpp"
+
+#include <algorithm>
+#include <csignal>
+#include <dirent.h>
+#include <iostream>
+#include <nlohmann/json.hpp>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "core/config.hpp"
+#include "core/loop.hpp"
+#include "services/images.hpp"
+#include "ui/paint.hpp"
+
+namespace island {
+
+using json = nlohmann::json;
+
+namespace {
+
+std::string ext_of(const std::string& p) {
+    size_t dot = p.rfind('.');
+    return dot == std::string::npos ? "" : lower(p.substr(dot + 1));
+}
+bool is_video(const std::string& p) {
+    std::string e = ext_of(p);
+    return e == "mp4" || e == "webm" || e == "mkv" || e == "mov";
+}
+bool is_wallpaper(const std::string& p) {
+    std::string e = ext_of(p);
+    return is_video(p) || e == "jpg" || e == "jpeg" || e == "png" || e == "webp" || e == "bmp" || e == "gif";
+}
+
+void collect(const std::string& dir, std::vector<std::string>& out, int depth = 0) {
+    DIR* d = opendir(dir.c_str());
+    if (!d) return;
+    while (dirent* e = readdir(d)) {
+        std::string name = e->d_name;
+        if (name.empty() || name[0] == '.') continue;
+        std::string full = dir + "/" + name;
+        struct stat st {};
+        if (stat(full.c_str(), &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            if (depth < 2) collect(full, out, depth + 1);
+        } else if (is_wallpaper(full)) {
+            out.push_back(full);
+        }
+    }
+    closedir(d);
+}
+
+std::string hex(Color c) {
+    char b[10];
+    snprintf(b, sizeof(b), "#%02x%02x%02x", static_cast<int>(clamp01(c.r) * 255), static_cast<int>(clamp01(c.g) * 255),
+             static_cast<int>(clamp01(c.b) * 255));
+    return b;
+}
+
+}  // namespace
+
+std::string Backdrop::state_path() { return state_dir() + "/wallpaper.json"; }
+std::string Backdrop::palette_path() { return cache_dir() + "/colors.json"; }
+
+Backdrop::~Backdrop() {
+    stop_video();
+    if (img_) cairo_surface_destroy(img_);
+}
+
+void Backdrop::init() {
+    std::string text, path;
+    if (read_file(state_path(), text)) {
+        json j = json::parse(text, nullptr, false);
+        if (j.is_object()) path = j.value("path", "");
+    }
+    if (path.empty() || !file_exists(path)) {
+        // First run: take over from whatever skwd-wall had.
+        std::string old = home_dir() + "/.cache/skwd-wall-v2/last-wallpaper.json";
+        if (read_file(old, text)) {
+            json j = json::parse(text, nullptr, false);
+            if (j.is_object()) path = j.value("path", "");
+        }
+    }
+    if (!path.empty() && file_exists(path)) set(path);
+}
+
+void Backdrop::ensure_surface() {
+    if (surf_) return;
+    LayerSpec spec;
+    spec.layer = ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND;
+    spec.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+                  ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+    spec.exclusive_zone = -1;
+    spec.keyboard = KeyboardMode::None;
+    spec.name = "niri-island-wallpaper";
+    surf_ = wl_.create_layer(spec);
+    surf_->on_configure = [this] {
+        dirty_ = true;
+    };
+    surf_->on_closed = [this] {
+        // Output gone or changed: build it again shortly.
+        Loop::get().post([this] {
+            surf_.reset();
+            Loop::get().after(0.5, [this] {
+                if (!is_video(path_)) {
+                    ensure_surface();
+                    dirty_ = true;
+                }
+            });
+        });
+    };
+}
+
+void Backdrop::drop_surface() { surf_.reset(); }
+
+void Backdrop::stop_video() {
+    if (video_.pid > 0) {
+        kill(video_.pid, SIGTERM);
+        proc::reap(video_);
+    }
+}
+
+void Backdrop::set(const std::string& path) {
+    if (path.empty()) return;
+    path_ = path;
+    save_state();
+    uint64_t gen = ++gen_;
+    if (is_video(path)) {
+        // mpvpaper paints videos on the background layer by itself.
+        stop_video();
+        if (!proc::has("mpvpaper")) {
+            if (on_error) on_error("Para fondos de vídeo hace falta mpvpaper");
+            return;
+        }
+        video_ = proc::start({"mpvpaper", "-l", "background", "-o", "no-audio --loop-file=inf --panscan=1.0 --hwdec=auto",
+                              "*", path},
+                             cache_dir() + "/mpvpaper.log");
+        // Our surface goes once the video has had a moment to appear.
+        Loop::get().after(0.6, [this, gen, path] {
+            if (gen != gen_) return;
+            drop_surface();
+            if (on_shown) on_shown(path);
+        });
+        make_palette(path, true);
+        return;
+    }
+    auto img = std::make_shared<cairo_surface_t*>(nullptr);
+    Loop::get().async([path, img] { *img = load_image_full(path); },
+                      [this, img, gen, path] {
+                          if (gen != gen_) {
+                              if (*img) cairo_surface_destroy(*img);
+                              return;
+                          }
+                          if (!*img) {
+                              if (on_error) on_error("No se pudo abrir el fondo");
+                              return;
+                          }
+                          if (img_) cairo_surface_destroy(img_);
+                          img_ = *img;
+                          ensure_surface();
+                          dirty_ = true;
+                          // Under our surface by now: the video can stop.
+                          Loop::get().after(0.3, [this, gen] {
+                              if (gen == gen_) stop_video();
+                          });
+                      });
+    make_palette(path, false);
+}
+
+void Backdrop::pump() {
+    if (!surf_ || !dirty_ || !surf_->configured() || surf_->frame_pending()) return;
+    render();
+}
+
+void Backdrop::render() {
+    cairo_t* cr = surf_->begin_frame();
+    if (!cr) return;
+    dirty_ = false;
+    float w = static_cast<float>(surf_->width()), h = static_cast<float>(surf_->height());
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_set_source_rgb(cr, 0.05, 0.05, 0.06);
+    cairo_paint(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+    if (img_) {
+        int iw = cairo_image_surface_get_width(img_), ih = cairo_image_surface_get_height(img_);
+        if (iw > 0 && ih > 0) {
+            double s = std::max(w / iw, h / ih);
+            cairo_save(cr);
+            cairo_translate(cr, (w - iw * s) / 2, (h - ih * s) / 2);
+            cairo_scale(cr, s, s);
+            cairo_set_source_surface(cr, img_, 0, 0);
+            cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+            cairo_paint(cr);
+            cairo_restore(cr);
+        }
+    }
+    surf_->end_frame({});
+    if (on_shown) {
+        std::string shown = path_;
+        Loop::get().post([this, shown] {
+            if (on_shown) on_shown(shown);
+        });
+    }
+}
+
+void Backdrop::save_state() const {
+    make_dirs(state_dir());
+    json j{{"path", path_}, {"thumb", path_}, {"type", is_video(path_) ? "video" : "static"}};
+    write_file_atomic(state_path(), j.dump());
+}
+
+void Backdrop::make_palette(const std::string& path, bool video) {
+    auto out = std::make_shared<bool>(false);
+    Loop::get().async(
+        [path, video, out] {
+            std::string src = path;
+            std::string frame = cache_dir() + "/wallpaper-frame.jpg";
+            if (video) {
+                proc::run({"ffmpeg", "-y", "-v", "error", "-ss", "1", "-i", path, "-frames:v", "1", "-vf", "scale=640:-2", frame},
+                          20000);
+                if (!file_exists(frame)) return;
+                src = frame;
+            }
+            json pal;
+            if (proc::has("matugen")) {
+                // Our own minimal config: the user's may be for another matugen.
+                std::string conf = cache_dir() + "/matugen.toml";
+                if (!file_exists(conf)) write_file_atomic(conf, "[config]\n\n[templates]\n");
+                auto r = proc::run({"matugen", "image", src, "-c", conf, "--json", "hex", "-m", "dark", "-t",
+                                    "scheme-tonal-spot", "--source-color-index", "0", "--dry-run"},
+                                   30000);
+                json j = json::parse(r.out, nullptr, false);
+                if (j.is_object() && j.contains("colors")) {
+                    auto c = [&](const char* k) -> std::string {
+                        auto& v = j["colors"][k];
+                        if (v.is_object() && v.contains("dark")) {
+                            auto& d = v["dark"];
+                            if (d.is_object()) return d.value("color", "");
+                            if (d.is_string()) return d.get<std::string>();
+                        }
+                        return "";
+                    };
+                    pal = {{"primary", c("primary")},
+                           {"primaryText", c("on_primary")},
+                           {"surface", c("surface")},
+                           {"background", c("background")},
+                           {"surfaceText", c("on_surface")},
+                           {"surfaceVariant", c("surface_variant")},
+                           {"surfaceContainer", c("surface_container_highest")},
+                           {"outline", c("outline")},
+                           {"tertiary", c("tertiary")}};
+                    if (pal["primary"].get<std::string>().empty()) pal = json();
+                }
+            }
+            if (pal.is_null()) {
+                // No matugen: the picture's own colour as the accent.
+                cairo_surface_t* s = load_image_blocking(src, 96);
+                if (!s) return;
+                Color c = dominant_color(s);
+                cairo_surface_destroy(s);
+                Color accent = mix(c, Color{1, 1, 1, 1}, 0.45f);
+                pal = {{"primary", hex(accent)}, {"surface", "#141218"}, {"background", "#0f0e12"},
+                       {"surfaceText", "#e8e3ee"}, {"tertiary", hex(mix(accent, Color{0.6f, 0.75f, 1, 1}, 0.4f))}};
+            }
+            make_dirs(cache_dir());
+            write_file_atomic(palette_path(), pal.dump());
+            *out = true;
+        },
+        [this, out] {
+            if (*out && on_palette) on_palette();
+        });
+}
+
+void Backdrop::step(int dir) {
+    std::vector<std::string> all;
+    for (auto& d : config().wallpaper_dirs) collect(expand_home(d), all);
+    if (all.empty()) return;
+    std::sort(all.begin(), all.end());
+    auto it = std::find(all.begin(), all.end(), path_);
+    long i = it == all.end() ? 0 : (it - all.begin()) + dir;
+    long n = static_cast<long>(all.size());
+    i = ((i % n) + n) % n;
+    set(all[static_cast<size_t>(i)]);
+}
+
+}  // namespace island

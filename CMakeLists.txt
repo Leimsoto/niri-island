@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(niri-island CXX C)
+project(niri-island VERSION 2.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,63 +7,56 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
-add_compile_options(-O3 -Wall -Wextra)
 
 find_package(PkgConfig REQUIRED)
+find_package(Threads REQUIRED)
 pkg_check_modules(DEPS REQUIRED
     wayland-client
     wayland-scanner
+    wayland-protocols
     cairo
     pangocairo
     gdk-pixbuf-2.0
     libsystemd
     libpulse
     libudev
+    xkbcommon
+    sqlite3
+    libcurl
+    libqrencode
+    nlohmann_json
 )
 
 pkg_get_variable(WAYLAND_SCANNER wayland-scanner wayland_scanner)
+pkg_get_variable(WL_PROTO_DIR wayland-protocols pkgdatadir)
 
-# Wayland protocol code generation
 set(PROTO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/protocols)
 set(GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${GEN_DIR})
 
-macro(generate_wayland_proto PROTO_NAME XML_PATH)
+set(PROTO_SRCS)
+macro(generate_wayland_proto NAME XML)
     add_custom_command(
-        OUTPUT ${GEN_DIR}/${PROTO_NAME}-protocol.c
-        COMMAND ${WAYLAND_SCANNER} private-code ${XML_PATH} ${GEN_DIR}/${PROTO_NAME}-protocol.c
-        DEPENDS ${XML_PATH}
+        OUTPUT ${GEN_DIR}/${NAME}-protocol.c ${GEN_DIR}/${NAME}-client-protocol.h
+        COMMAND ${WAYLAND_SCANNER} private-code ${XML} ${GEN_DIR}/${NAME}-protocol.c
+        COMMAND ${WAYLAND_SCANNER} client-header ${XML} ${GEN_DIR}/${NAME}-client-protocol.h
+        DEPENDS ${XML}
     )
-    add_custom_command(
-        OUTPUT ${GEN_DIR}/${PROTO_NAME}-client-protocol.h
-        COMMAND ${WAYLAND_SCANNER} client-header ${XML_PATH} ${GEN_DIR}/${PROTO_NAME}-client-protocol.h
-        DEPENDS ${XML_PATH}
-    )
+    list(APPEND PROTO_SRCS ${GEN_DIR}/${NAME}-protocol.c ${GEN_DIR}/${NAME}-client-protocol.h)
 endmacro()
 
 generate_wayland_proto(xdg-shell ${PROTO_DIR}/xdg-shell.xml)
 generate_wayland_proto(wlr-layer-shell-unstable-v1 ${PROTO_DIR}/wlr-layer-shell-unstable-v1.xml)
+generate_wayland_proto(tablet-v2 ${WL_PROTO_DIR}/stable/tablet/tablet-v2.xml)
+generate_wayland_proto(viewporter ${WL_PROTO_DIR}/stable/viewporter/viewporter.xml)
+generate_wayland_proto(cursor-shape-v1 ${WL_PROTO_DIR}/staging/cursor-shape/cursor-shape-v1.xml)
+generate_wayland_proto(ext-background-effect-v1 ${WL_PROTO_DIR}/staging/ext-background-effect/ext-background-effect-v1.xml)
+generate_wayland_proto(ext-session-lock-v1 ${WL_PROTO_DIR}/staging/ext-session-lock/ext-session-lock-v1.xml)
 
-set(PROTO_SRCS
-    ${GEN_DIR}/xdg-shell-protocol.c
-    ${GEN_DIR}/xdg-shell-client-protocol.h
-    ${GEN_DIR}/wlr-layer-shell-unstable-v1-protocol.c
-    ${GEN_DIR}/wlr-layer-shell-unstable-v1-client-protocol.h
-)
+file(GLOB_RECURSE APP_SRCS CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 
-add_executable(niri-island
-    src/main.cpp
-    src/wayland.cpp
-    src/renderer.cpp
-    src/mpris.cpp
-    src/osd.cpp
-    src/notifications.cpp
-    src/island.cpp
-    src/ipc.cpp
-    src/sysmon.cpp
-    src/workspaces.cpp
-    ${PROTO_SRCS}
-)
+add_executable(niri-island ${APP_SRCS} ${PROTO_SRCS})
 
 target_include_directories(niri-island PRIVATE
     ${GEN_DIR}
@@ -71,5 +64,8 @@ target_include_directories(niri-island PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_compile_options(niri-island PRIVATE -Wall -Wextra -O2)
-target_link_libraries(niri-island PRIVATE ${DEPS_LIBRARIES} m rt pthread)
+target_compile_options(niri-island PRIVATE -Wall -Wextra -Wno-missing-field-initializers
+    $<$<CONFIG:Release>:-O2>)
+target_link_libraries(niri-island PRIVATE ${DEPS_LIBRARIES} Threads::Threads m rt pam)
+
+install(TARGETS niri-island RUNTIME DESTINATION bin)
