@@ -223,10 +223,12 @@ static std::pair<float, std::string> perf_value(const SysStats& s, const std::st
 // Rings: as tall as the capsule less a margin, and that margin is also the
 // gap between them and the capsule's padding, so the end ones sit concentric
 // with its rounded ends.
-float App::perf_ring_margin() const { return std::round(bar_h() * 0.17f); }
+// (the capsule's own height: beside a docked island it is a little shorter)
+float App::perf_cap_h() const { return cap_geom(0, 1).h; }
+float App::perf_ring_margin() const { return std::round(perf_cap_h() * 0.17f); }
 
 float App::perf_item_w(const std::string& m) const {
-    if (config().perf_style == "rings") return (bar_h() - 2 * perf_ring_margin()) + perf_ring_margin();
+    if (config().perf_style == "rings") return (perf_cap_h() - 2 * perf_ring_margin()) + perf_ring_margin();
     static const char* widest[] = {"100%", "100°", "999K"};
     const char* w = m == "temp" ? widest[1] : m == "net" ? widest[2] : widest[0];
     return kPerfIcon + 4 + measure(w, {ui(12, "SemiBold")}).w + kPerfGap;
@@ -236,21 +238,38 @@ void App::draw_perf(cairo_t* cr, Ui& u, const Rect& r, float origin) {
     const auto& p = T();
     const auto& st = sysmon_.stats();
     bool rings = config().perf_style == "rings";
-    float margin = perf_ring_margin(), d = r.h - 2 * margin;  // the ring's diameter
-    float x = r.x + (rings ? margin : kPerfPad);
-    for (auto& m : config().perf_metrics) {
-        auto [v, label] = perf_value(st, m);
-        float iw = perf_item_w(m) - kPerfGap;
-        if (rings) {
-            float cx = x + d / 2, stroke = 2.2f;
+    float margin = perf_ring_margin(), d = perf_cap_h() - 2 * margin;  // the ring's diameter
+    if (rings) {
+        float x = r.x + margin;
+        for (auto& m : config().perf_metrics) {
+            auto [v, label] = perf_value(st, m);
+            float cx = x + d / 2, stroke = 1.6f;
             ring(cr, cx, r.cy(), d / 2 - stroke / 2, stroke, std::clamp(v, 0.0f, 1.0f), p.accent, p.text.with_alpha(0.14f));
-            glyph(cr, cx, r.cy(), perf_glyph(m), 10, p.text);
-        } else {
-            glyph(cr, x + kPerfIcon / 2, r.cy(), perf_glyph(m), 13, p.text_dim);
-            float tx = x + kPerfIcon + 4, room = iw - kPerfIcon - 4;
-            text(cr, tx, r.cy() - 8, label, {ui(12, "SemiBold"), p.text, Align::Center, room});
+            glyph(cr, cx, r.cy(), perf_glyph(m), 11, p.text);
+            x += perf_item_w(m);
         }
-        x += perf_item_w(m);
+    } else {
+        // The capsule keeps the width of the widest values (it never jumps);
+        // inside it, icon+value pairs at a fixed spacing, centred as a whole,
+        // so both margins are always alike.
+        Text t{ui(12, "SemiBold"), p.text, Align::Left};
+        std::vector<std::pair<std::string, float>> items;
+        float total = 0;
+        for (auto& m : config().perf_metrics) {
+            std::string label = perf_value(st, m).second;
+            float w = kPerfIcon + 4 + measure(label, t).w;
+            items.push_back({label, w});
+            total += w;
+        }
+        total += kPerfGap * (items.size() - 1);
+        float x = std::round(r.x + (r.w - total) / 2);
+        size_t k = 0;
+        for (auto& m : config().perf_metrics) {
+            glyph(cr, x + kPerfIcon / 2, r.cy(), perf_glyph(m), 13, p.text_dim);
+            text(cr, x + kPerfIcon + 4, r.cy() - 8, items[k].first, t);
+            x += items[k].second + kPerfGap;
+            ++k;
+        }
     }
     uint64_t mid = ID("mod.perf");
     float ax = origin >= 0 ? origin + r.cx() : -1;
