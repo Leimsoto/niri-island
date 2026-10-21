@@ -91,7 +91,13 @@ void Overlay::close() {
 
 void Overlay::destroy_now() {
     if (!surf_) return;
-    surf_.reset();
+    // Often called from inside the surface's own callbacks (a key, a click)
+    // or while drawing it: set it aside, it is freed on the next turn of the
+    // loop, long before a screenshot is taken.
+    std::shared_ptr<LayerSurface> dead(surf_.release());
+    dead->set_keyboard(KeyboardMode::None);
+    dead->set_input_rects({});
+    Loop::get().post([dead] {});
     closing_ = false;
     if (fade_snap_) {
         cairo_surface_destroy(fade_snap_);
@@ -134,6 +140,7 @@ void Overlay::render() {
             cairo_t* sc_cr = cairo_create(fade_snap_);
             draw(sc_cr, w_, h_, dt);
             cairo_destroy(sc_cr);
+            if (!surf_) return;
         } else {
             ui_.abort_frame();  // keep last frame's regions: nothing was drawn
         }
@@ -148,6 +155,7 @@ void Overlay::render() {
         }
         draw(cr, w_, h_, dt);
     }
+    if (!surf_) return;  // the content closed it while drawing (destroy_now)
     surf_->end_frame({});
     static const bool timing = getenv("NIRI_ISLAND_OVLOG") != nullptr;
     if (timing) fprintf(stderr, "[ov %s] %.1f ms\n", name(), (now_mono() - now) * 1000);
