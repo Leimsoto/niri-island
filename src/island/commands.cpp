@@ -183,6 +183,14 @@ std::string App::command(const std::string& line) {
         wallpicker_.inject_click(std::stof(a[1]), std::stof(a[2]));
         return "ok";
     }
+    if (c == "debug-idle" && a.size() >= 2) {
+        // the screensaver's idle watch, in seconds, to test it (setup_idle()
+        // puts the configured one back on the next settings change)
+        idle_key_.clear();
+        idle_saver_ = wl_.watch_idle(static_cast<uint32_t>(std::atoi(a[1].c_str())) * 1000u,
+                                     [this] { start_screensaver(); }, [this] { stop_screensaver(); });
+        return idle_saver_ ? "ok" : "no idle notifier";
+    }
     if (c == "debug-settings-search") {
         std::string q;
         for (size_t i = 1; i < a.size(); ++i) q += (i > 1 ? " " : "") + a[i];

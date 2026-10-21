@@ -121,6 +121,11 @@ void Config::load() {
         get(*m, "settings", c.cmd_settings);
         get(*m, "wallpaper_picker_style", c.wallpaper_picker_style);
         get(*m, "wallpaper_pause_covered", c.wallpaper_pause_covered);
+        get(*m, "screensaver", c.screensaver);
+        get(*m, "screensaver_minutes", c.screensaver_minutes);
+        get(*m, "screensaver_lock_minutes", c.screensaver_lock_minutes);
+        get(*m, "screensaver_bubbles", c.screensaver_bubbles);
+        get(*m, "screensaver_speed", c.screensaver_speed);
         get(*m, "terminal", c.terminal);
     }
     if (auto su = j.find("suite"); su != j.end() && su->is_object()) {
@@ -198,6 +203,11 @@ std::string Config::to_json() const {
                      {"settings", cmd_settings},
                      {"wallpaper_picker_style", wallpaper_picker_style},
                      {"wallpaper_pause_covered", wallpaper_pause_covered},
+                     {"screensaver", screensaver},
+                     {"screensaver_minutes", screensaver_minutes},
+                     {"screensaver_lock_minutes", screensaver_lock_minutes},
+                     {"screensaver_bubbles", screensaver_bubbles},
+                     {"screensaver_speed", screensaver_speed},
                      {"terminal", terminal}};
     json mods = json::array();
     for (auto& m : modules) mods.push_back({{"id", m.id}, {"side", m.side}, {"on", m.on}});

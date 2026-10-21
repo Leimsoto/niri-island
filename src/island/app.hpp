@@ -138,6 +138,11 @@ private:
     // one more for every other screen; they start and stop together
     std::vector<std::unique_ptr<Screensaver>> savers_;
     void start_screensaver();
+    // Idle (from the compositor): the screensaver after N minutes, the lock
+    // after M if set. Rebuilt when those settings change.
+    std::unique_ptr<IdleWatch> idle_saver_, idle_lock_;
+    std::string idle_key_;
+    void setup_idle();
     void stop_screensaver();
     std::vector<Overlay*> screensavers();
     island::Lock lock_{wl_};

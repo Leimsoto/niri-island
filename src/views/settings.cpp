@@ -881,6 +881,53 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
                                                        }}});
 
     // Sistema
+    // The bubbles screensaver
+    toggle(6, "Protector de pantalla", "Protector de pantalla", "Burbujas cuando no usas el equipo un rato",
+           [&] { return cfg.screensaver; },
+           [&, save](bool v) {
+               cfg.screensaver = v;
+               save();
+           });
+    slider(6, "Protector de pantalla", "Esperar", "Tiempo sin usar el equipo antes de que aparezca", 1, 30,
+           [&] { return static_cast<float>(cfg.screensaver_minutes); },
+           [&, save](float v) {
+               cfg.screensaver_minutes = static_cast<int>(std::lround(v));
+               save();
+           },
+           [](float v) { return std::to_string(static_cast<int>(std::lround(v))) + " min"; });
+    slider(6, "Protector de pantalla", "Bloquear también", "Sin usar el equipo este tiempo, se bloquea (0 = nunca)", 0, 60,
+           [&] { return static_cast<float>(cfg.screensaver_lock_minutes); },
+           [&, save](float v) {
+               cfg.screensaver_lock_minutes = static_cast<int>(std::lround(v));
+               save();
+           },
+           [](float v) {
+               int m = static_cast<int>(std::lround(v));
+               return m == 0 ? std::string("Nunca") : std::to_string(m) + " min";
+           });
+    choice(6, "Protector de pantalla", "Burbujas", "Cuántas salen a la vez", {"Pocas", "Normal", "Muchas"},
+           [&] { return std::clamp(cfg.screensaver_bubbles, 0, 2); },
+           [&, save](int i) {
+               cfg.screensaver_bubbles = i;
+               save();
+           });
+    slider(6, "Protector de pantalla", "Velocidad", "De flotar despacio a ir con prisa", 0.5f, 2.0f,
+           [&] { return cfg.screensaver_speed; },
+           [&, save](float v) {
+               cfg.screensaver_speed = std::round(v * 10) / 10;
+               save();
+           },
+           [](float v) {
+               char b[16];
+               snprintf(b, sizeof(b), "×%.1f", v);
+               return std::string(b);
+           });
+    buttons(6, "Protector de pantalla", "Probarlo", "Mueve el ratón o pulsa una tecla para salir",
+            {{"Probar ahora", [this] {
+                  settings_.close_now();
+                  loop_.after(0.4, [this] { start_screensaver(); });
+              }}});
+
     field(6, "Aplicaciones", "Terminal", "", "term", [&] { return cfg.terminal; },
           [&, save](const std::string& v) {
               cfg.terminal = v;

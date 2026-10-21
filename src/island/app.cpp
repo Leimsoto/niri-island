@@ -143,6 +143,7 @@ bool App::init() {
         Theme::get().load();
         ++config_gen_;
         update_wallpaper_pause();
+        setup_idle();
         apply_layout();
         request();
     });
@@ -162,6 +163,7 @@ bool App::init() {
         tick_second();
         loop_.after(1.0, [this] { tick_second(); }, 1.0);
     });
+    setup_idle();
     return true;
 }
 
@@ -814,6 +816,25 @@ std::vector<Overlay*> App::screensavers() {
     std::vector<Overlay*> v{&screensaver_};
     for (auto& s : savers_) v.push_back(s.get());
     return v;
+}
+
+void App::setup_idle() {
+    const auto& c = config();
+    std::string key = std::to_string(c.screensaver) + "/" + std::to_string(c.screensaver_minutes) + "/" +
+                      std::to_string(c.screensaver_lock_minutes);
+    if (key == idle_key_) return;
+    idle_key_ = key;
+    idle_saver_.reset();
+    idle_lock_.reset();
+    if (c.screensaver && c.screensaver_minutes > 0)
+        idle_saver_ = wl_.watch_idle(static_cast<uint32_t>(c.screensaver_minutes) * 60000u,
+                                     [this] {
+                                         if (!lock_.active()) start_screensaver();
+                                     },
+                                     [this] { stop_screensaver(); });
+    if (c.screensaver_lock_minutes > 0)
+        idle_lock_ = wl_.watch_idle(static_cast<uint32_t>(c.screensaver_lock_minutes) * 60000u,
+                                    [this] { lock_screen(); }, nullptr);
 }
 
 void App::start_screensaver() {

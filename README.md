@@ -75,7 +75,9 @@ temporizador y cronómetro con vueltas, **notificaciones** (historial y No moles
   que sale del borde inferior pregunta qué hacer; editor con región, formas, flechas, texto, pixelado, contador y
   deshacer. Mientras dura, el teclado es solo de la captura. **Grabación** con pausa,
   audio del sistema y/o micrófono, VA-API y MP4/MKV/GIF.
-- **Protector de pantalla** "Burbujas" (a lo Windows Vista): salen en fila soplando, se dispersan y rebotan.
+- **Protector de pantalla** "Burbujas" (a lo Windows Vista): salen en fila soplando, se dispersan y rebotan. La
+  isla lo lanza sola tras unos minutos sin usar el equipo (respeta vídeos y llamadas que lo impiden); en Ajustes →
+  Sistema: espera, bloquear también tras un tiempo, cantidad y velocidad de las burbujas, y probarlo.
 - **Pantalla de bloqueo** propia sobre `ext-session-lock`: fondo difuminado, fecha, reloj grande, avatar
   (`~/.face`) y contraseña comprobada con PAM. Si la isla se cerrara, la sesión sigue bloqueada.
 
@@ -100,7 +102,7 @@ Opcionales en tiempo de ejecución: `nmcli`, `cava`, `cliphist` + `wl-clipboard`
 
 ```kdl
 spawn-at-startup "niri-island"
-spawn-at-startup "swayidle" "-w" "timeout" "300" "niri-island screensaver" "resume" "niri-island screensaver stop" "before-sleep" "niri-island lock"
+spawn-at-startup "swayidle" "-w" "before-sleep" "niri-island lock"   # bloquear antes de suspender
 ```
 
 La isla escribe sus propias reglas en `~/.config/niri/cfg/niri-island.kdl` (fondo detrás de la vista general,

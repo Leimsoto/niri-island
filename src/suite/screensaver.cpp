@@ -3,6 +3,7 @@
 #include <cmath>
 #include <random>
 
+#include "core/config.hpp"
 #include "core/loop.hpp"
 
 namespace island {
@@ -58,7 +59,9 @@ void Screensaver::spawn(float w, float h) {
     std::uniform_real_distribution<float> U(0, 1);
     // all the same size, large, like the original
     float base = std::round(std::min(w, h) * 0.068f);
-    int n = std::clamp(static_cast<int>(w * h / (base * base * 12.0f)), 10, 40);
+    static const float density[3] = {0.55f, 1.0f, 1.6f};
+    float dens = density[std::clamp(config().screensaver_bubbles, 0, 2)];
+    int n = std::clamp(static_cast<int>(w * h / (base * base * 12.0f) * dens), 6, 64);
     // Blown out of one spot, like a breath into a bubble wand: a fan of
     // bubbles, fast at first, slowing to a drift.
     // from one edge (any of the four), the line heads across the screen
@@ -154,6 +157,7 @@ cairo_surface_t* Screensaver::sprite(float r, float hue) {
 }
 
 void Screensaver::draw(cairo_t* cr, float w, float h, float dt) {
+    dt *= std::clamp(config().screensaver_speed, 0.3f, 3.0f);  // the setting: slower or livelier
     if (w_ != w || h_ != h || bubbles_.empty()) {
         w_ = w;
         h_ = h;

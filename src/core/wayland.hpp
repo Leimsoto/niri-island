@@ -11,6 +11,7 @@
 #include "core/util.hpp"
 #include "cursor-shape-v1-client-protocol.h"
 #include "ext-background-effect-v1-client-protocol.h"
+#include "ext-idle-notify-v1-client-protocol.h"
 #include "ext-session-lock-v1-client-protocol.h"
 #include "viewporter-client-protocol.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
@@ -153,6 +154,19 @@ private:
     friend void sub_frame_done(void*, wl_callback*, uint32_t);
 };
 
+// "Idle for this long" from the compositor (ext-idle-notify): idled when the
+// time passes without input, resumed at the next input. Inhibitors (a video
+// playing full screen, a call) hold it back.
+class IdleWatch {
+public:
+    IdleWatch(ext_idle_notification_v1* n, std::function<void()> idled, std::function<void()> resumed);
+    ~IdleWatch();
+    std::function<void()> idled, resumed;
+
+private:
+    ext_idle_notification_v1* n_;
+};
+
 // Globals, the seat and the event pump. Input goes to whichever surface has
 // pointer or keyboard focus.
 class Wayland {
@@ -164,6 +178,8 @@ public:
     std::unique_ptr<LayerSurface> create_layer(const LayerSpec& spec);
     // A lock-screen surface on one output (ext-session-lock).
     std::unique_ptr<LayerSurface> create_lock_surface(ext_session_lock_v1* lock, wl_output* output);
+    // Null when the compositor has no idle notifier.
+    std::unique_ptr<IdleWatch> watch_idle(uint32_t ms, std::function<void()> idled, std::function<void()> resumed);
     bool can_lock() const { return lock_mgr_ != nullptr; }
     const std::vector<wl_output*>& outputs() const { return outputs_; }
     // A screen plugged in or out (after start-up).
@@ -186,6 +202,7 @@ public:
     wl_registry* registry_ = nullptr;
     wl_compositor* compositor_ = nullptr;
     wl_subcompositor* subcompositor_ = nullptr;
+    ext_idle_notifier_v1* idle_notifier_ = nullptr;
     uint32_t compositor_version_ = 0;
     wl_shm* shm_ = nullptr;
     wl_seat* seat_ = nullptr;

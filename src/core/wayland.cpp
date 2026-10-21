@@ -109,6 +109,32 @@ void LayerSurface::destroy_buffers() {
     current_ = -1;
 }
 
+// ── idle ─────────────────────────────────────────────────────────────────
+
+static void idle_idled(void* data, ext_idle_notification_v1*) {
+    auto* w = static_cast<IdleWatch*>(data);
+    if (w->idled) w->idled();
+}
+static void idle_resumed(void* data, ext_idle_notification_v1*) {
+    auto* w = static_cast<IdleWatch*>(data);
+    if (w->resumed) w->resumed();
+}
+static const ext_idle_notification_v1_listener idle_listener = {.idled = idle_idled, .resumed = idle_resumed};
+
+IdleWatch::IdleWatch(ext_idle_notification_v1* n, std::function<void()> i, std::function<void()> r)
+    : idled(std::move(i)), resumed(std::move(r)), n_(n) {
+    ext_idle_notification_v1_add_listener(n_, &idle_listener, this);
+}
+IdleWatch::~IdleWatch() {
+    if (n_) ext_idle_notification_v1_destroy(n_);
+}
+
+std::unique_ptr<IdleWatch> Wayland::watch_idle(uint32_t ms, std::function<void()> idled, std::function<void()> resumed) {
+    if (!idle_notifier_ || !seat_ || ms == 0) return nullptr;
+    auto* n = ext_idle_notifier_v1_get_idle_notification(idle_notifier_, ms, seat_);
+    return std::make_unique<IdleWatch>(n, std::move(idled), std::move(resumed));
+}
+
 // ── subsurface ───────────────────────────────────────────────────────────
 
 void sub_frame_done(void* data, wl_callback* cb, uint32_t) {
@@ -574,7 +600,9 @@ static const wl_seat_listener seat_listener = {.capabilities = seat_caps, .name 
 
 static void reg_global(void* data, wl_registry* reg, uint32_t id, const char* iface, uint32_t ver) {
     auto* self = static_cast<Wayland*>(data);
-    if (strcmp(iface, wl_subcompositor_interface.name) == 0) {
+    if (strcmp(iface, ext_idle_notifier_v1_interface.name) == 0) {
+        self->idle_notifier_ = static_cast<ext_idle_notifier_v1*>(wl_registry_bind(reg, id, &ext_idle_notifier_v1_interface, 1));
+    } else if (strcmp(iface, wl_subcompositor_interface.name) == 0) {
         self->subcompositor_ = static_cast<wl_subcompositor*>(wl_registry_bind(reg, id, &wl_subcompositor_interface, 1));
     } else if (strcmp(iface, wl_compositor_interface.name) == 0) {
         self->compositor_version_ = std::min(ver, 6u);

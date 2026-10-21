@@ -69,7 +69,13 @@ struct Config {
     std::string cmd_wallpaper_next = "internal";      // "internal" = the island's own backdrop
     std::string cmd_wallpaper_picker = "internal";   // "internal" = niri-island's own picker
     std::string cmd_wallpaper_apply = "internal";     // or a command with {path}
-    bool wallpaper_pause_covered = true;            // video wallpapers pause while a window covers the screen
+    bool wallpaper_pause_covered = true;
+    // The bubbles screensaver, started by the island itself when idle.
+    bool screensaver = true;
+    int screensaver_minutes = 5;
+    int screensaver_lock_minutes = 0;        // idle this long: lock too (0 = never)
+    int screensaver_bubbles = 1;             // 0 few, 1 normal, 2 many
+    float screensaver_speed = 1.0f;          // 0.5 .. 2            // video wallpapers pause while a window covers the screen
     std::string wallpaper_picker_style = "slices";   // slices (carousel, like skwd-wall) | grid (honeycomb)
 
     // Suite

@@ -51,6 +51,7 @@ generate_wayland_proto(tablet-v2 ${WL_PROTO_DIR}/stable/tablet/tablet-v2.xml)
 generate_wayland_proto(viewporter ${WL_PROTO_DIR}/stable/viewporter/viewporter.xml)
 generate_wayland_proto(cursor-shape-v1 ${WL_PROTO_DIR}/staging/cursor-shape/cursor-shape-v1.xml)
 generate_wayland_proto(ext-background-effect-v1 ${WL_PROTO_DIR}/staging/ext-background-effect/ext-background-effect-v1.xml)
+generate_wayland_proto(ext-idle-notify-v1 ${WL_PROTO_DIR}/staging/ext-idle-notify/ext-idle-notify-v1.xml)
 generate_wayland_proto(ext-session-lock-v1 ${WL_PROTO_DIR}/staging/ext-session-lock/ext-session-lock-v1.xml)
 
 file(GLOB_RECURSE CORE_SRCS CONFIGURE_DEPENDS
