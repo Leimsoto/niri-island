@@ -453,7 +453,9 @@ View App::decide() const {
     if (!nav_.empty()) return nav_.back();
     if (notifs_.current()) return View::Notification;
     if (osd_.until > now_mono()) return View::Osd;
-    if (summary_) return mpris_.info().active ? View::Music : View::Glance;
+    // While recording, the look at the island is its controls: the player
+    // or the glance would cover the stop button.
+    if (summary_) return recorder_.active() ? View::Record : mpris_.info().active ? View::Music : View::Glance;
     return View::Rest;
 }
 
