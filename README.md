@@ -22,6 +22,7 @@ src/
 ├── views/      cada capa y panel de la isla, módulos de la barra, ajustes
 ├── suite/      overlays a pantalla completa: fondos (backdrop + selector), capturas, protector, bloqueo
 └── island/     la app: arbitraje de capas, morph, entrada, comandos IPC, barras de las esquinas
+tests/          tests unitarios (ctest), prueba de humo y un reproductor MPRIS falso para pruebas
 ```
 
 - **Un solo hilo de estado.** Todo pasa por un bucle `poll` (Wayland, D-Bus de sesión y sistema, udev, inotify,
@@ -30,8 +31,10 @@ src/
 - **Procesos sin shell** (`fork/exec` con argumentos separados) y timeouts para los hijos colgados.
 - **Regiones de clic registradas al dibujar**: el hit-testing usa exactamente lo que se ve.
 - **Rendimiento**: cachés de sombras, sprites, miniaturas recortadas y brillos; los overlays se funden desde una
-  instantánea; las barras de las esquinas solo se redibujan cuando cambia lo que muestran. La isla va a 1–3 ms por
-  frame y los overlays a 5–10 ms.
+  instantánea; las barras de las esquinas solo se redibujan cuando cambia lo que muestran; el espectro de audio va
+  en su propia subsuperficie, así que con música la isla en reposo no se redibuja (~2 % de un núcleo). La isla va a
+  1–3 ms por frame y los overlays a 5–13 ms.
+- **Varias pantallas**: el fondo y el protector cubren cada una; la captura y los paneles usan la enfocada.
 
 ## La isla y la barra
 
@@ -113,8 +116,9 @@ Mod+P       { spawn-sh "niri-island settings"; }
 Mod+W       { spawn-sh "niri-island wallpapers"; }
 Mod+L       { spawn-sh "niri-island lock"; }
 Mod+Shift+E { spawn-sh "niri-island session"; }
+Mod+S       { spawn-sh "niri-island capture"; }          # congela la pantalla y abre la burbuja
 Print       { spawn-sh "niri-island screenshot region"; }
-Mod+Print   { spawn-sh "niri-island record"; }
+Mod+Print   { spawn-sh "niri-island capture record"; }
 XF86MonBrightnessUp   { spawn-sh "niri-island brightness-up"; }
 XF86MonBrightnessDown { spawn-sh "niri-island brightness-down"; }
 ```
@@ -128,8 +132,8 @@ Todos los paneles se cierran con el mismo atajo que los abre.
 ```
 paneles   cc launcher [texto] wifi bt sound weather calendar tasks notes note-new stats session clipboard
           notifications tray timer stopwatch settings [sección] glance close back
-suite     wallpapers | wallpaper [current|next|prev|set <ruta>] | screenshot [region|screen|window] |
-          record [...] | screensaver [stop] | lock [--preview <s>] | lock-state
+suite     wallpapers [wallhaven] | wallpaper [current|next|prev|set <ruta>] | capture [record] |
+          screenshot [region|screen|window] | record [...] | screensaver [stop] | lock [--preview <s>] | lock-state
 media     play-pause next prev
 niveles   volume-up volume-down volume <n> mute mic-mute brightness-up brightness-down
 toggles   toggle-wifi toggle-bluetooth dnd [off|discreet|total|cycle] toggle-airplane power-profile [nombre]
@@ -143,3 +147,29 @@ otros     notify <app> <resumen> <cuerpo> notifications-clear battery tray-list 
 y cachés en `~/.cache/niri-island/`.
 
 Depuración: `NIRI_ISLAND_DEBUG=1` imprime fps y ms por frame de la isla; `NIRI_ISLAND_OVLOG=1` los de los overlays.
+
+## Tests
+
+```bash
+cmake --build build && ctest --test-dir build --output-on-failure   # tests unitarios
+tests/smoke.sh                         # con la isla en marcha: abre y cierra todo, comprueba que sigue viva
+python3 tests/fake_mpris.py &          # un reproductor falso "reproduciendo", para probar la música
+```
+
+Los unitarios cubren utilidades, la calculadora, los nombres de la bandeja, la configuración (valores por
+defecto, módulos nuevos, guardado, JSON roto) y el cierre con una descarga en curso. La prueba de humo no guarda
+ni cambia nada. Para buscar errores de memoria, una compilación con sanitizers:
+
+```bash
+cmake -B build-asan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+cmake --build build-asan && build-asan/niri-island-tests
+```
+
+Las comprobaciones con la isla en marcha se hacen con sus comandos de depuración por IPC (`debug-click`,
+`debug-move`, `debug-settings-click`, `debug-settings-scroll`, `debug-settings-search`, `debug-capbar-click`…),
+no con pulsaciones simuladas, que irían a la ventana que tenga el foco.
+
+## Licencia
+
+GPL-3.0-or-later. Puedes usarlo, modificarlo y redistribuirlo; si distribuyes una versión modificada, debe
+seguir siendo libre bajo la misma licencia y con su código fuente. El texto completo está en [`LICENSE`](LICENSE).
