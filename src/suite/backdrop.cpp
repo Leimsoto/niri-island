@@ -1,5 +1,9 @@
 #include "suite/backdrop.hpp"
 
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <csignal>
 #include <dirent.h>
@@ -120,6 +124,33 @@ void Backdrop::stop_video() {
     }
 }
 
+// mpvpaper's mpv listens here, so the video can be paused and resumed.
+static std::string mpv_socket() {
+    const char* rt = getenv("XDG_RUNTIME_DIR");
+    return std::string(rt ? rt : "/tmp") + "/niri-island-mpv.sock";
+}
+
+void Backdrop::send_mpv(const std::string& cmd) {
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (fd < 0) return;
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::string path = mpv_socket();
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path.c_str());
+    if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
+        std::string line = cmd + "\n";
+        ssize_t r = write(fd, line.data(), line.size());
+        (void)r;
+    }
+    close(fd);
+}
+
+void Backdrop::set_paused(bool paused) {
+    if (paused == paused_) return;
+    paused_ = paused;
+    if (video_.pid > 0) send_mpv(std::string(R"({"command":["set_property","pause",)") + (paused ? "true" : "false") + "]}");
+}
+
 void Backdrop::set(const std::string& path) {
     if (path.empty()) return;
     path_ = path;
@@ -128,11 +159,12 @@ void Backdrop::set(const std::string& path) {
     if (is_video(path)) {
         // mpvpaper paints videos on the background layer by itself.
         stop_video();
+        paused_ = false;
         if (!proc::has("mpvpaper")) {
             if (on_error) on_error("Para fondos de vídeo hace falta mpvpaper");
             return;
         }
-        video_ = proc::start({"mpvpaper", "-l", "background", "-o", "no-audio --loop-file=inf --panscan=1.0 --hwdec=auto",
+        video_ = proc::start({"mpvpaper", "-l", "background", "-o", "no-audio --loop-file=inf --panscan=1.0 --hwdec=auto --input-ipc-server=" + mpv_socket(),
                               "*", path},
                              cache_dir() + "/mpvpaper.log");
         // Our surface goes once the video has had a moment to appear.

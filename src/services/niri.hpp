@@ -22,6 +22,8 @@ struct Window {
     std::string title, app_id;
     uint64_t workspace = 0;
     bool focused = false, urgent = false;
+    bool floating = false;
+    float tile_w = 0, tile_h = 0;  // its size in the layout (logical px)
 };
 
 // niri's IPC: one long-lived EventStream socket for state, a short-lived
@@ -37,6 +39,9 @@ public:
     const std::map<uint64_t, Window>& windows() const { return windows_; }
     const Window* focused_window() const;
     bool overview_open() const { return overview_; }
+    // A window (the one in focus of a workspace on screen) covers most of a
+    // w×h output: fullscreen or maximized. For pausing video wallpapers.
+    bool screen_covered(float w, float h) const;
     bool connected() const { return fd_ >= 0; }
 
     void focus_workspace(uint64_t id);

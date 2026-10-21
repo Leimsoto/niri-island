@@ -24,6 +24,7 @@ public:
     void step(int dir);                   // next / previous in the wallpaper folders
     const std::string& current() const { return path_; }
     void pump();                          // draws when needed (from the loop)
+    void set_paused(bool paused);         // a video wallpaper stops while hidden
 
     static std::string state_path();      // {"path": …}
     static std::string palette_path();    // colors.json for the theme
@@ -44,6 +45,8 @@ private:
     void ensure_surface();
     void drop_surface();
     void stop_video();
+    bool paused_ = false;
+    void send_mpv(const std::string& cmd);
     void render();
     void save_state() const;
     void make_palette(const std::string& path, bool video);

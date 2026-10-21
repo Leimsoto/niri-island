@@ -112,6 +112,8 @@ private:
     Backdrop backdrop_{wl_};
     Screensaver screensaver_{wl_};
     island::Lock lock_{wl_};
+    float screen_w_ = 0, screen_h_ = 0;  // the output's logical size (from niri)
+    void update_wallpaper_pause();
     void lock_screen(double preview = 0);
     void wallpaper_next(int dir = 1);
     int set_section_ = 0;

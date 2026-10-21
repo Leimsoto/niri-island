@@ -129,6 +129,15 @@ static Workspace parse_ws(const json& w) {
     return ws;
 }
 
+static void parse_layout(Window& win, const json& l) {
+    if (!l.is_object()) return;
+    auto t = l.find("tile_size");
+    if (t != l.end() && t->is_array() && t->size() == 2 && (*t)[0].is_number()) {
+        win.tile_w = (*t)[0].get<float>();
+        win.tile_h = (*t)[1].get<float>();
+    }
+}
+
 static Window parse_win(const json& w) {
     Window win;
     win.id = w.value("id", (uint64_t)0);
@@ -137,6 +146,8 @@ static Window parse_win(const json& w) {
     if (w.contains("workspace_id") && w["workspace_id"].is_number()) win.workspace = w["workspace_id"].get<uint64_t>();
     win.focused = w.value("is_focused", false);
     win.urgent = w.value("is_urgent", false);
+    win.floating = w.value("is_floating", false);
+    parse_layout(win, w.value("layout", json::object()));
     return win;
 }
 
@@ -184,6 +195,12 @@ void Niri::handle(const std::string& line) {
                 for (auto& [id, w] : windows_) w.focused = false;
             windows_[win.id] = win;
         }
+    } else if (key == "WindowLayoutsChanged") {
+        for (auto& ch : v.value("changes", json::array()))
+            if (ch.is_array() && ch.size() == 2 && ch[0].is_number()) {
+                auto it = windows_.find(ch[0].get<uint64_t>());
+                if (it != windows_.end()) parse_layout(it->second, ch[1]);
+            }
     } else if (key == "WindowClosed") {
         windows_.erase(v.value("id", (uint64_t)0));
     } else if (key == "WindowFocusChanged") {
@@ -213,6 +230,18 @@ int Niri::active_slot() const {
     for (size_t i = 0; i < list.size(); ++i)
         if (list[i].active) return static_cast<int>(i);
     return 0;
+}
+
+bool Niri::screen_covered(float w, float h) const {
+    if (overview_ || w <= 0 || h <= 0) return false;
+    for (auto& [id, ws] : workspaces_) {
+        if (!ws.active || !ws.active_window) continue;
+        auto it = windows_.find(ws.active_window);
+        if (it == windows_.end()) continue;
+        const Window& win = it->second;
+        if (win.tile_w >= w * 0.95f && win.tile_h >= h * 0.85f) return true;
+    }
+    return false;
 }
 
 const Window* Niri::focused_window() const {

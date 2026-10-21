@@ -64,7 +64,8 @@ temporizador y cronómetro con vueltas, **notificaciones** (historial y No moles
 - **Fondos de pantalla propios**: la isla pinta el fondo (imágenes; vídeos con `mpvpaper`), lo recuerda y genera la
   paleta. Selector al estilo skwd-wall: carrusel de slices retroiluminados que sale de la isla, filtros por tipo y
   color, y aplicación instantánea. Modo **wallhaven**: cuadrícula desplazable, búsqueda, orden, color, contenido
-  +18 opcional (marcado en rojo) y descarga a `~/Imágenes/wallpapers/wallhaven`.
+  +18 opcional (marcado en rojo) y descarga a `~/Imágenes/wallpapers/wallhaven`. Los fondos de vídeo **se pausan**
+  mientras una ventana ocupa la pantalla (completa o maximizada), como en skwd-wall; se desactiva en Ajustes → Fondos.
 - **Capturas** con editor (región, formas, flechas, texto, pixelado, contador, deshacer) y **grabación** con pausa,
   audio del sistema y/o micrófono, VA-API y MP4/MKV/GIF.
 - **Protector de pantalla** "Burbujas" (a lo Windows Vista): salen en fila soplando, se dispersan y rebotan.
@@ -87,7 +88,10 @@ sudo ./greeter/install.sh --disable        # volver al greeter anterior
 ```
 
 Corre dentro de un niri mínimo (`/etc/niri-island/greeter.kdl`): al iniciar la sesión el greeter termina, niri se
-cierra y greetd lanza la sesión elegida.
+cierra y greetd lanza la sesión elegida. **Red de seguridad:** si el greeter o niri fallan sin iniciar sesión, se lanza
+el greeter que había antes (guardado en `/etc/niri-island/greeter-fallback`); registro en
+`/tmp/niri-island-greeter-<uid>/log`. El instalador copia también tus fuentes (Inter y la de iconos) a
+`/usr/local/share/fonts/niri-island`, porque el usuario del greeter no ve las de tu carpeta personal.
 
 ## Compilar
 

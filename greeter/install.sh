@@ -49,6 +49,13 @@ if [ -n "$user" ]; then
         ?*) [ -f "$wp" ] && install -m644 "$wp" /etc/niri-island/greeter-wallpaper.jpg ;;
     esac
     [ -f "$home/.cache/niri-island/colors.json" ] && install -m644 "$home/.cache/niri-island/colors.json" /etc/niri-island/greeter-colors.json
+    # the fonts it draws with (text and icons), where the greeter's user sees them
+    fonts=/usr/local/share/fonts/niri-island
+    mkdir -p "$fonts"
+    for f in "$home"/.local/share/fonts/Inter/Inter.ttc "$home"/.local/share/fonts/JetBrainsMono/JetBrainsMonoNerdFont-*.ttf; do
+        [ -f "$f" ] && install -m644 "$f" "$fonts/"
+    done
+    command -v fc-cache >/dev/null && fc-cache -f "$fonts" >/dev/null 2>&1 || true
     # their avatar, where the greeter (another user) can read it
     if [ -f "$home/.face" ]; then
         install -Dm644 "$home/.face" "/var/lib/AccountsService/icons/$user"
@@ -58,6 +65,12 @@ echo "Instalado: /usr/local/bin/niri-island-greeter y /etc/niri-island/"
 
 if [ "${1:-}" = "--enable" ]; then
     [ -f "$backup" ] || cp "$conf" "$backup"
+    # the greeter in use now becomes the fallback if ours ever fails
+    prev="$(awk '/^\[default_session\]/{s=1;next} /^\[/{s=0} s && /^command[ \t]*=/{sub(/^command[ \t]*=[ \t]*/,""); gsub(/"/,""); print; exit}' "$backup")"
+    case "$prev" in
+        *niri-island-greeter-session*|"") ;;
+        *) echo "$prev" > /etc/niri-island/greeter-fallback ;;
+    esac
     tmp="$(mktemp)"
     awk '
         /^\[default_session\]/ { insec=1; print; next }

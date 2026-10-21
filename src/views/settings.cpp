@@ -692,6 +692,12 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
               cfg.cmd_wallpaper_apply = v;
               save();
           });
+    toggle(5, "Vídeo", "Pausar con pantalla completa", "Los fondos animados se detienen mientras una ventana ocupa toda la pantalla",
+           [&] { return cfg.wallpaper_pause_covered; },
+           [&, save](bool v) {
+               cfg.wallpaper_pause_covered = v;
+               save();
+           });
     buttons(5, "Selector", "Selector de fondos", "", {{"Abrir selector", [this] {
                                                            settings_.close_now();
                                                            open_wallpaper_picker();

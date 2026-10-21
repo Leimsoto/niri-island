@@ -28,4 +28,4 @@ animations {
     off
 }
 
-spawn-sh-at-startup "niri-island-greeter; niri msg action quit --skip-confirmation"
+spawn-sh-at-startup "/usr/local/bin/niri-island-greeter && touch \"$NIRI_ISLAND_GREETER_DIR/ok\"; /usr/bin/niri msg action quit --skip-confirmation"

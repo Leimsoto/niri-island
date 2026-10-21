@@ -117,6 +117,7 @@ void Config::load() {
         get(*m, "wallpaper_apply", c.cmd_wallpaper_apply);
         get(*m, "settings", c.cmd_settings);
         get(*m, "wallpaper_picker_style", c.wallpaper_picker_style);
+        get(*m, "wallpaper_pause_covered", c.wallpaper_pause_covered);
         get(*m, "terminal", c.terminal);
     }
     if (auto su = j.find("suite"); su != j.end() && su->is_object()) {
@@ -192,6 +193,7 @@ std::string Config::to_json() const {
                      {"wallpaper_apply", cmd_wallpaper_apply},
                      {"settings", cmd_settings},
                      {"wallpaper_picker_style", wallpaper_picker_style},
+                     {"wallpaper_pause_covered", wallpaper_pause_covered},
                      {"terminal", terminal}};
     json mods = json::array();
     for (auto& m : modules) mods.push_back({{"id", m.id}, {"side", m.side}, {"on", m.on}});

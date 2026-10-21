@@ -7,6 +7,8 @@
 #include <pango/pangocairo.h>
 
 #include "core/config.hpp"
+#include <nlohmann/json.hpp>
+
 #include "core/proc.hpp"
 #include "services/images.hpp"
 #include "ui/paint.hpp"
@@ -54,7 +56,10 @@ bool App::init() {
     };
     backdrop_.on_error = [this](const std::string& m) { show_toast(m); };
     lock_.on_failed = [] { proc::spawn_shell("swaylock -f -c 141218"); };
-    backdrop_.on_shown = [this](const std::string& path) { wallpicker_.backdrop_shown(path); };
+    backdrop_.on_shown = [this](const std::string& path) {
+        wallpicker_.backdrop_shown(path);
+        update_wallpaper_pause();
+    };
     capture_.on_toast = [this](const std::string& m) { show_toast(m); };
     capture_.on_saved = [this](const std::string& path, cairo_surface_t* thumb, bool copied) {
         if (path.empty()) {
@@ -134,6 +139,7 @@ bool App::init() {
         paint::reset_fonts();
         Theme::get().load();
         ++config_gen_;
+        update_wallpaper_pause();
         apply_layout();
         request();
     });
@@ -322,7 +328,31 @@ void App::wire_services() {
                              : "Desconectado";
         show_osd(o, 2.4);
     };
-    niri_.on_change = [this] { request(); };
+    niri_.on_change = [this] {
+        request();
+        update_wallpaper_pause();
+    };
+    // the output's size, to tell when a window covers it
+    {
+        auto size = std::make_shared<std::pair<float, float>>(0.0f, 0.0f);
+        Loop::get().async(
+            [size] {
+                auto r = proc::run({"niri", "msg", "-j", "outputs"}, 3000);
+                auto j = nlohmann::json::parse(r.out, nullptr, false);
+                if (!j.is_object()) return;
+                for (auto& [name, o] : j.items()) {
+                    auto l = o.find("logical");
+                    if (l == o.end() || !l->is_object()) continue;
+                    size->first = std::max(size->first, l->value("width", 0.0f));
+                    size->second = std::max(size->second, l->value("height", 0.0f));
+                }
+            },
+            [this, size] {
+                screen_w_ = size->first;
+                screen_h_ = size->second;
+                update_wallpaper_pause();
+            });
+    }
     weather_.on_change = [this] { request(); };
     apps_.on_change = [this] {
         if (shown_ == View::Launcher) refresh_launcher();
@@ -729,6 +759,11 @@ std::string App::bar_signature() const {
     s += buf;
     for (auto& m : config().modules) s += m.id + m.side + (m.on ? "1" : "0");
     return s;
+}
+
+// Video wallpapers stop while a window covers the screen (like skwd-wall).
+void App::update_wallpaper_pause() {
+    backdrop_.set_paused(config().wallpaper_pause_covered && niri_.screen_covered(screen_w_, screen_h_));
 }
 
 // Our own lock screen (ext-session-lock), or the configured command.
