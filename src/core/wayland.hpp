@@ -113,6 +113,46 @@ public:
     bool create_buffers();
 };
 
+// A small surface stuck on top of a layer surface (wl_subsurface), drawn and
+// committed on its own: something that moves often (the audio spectrum) over
+// content that stays still, without redrawing the parent.
+class SubSurface {
+public:
+    SubSurface(Wayland* wl, LayerSurface* parent);
+    ~SubSurface();
+    // Where it goes (parent's logical coordinates; applied with the parent's
+    // next commit) and its size. Returns a cleared context, or null if both
+    // buffers are still with the compositor or a frame is pending.
+    cairo_t* begin(float x, float y, int w, int h);
+    void end();
+    void hide();  // no buffer: shows nothing (until drawn again)
+    // Its place on the parent; set before the parent commits (parent state).
+    void place(float x, float y);
+    bool shown() const { return shown_; }
+    bool ready() const { return frame_cb_ == nullptr; }
+
+private:
+    struct Buf {
+        wl_buffer* wl = nullptr;
+        void* data = nullptr;
+        size_t size = 0;
+        cairo_surface_t* surface = nullptr;
+        cairo_t* cr = nullptr;
+        bool busy = false;
+    };
+    Wayland* wl_;
+    LayerSurface* parent_;
+    wl_surface* surface_ = nullptr;
+    wl_subsurface* sub_ = nullptr;
+    wl_callback* frame_cb_ = nullptr;
+    Buf bufs_[2];
+    int bw_ = 0, bh_ = 0, scale_ = 1, cur_ = -1;
+    float x_ = -1e9f, y_ = -1e9f;
+    bool shown_ = false;
+    void drop_buffers();
+    friend void sub_frame_done(void*, wl_callback*, uint32_t);
+};
+
 // Globals, the seat and the event pump. Input goes to whichever surface has
 // pointer or keyboard focus.
 class Wayland {
@@ -145,6 +185,7 @@ public:
     wl_display* display_ = nullptr;
     wl_registry* registry_ = nullptr;
     wl_compositor* compositor_ = nullptr;
+    wl_subcompositor* subcompositor_ = nullptr;
     uint32_t compositor_version_ = 0;
     wl_shm* shm_ = nullptr;
     wl_seat* seat_ = nullptr;

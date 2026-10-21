@@ -105,6 +105,18 @@ private:
     Loop loop_;
     Wayland wl_;
     std::unique_ptr<LayerSurface> island_;
+    // The resting island's audio spectrum lives on its own little surface on
+    // top: while the island is still, only those bars are redrawn (30 times
+    // a second), not the whole island and its capsules.
+    std::unique_ptr<SubSurface> spec_sub_;
+    bool spec_capture_ = false;  // drawing the island: note where the bars go, don't draw them
+    bool spec_seen_ = false, spec_live_ = false, spec_dirty_ = false;
+    Rect spec_rect_;             // where, in the island surface's coordinates
+    int spec_bars_ = 4;
+    bool spec_playing_ = false;
+    Color spec_color_;
+    double spec_last_ = 0;
+    void pump_spectrum();
     WallPicker wallpicker_{wl_};
     island::Capture capture_{wl_};
     EdgeBar bar_left_{wl_, true}, bar_right_{wl_, false};

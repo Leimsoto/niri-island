@@ -109,6 +109,123 @@ void LayerSurface::destroy_buffers() {
     current_ = -1;
 }
 
+// ── subsurface ───────────────────────────────────────────────────────────
+
+void sub_frame_done(void* data, wl_callback* cb, uint32_t) {
+    auto* self = static_cast<SubSurface*>(data);
+    wl_callback_destroy(cb);
+    self->frame_cb_ = nullptr;
+}
+static const wl_callback_listener sub_frame_listener = {.done = sub_frame_done};
+static void sub_buffer_release(void* data, wl_buffer*) { *static_cast<bool*>(data) = false; }
+static const wl_buffer_listener sub_buffer_listener = {.release = sub_buffer_release};
+
+SubSurface::SubSurface(Wayland* wl, LayerSurface* parent) : wl_(wl), parent_(parent) {
+    if (!wl_->subcompositor_ || !parent_ || !parent_->surface()) return;
+    surface_ = wl_compositor_create_surface(wl_->compositor_);
+    sub_ = wl_subcompositor_get_subsurface(wl_->subcompositor_, surface_, parent_->surface());
+    wl_subsurface_set_desync(sub_);  // its frames go out on their own
+    wl_region* none = wl_compositor_create_region(wl_->compositor_);
+    wl_surface_set_input_region(surface_, none);  // clicks reach the island beneath
+    wl_region_destroy(none);
+}
+
+SubSurface::~SubSurface() {
+    if (frame_cb_) wl_callback_destroy(frame_cb_);
+    drop_buffers();
+    if (sub_) wl_subsurface_destroy(sub_);
+    if (surface_) wl_surface_destroy(surface_);
+}
+
+void SubSurface::drop_buffers() {
+    for (auto& b : bufs_) {
+        if (b.cr) cairo_destroy(b.cr);
+        if (b.surface) cairo_surface_destroy(b.surface);
+        if (b.wl) wl_buffer_destroy(b.wl);
+        if (b.data) munmap(b.data, b.size);
+        b = Buf{};
+    }
+    bw_ = bh_ = 0;
+}
+
+cairo_t* SubSurface::begin(float x, float y, int w, int h) {
+    if (!surface_ || w <= 0 || h <= 0 || frame_cb_) return nullptr;
+    int sc = std::max(1, parent_->scale());
+    if (bw_ != w * sc || bh_ != h * sc) {
+        for (auto& b : bufs_)
+            if (b.busy) return nullptr;  // resize once the compositor lets go
+        drop_buffers();
+        int pw = w * sc, ph = h * sc, stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, pw);
+        size_t one = static_cast<size_t>(stride) * ph;
+        for (auto& b : bufs_) {
+            int fd = create_shm_fd(one);
+            if (fd < 0) return nullptr;
+            void* data = mmap(nullptr, one, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            if (data == MAP_FAILED) {
+                close(fd);
+                return nullptr;
+            }
+            wl_shm_pool* pool = wl_shm_create_pool(wl_->shm_, fd, static_cast<int32_t>(one));
+            b.wl = wl_shm_pool_create_buffer(pool, 0, pw, ph, stride, WL_SHM_FORMAT_ARGB8888);
+            wl_shm_pool_destroy(pool);
+            close(fd);
+            wl_buffer_add_listener(b.wl, &sub_buffer_listener, &b.busy);
+            b.data = data;
+            b.size = one;
+            b.surface = cairo_image_surface_create_for_data(static_cast<unsigned char*>(data), CAIRO_FORMAT_ARGB32, pw, ph, stride);
+            b.cr = cairo_create(b.surface);
+        }
+        bw_ = pw;
+        bh_ = ph;
+        scale_ = sc;
+        wl_surface_set_buffer_scale(surface_, sc);
+    }
+    cur_ = -1;
+    for (int i = 0; i < 2; ++i)
+        if (!bufs_[i].busy) {
+            cur_ = i;
+            break;
+        }
+    if (cur_ < 0) return nullptr;
+    place(x, y);
+    cairo_t* cr = bufs_[cur_].cr;
+    cairo_identity_matrix(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+    cairo_paint(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+    cairo_scale(cr, scale_, scale_);
+    return cr;
+}
+
+void SubSurface::place(float x, float y) {
+    if (!sub_ || (std::abs(x - x_) < 0.25f && std::abs(y - y_) < 0.25f)) return;
+    // takes effect with the parent's next commit
+    wl_subsurface_set_position(sub_, static_cast<int>(std::lround(x)), static_cast<int>(std::lround(y)));
+    x_ = x;
+    y_ = y;
+}
+
+void SubSurface::end() {
+    if (cur_ < 0) return;
+    Buf& b = bufs_[cur_];
+    cairo_surface_flush(b.surface);
+    wl_surface_attach(surface_, b.wl, 0, 0);
+    wl_surface_damage_buffer(surface_, 0, 0, INT32_MAX, INT32_MAX);
+    frame_cb_ = wl_surface_frame(surface_);
+    wl_callback_add_listener(frame_cb_, &sub_frame_listener, this);
+    wl_surface_commit(surface_);
+    b.busy = true;
+    cur_ = -1;
+    shown_ = true;
+}
+
+void SubSurface::hide() {
+    if (!surface_ || !shown_) return;
+    wl_surface_attach(surface_, nullptr, 0, 0);
+    wl_surface_commit(surface_);
+    shown_ = false;
+}
+
 bool LayerSurface::create_buffers() {
     int pw = width_ * scale_, ph = height_ * scale_;
     if (pw <= 0 || ph <= 0) return false;
@@ -457,7 +574,9 @@ static const wl_seat_listener seat_listener = {.capabilities = seat_caps, .name 
 
 static void reg_global(void* data, wl_registry* reg, uint32_t id, const char* iface, uint32_t ver) {
     auto* self = static_cast<Wayland*>(data);
-    if (strcmp(iface, wl_compositor_interface.name) == 0) {
+    if (strcmp(iface, wl_subcompositor_interface.name) == 0) {
+        self->subcompositor_ = static_cast<wl_subcompositor*>(wl_registry_bind(reg, id, &wl_subcompositor_interface, 1));
+    } else if (strcmp(iface, wl_compositor_interface.name) == 0) {
         self->compositor_version_ = std::min(ver, 6u);
         self->compositor_ =
             static_cast<wl_compositor*>(wl_registry_bind(reg, id, &wl_compositor_interface, self->compositor_version_));

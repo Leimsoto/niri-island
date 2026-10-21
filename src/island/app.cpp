@@ -177,12 +177,15 @@ void App::create_surface() {
     spec.exclusive_zone = 0;  // set by apply_layout() right after
     spec.name = "niri-island";
     island_ = wl_.create_layer(spec);
+    spec_sub_ = std::make_unique<SubSurface>(&wl_, island_.get());
+    spec_live_ = false;
     LayerSurface* s = island_.get();
     s->on_configure = [this] { request(); };
     s->on_closed = [this] {
         std::cerr << "[island] surface closed (output change), recreating\n";
         wl_.set_shield(false);
         loop_.post([this] {
+            spec_sub_.reset();  // before its parent
             island_.reset();
             loop_.after(0.5, [this] { create_surface(); });
         });
@@ -420,6 +423,8 @@ int App::before_poll() {
     screensaver_.pump();
     capbar_.pump();
     lock_.pump();
+    pump_spectrum();
+    if (spec_live_ && spec_playing_) merge(33);
     if (dirty_ && island_ && island_->configured() && !island_->frame_pending()) {
         render();
         wl_.dispatch_pending();
@@ -1275,11 +1280,25 @@ void App::render() {
         cairo_translate(cr, ox, oy);
         cairo_scale(cr, sc, sc);
         ui_.push(ox, oy, sc);
+        spec_capture_ = shown_ == View::Rest && spec_sub_ && !morphing;
+        spec_seen_ = false;
         draw_view(cr, shown_, target_w_, target_h_);
+        spec_capture_ = false;
         ui_.pop();
         cairo_restore(cr);
     }
     cairo_restore(cr);
+    // The bars on their own surface (placed now: it takes effect with this commit).
+    bool was_live = spec_live_;
+    spec_live_ = morph_ >= 1.0f && spec_seen_;
+    if (spec_sub_) {
+        if (spec_live_) {
+            spec_sub_->place(spec_rect_.x, spec_rect_.y);
+            spec_dirty_ = true;
+        } else if (was_live || spec_sub_->shown()) {
+            spec_sub_->hide();
+        }
+    }
 
 
     draw_side(cr, true);
@@ -1321,7 +1340,8 @@ void App::render() {
 
     // What keeps moving without springs: spectrum bars, marquees, progress.
     bool playing = mpris_.info().playing;
-    bool ambient = recorder_.active() || (playing && (shown_ == View::Rest || shown_ == View::Music || shown_ == View::Control)) ||
+    bool ambient = recorder_.active() ||
+                   (playing && ((shown_ == View::Rest && !spec_live_) || shown_ == View::Music || shown_ == View::Control)) ||
                    (shown_ == View::Wifi && net_.state().scanning) || (shown_ == View::Bluetooth && bt_.state().discovering) ||
                    (shown_ == View::Timer && clock_active()) || shown_ == View::Glance ||
                    ((shown_ == View::Rest || shown_ == View::Music) && stopwatch_.running() && !stopwatch_.paused()) ||

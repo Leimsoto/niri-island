@@ -45,6 +45,21 @@ void App::draw_art(cairo_t* cr, const Rect& r, float radius) {
 }
 
 void App::draw_spectrum(cairo_t* cr, const Rect& r, int bars, bool playing, Color c) {
+    if (spec_capture_) {
+        // The resting island: the bars go on their own surface on top.
+        // Only note where (in the surface's coordinates) and how.
+        double x0 = r.x, y0 = r.y, x1 = r.right(), y1 = r.bottom();
+        cairo_user_to_device(cr, &x0, &y0);
+        cairo_user_to_device(cr, &x1, &y1);
+        float sc = static_cast<float>(std::max(1, scale()));
+        spec_rect_ = {static_cast<float>(x0 / sc), static_cast<float>(y0 / sc), static_cast<float>((x1 - x0) / sc),
+                      static_cast<float>((y1 - y0) / sc)};
+        spec_bars_ = bars;
+        spec_playing_ = playing;
+        spec_color_ = c;
+        spec_seen_ = true;
+        return;
+    }
     const auto& live = cava_.bars();
     bool real = cava_.live();
     float bw = std::max(1.6f, (r.w - (bars - 1) * 2.0f) / bars);
@@ -68,6 +83,21 @@ void App::draw_spectrum(cairo_t* cr, const Rect& r, int bars, bool playing, Colo
         float bh = std::max(bw, r.h * clamp01(v));
         fill(cr, {r.x + i * (bw + gap), r.cy() - bh / 2, bw, bh}, bw / 2, c.with_alpha(playing ? 0.95f : 0.45f));
     }
+}
+
+// Only the bars, on their own surface, about 30 times a second while it plays
+// (once more when it stops). The island under them is left alone.
+void App::pump_spectrum() {
+    if (!spec_live_ || !spec_sub_ || !spec_sub_->ready()) return;
+    double now = now_mono();
+    if (!spec_dirty_ && (!spec_playing_ || now - spec_last_ < 1.0 / 30)) return;
+    int w = static_cast<int>(std::ceil(spec_rect_.w)), h = static_cast<int>(std::ceil(spec_rect_.h));
+    cairo_t* cr = spec_sub_->begin(spec_rect_.x, spec_rect_.y, w, h);
+    if (!cr) return;
+    draw_spectrum(cr, {0, 0, spec_rect_.w, spec_rect_.h}, spec_bars_, spec_playing_, spec_color_);
+    spec_sub_->end();
+    spec_last_ = now;
+    spec_dirty_ = false;
 }
 
 // ── rest ───────────────────────────────────────────────────────────────────
