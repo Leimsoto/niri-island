@@ -157,7 +157,7 @@ static std::string battery_glyph(const BatteryState& b) {
 }
 
 // The performance island: margins, gaps, icon and ring sizes.
-constexpr float kPerfPad = 12, kPerfGap = 10, kPerfIcon = 16, kPerfRing = 22;
+constexpr float kPerfPad = 12, kPerfGap = 10, kPerfIcon = 16;
 
 // Width of a module inside its capsule (0: nothing to show right now).
 float App::module_w(const std::string& id) const {
@@ -181,9 +181,11 @@ float App::module_w(const std::string& id) const {
     if (id == "perf") {
         const auto& ms = config().perf_metrics;
         if (ms.empty()) return 0;
+        bool rings = config().perf_style == "rings";
+        float gap = rings ? perf_ring_margin() : kPerfGap, pad = rings ? perf_ring_margin() : kPerfPad;
         float w = 0;
         for (auto& m : ms) w += perf_item_w(m);
-        return w - kPerfGap + 2 * kPerfPad;  // the same margin both sides
+        return w - gap + 2 * pad;  // the same margin both sides
     }
     return 0;
 }
@@ -218,8 +220,13 @@ static std::pair<float, std::string> perf_value(const SysStats& s, const std::st
 // One item and the gap after it. Numbers: the icon, then the value centred
 // in room for its widest form (so nothing shifts as it changes). Rings: the
 // ring alone, the icon inside, no number.
+// Rings: as tall as the capsule less a margin, and that margin is also the
+// gap between them and the capsule's padding, so the end ones sit concentric
+// with its rounded ends.
+float App::perf_ring_margin() const { return std::round(bar_h() * 0.17f); }
+
 float App::perf_item_w(const std::string& m) const {
-    if (config().perf_style == "rings") return kPerfRing + kPerfGap;
+    if (config().perf_style == "rings") return (bar_h() - 2 * perf_ring_margin()) + perf_ring_margin();
     static const char* widest[] = {"100%", "100°", "999K"};
     const char* w = m == "temp" ? widest[1] : m == "net" ? widest[2] : widest[0];
     return kPerfIcon + 4 + measure(w, {ui(12, "SemiBold")}).w + kPerfGap;
@@ -229,13 +236,14 @@ void App::draw_perf(cairo_t* cr, Ui& u, const Rect& r, float origin) {
     const auto& p = T();
     const auto& st = sysmon_.stats();
     bool rings = config().perf_style == "rings";
-    float x = r.x + kPerfPad;
+    float margin = perf_ring_margin(), d = r.h - 2 * margin;  // the ring's diameter
+    float x = r.x + (rings ? margin : kPerfPad);
     for (auto& m : config().perf_metrics) {
         auto [v, label] = perf_value(st, m);
         float iw = perf_item_w(m) - kPerfGap;
         if (rings) {
-            float cx = x + kPerfRing / 2;
-            ring(cr, cx, r.cy(), kPerfRing / 2 - 1.5f, 2.6f, std::clamp(v, 0.0f, 1.0f), p.accent, p.text.with_alpha(0.14f));
+            float cx = x + d / 2, stroke = 2.2f;
+            ring(cr, cx, r.cy(), d / 2 - stroke / 2, stroke, std::clamp(v, 0.0f, 1.0f), p.accent, p.text.with_alpha(0.14f));
             glyph(cr, cx, r.cy(), perf_glyph(m), 10, p.text);
         } else {
             glyph(cr, x + kPerfIcon / 2, r.cy(), perf_glyph(m), 13, p.text_dim);

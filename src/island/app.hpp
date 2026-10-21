@@ -446,6 +446,7 @@ private:
     void draw_clock_strip(cairo_t* cr, const Rect& r);   // active timer/stopwatch in the summaries
     void draw_rec_strip(cairo_t* cr, const Rect& r);     // a recording, with its controls
     float perf_item_w(const std::string& metric) const;
+    float perf_ring_margin() const;
     void draw_perf(cairo_t* cr, Ui& u, const Rect& r, float origin);
     // Modules with options (gear in the modules list): how open each card is.
     std::map<std::string, Spring> mod_open_;
