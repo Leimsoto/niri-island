@@ -448,6 +448,11 @@ private:
     void draw_rec_strip(cairo_t* cr, const Rect& r);     // a recording, with its controls
     float perf_item_w(const std::string& metric) const;
     void draw_perf(cairo_t* cr, Ui& u, const Rect& r, float origin);
+    // Modules with options (gear in the modules list): how open each card is.
+    std::map<std::string, Spring> mod_open_;
+    float module_options_h(const std::string& id) const;  // the options' height when open
+    float module_extra_h(const std::string& id) const;     // …as it is right now
+    void draw_module_options(cairo_t* cr, Ui& u, const std::string& id, const Rect& area);
     bool perf_on() const;
     int summary_strips() const { return (clock_active() ? 1 : 0) + (recorder_.active() ? 1 : 0); }
     // Below the glance or the player, from `y`: the strips that are running.

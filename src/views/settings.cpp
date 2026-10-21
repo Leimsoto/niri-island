@@ -172,11 +172,75 @@ static size_t left_count(const std::vector<ModuleConf>& ms) {
     return static_cast<size_t>(std::count_if(ms.begin(), ms.end(), [](const ModuleConf& m) { return m.side == "left"; }));
 }
 
+float App::module_options_h(const std::string& id) const {
+    if (id == "perf") return 98;
+    if (id == "battery") return 44;
+    return 0;
+}
+
+float App::module_extra_h(const std::string& id) const {
+    auto it = mod_open_.find(id);
+    if (it == mod_open_.end()) return 0;
+    return std::round(module_options_h(id) * clamp01(it->second.value));
+}
+
+void App::draw_module_options(cairo_t* cr, Ui& u, const std::string& id, const Rect& area) {
+    const auto& p = T();
+    w::Ctx c{cr, u};
+    auto& cfg = config();
+    if (id == "battery") {
+        text(cr, area.x, area.y + 6, "Mostrar el porcentaje", {ui(12.5f), p.text, Align::Left});
+        text(cr, area.x, area.y + 23, "El número junto al icono", {ui(11), p.text_dim, Align::Left});
+        w::toggle(c, ID("set.mod.batpct"), {area.right() - 54, area.y + 8, 46, 26}, cfg.battery_percent, [this] {
+            config().battery_percent = !config().battery_percent;
+            save_config_soon();
+        });
+        return;
+    }
+    if (id == "perf") {
+        // what it shows: pills that light up
+        static const std::pair<const char*, const char*> metrics[] = {
+            {"cpu", "CPU"}, {"ram", "RAM"}, {"temp", "Temperatura"}, {"net", "Red"}, {"disk", "Disco"}, {"swap", "Swap"}};
+        static const std::vector<std::string> order = {"cpu", "ram", "temp", "net", "disk", "swap"};
+        text(cr, area.x, area.y + 12, "Mostrar", {ui(12), p.text_dim, Align::Left});
+        float x = area.x + 86, pw = (area.right() - x - 8 - 5 * 6) / 6;
+        for (int k = 0; k < 6; ++k) {
+            std::string mid = metrics[k].first;
+            bool on = std::find(cfg.perf_metrics.begin(), cfg.perf_metrics.end(), mid) != cfg.perf_metrics.end();
+            w::pill(c, ID("set.perf.m", k), {x + k * (pw + 6), area.y + 4, pw, 30}, metrics[k].second, nullptr,
+                    on ? w::Style::Accent : w::Style::Plain, 11.5f)
+                .click([this, mid] {
+                    auto& pm = config().perf_metrics;
+                    if (std::find(pm.begin(), pm.end(), mid) != pm.end()) pm.erase(std::remove(pm.begin(), pm.end(), mid), pm.end());
+                    else {
+                        pm.push_back(mid);
+                        std::sort(pm.begin(), pm.end(), [](const std::string& a, const std::string& b) {
+                            return std::find(order.begin(), order.end(), a) < std::find(order.begin(), order.end(), b);
+                        });
+                    }
+                    save_config_soon();
+                });
+        }
+        text(cr, area.x, area.y + 54, "Estilo", {ui(12), p.text_dim, Align::Left});
+        const char* styles[2] = {"Números", "Anillos"};
+        for (int k = 0; k < 2; ++k) {
+            bool on = (cfg.perf_style == "rings") == (k == 1);
+            w::pill(c, ID("set.perf.st", k), {area.x + 86 + k * 106, area.y + 46, 100, 30}, styles[k], nullptr,
+                    on ? w::Style::Accent : w::Style::Plain, 11.5f)
+                .click([this, k] {
+                    config().perf_style = k == 1 ? "rings" : "numbers";
+                    save_config_soon();
+                });
+        }
+    }
+}
+
 void App::draw_modules_editor(cairo_t* cr, Ui& u, const Rect& card) {
     const auto& p = T();
     w::Ctx c{cr, u};
     auto& mods = config().modules;
     sort_modules(mods);
+    for (auto& [id, sp] : mod_open_) sp.update(1.0f / 60.0f);
     static const std::map<std::string, std::pair<const char*, const char*>> names = {
         {"workspaces", {"󰕰", "Espacios de trabajo"}}, {"window", {"󰖯", "Ventana activa"}},
         {"search", {"󰍉", "Buscador"}},                {"tray", {"󰀻", "Bandeja del sistema"}},
@@ -197,8 +261,9 @@ void App::draw_modules_editor(cairo_t* cr, Ui& u, const Rect& card) {
         if (i == nl && nl > 0) heading("DERECHA");
         auto& m = mods[i];
         auto nm = names.count(m.id) ? names.at(m.id) : std::make_pair("󰘔", m.id.c_str());
+        float extra = module_extra_h(m.id);
         Rect row{card.x + 12, y, card.w - 24, 40};
-        fill(cr, row, 12, p.text.with_alpha(i % 2 ? 0.03f : 0.05f));
+        fill(cr, {row.x, row.y, row.w, row.h + extra}, 12, p.text.with_alpha(i % 2 ? 0.03f : 0.05f));
         glyph(cr, row.x + 20, row.cy(), nm.first, 15, m.on ? p.accent : p.text_faint);
         text(cr, row.x + 42, row.cy() - 9, nm.second, {ui(13), m.on ? p.text : p.text_dim, Align::Left, row.w - 330});
         float x = row.right() - 8;
@@ -250,7 +315,34 @@ void App::draw_modules_editor(cairo_t* cr, Ui& u, const Rect& card) {
             config().modules[i].on = !config().modules[i].on;
             save_config_soon();
         });
-        y += 44;
+        // its options, folded under a gear: the card grows to show them
+        if (module_options_h(m.id) > 0) {
+            x -= 40;
+            Spring& sp = mod_open_[m.id];
+            bool open = sp.target > 0.5f;
+            std::string mid = m.id;
+            w::icon_button(c, ID("set.mod.gear", static_cast<int64_t>(i)), {x, row.y + 5, 30, 30}, "󰒓", 14, open)
+                .click([this, mid] {
+                    Spring& s2 = mod_open_[mid];
+                    s2.set(s2.target > 0.5f ? 0.0f : 1.0f);
+                    settings_.request();
+                });
+            if (extra > 0.5f) {
+                Rect area{row.x + 42, row.bottom(), row.w - 54, extra};
+                cairo_save(cr);
+                cairo_rectangle(cr, area.x - 4, area.y, area.w + 8, area.h);
+                cairo_clip(cr);
+                u.push_clip(area);
+                float a = clamp01(extra / module_options_h(m.id));
+                cairo_push_group(cr);
+                draw_module_options(cr, u, m.id, {area.x, area.y, area.w, module_options_h(m.id)});
+                cairo_pop_group_to_source(cr);
+                cairo_paint_with_alpha(cr, a);
+                u.pop_clip();
+                cairo_restore(cr);
+            }
+        }
+        y += 44 + extra;
     }
     if (nl == mods.size()) heading("DERECHA");
 }
@@ -591,54 +683,12 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
         SetRow r;
         r.kind = SetRow::Custom;
         r.section = 1, r.group = "Módulos", r.title = "Módulos de la barra",
-        r.sub = "Actívalos, elige su lado y su orden: la lista es la barra, de izquierda a derecha";
+        r.sub = "Actívalos, elige su lado y su orden: la lista es la barra, de izquierda a derecha. La tuerca abre sus opciones";
         r.custom_h = 64 + 44.0f * cfg.modules.size() + 48;
+        for (auto& m : cfg.modules) r.custom_h += module_extra_h(m.id);
         r.custom = [this, &u](cairo_t* c2, const Rect& card) { draw_modules_editor(c2, u, card); };
         rows.push_back(std::move(r));
     }
-    // The performance island
-    {
-        struct Metric {
-            const char* id;
-            const char* title;
-            const char* sub;
-        };
-        static const Metric metrics[] = {{"cpu", "Procesador", "Uso de la CPU"},
-                                         {"ram", "Memoria", "RAM en uso"},
-                                         {"temp", "Temperatura", "De la CPU"},
-                                         {"net", "Red", "Velocidad de descarga"},
-                                         {"disk", "Disco", "Espacio usado en /"},
-                                         {"swap", "Intercambio", "Swap en uso"}};
-        for (const auto& m : metrics) {
-            std::string id = m.id;
-            toggle(1, "Monitor de rendimiento", m.title, m.sub,
-                   [&cfg, id] { return std::find(cfg.perf_metrics.begin(), cfg.perf_metrics.end(), id) != cfg.perf_metrics.end(); },
-                   [&cfg, id, save](bool v) {
-                       auto& pm = cfg.perf_metrics;
-                       pm.erase(std::remove(pm.begin(), pm.end(), id), pm.end());
-                       if (v) {
-                           // keep the order of the list above
-                           static const std::vector<std::string> order = {"cpu", "ram", "temp", "net", "disk", "swap"};
-                           auto pos = std::find(order.begin(), order.end(), id) - order.begin();
-                           auto it = pm.begin();
-                           while (it != pm.end() && std::find(order.begin(), order.end(), *it) - order.begin() < pos) ++it;
-                           pm.insert(it, id);
-                       }
-                       save();
-                   });
-        }
-        choice(1, "Monitor de rendimiento", "Estilo", "Actívalo en «Módulos de la barra»", {"Números", "Anillos"},
-               [&cfg] { return cfg.perf_style == "rings" ? 1 : 0; },
-               [&cfg, save](int i) {
-                   cfg.perf_style = i == 1 ? "rings" : "numbers";
-                   save();
-               });
-    }
-    toggle(1, "Módulos", "Porcentaje de batería", "El número junto al icono de la batería", [&] { return cfg.battery_percent; },
-           [&, save](bool v) {
-               cfg.battery_percent = v;
-               save();
-           });
     toggle(1, "Espacio", "Reservar espacio", "Las ventanas no se colocan debajo de la isla", [&] { return cfg.reserve_space; },
            [&, save](bool v) {
                cfg.reserve_space = v;

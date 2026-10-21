@@ -38,6 +38,11 @@ public:
         }
         request();
     }
+    void inject_scroll(float x, float y, float steps) {
+        ui_.motion(x, y);
+        if (!ui_.scroll(steps)) canvas_scroll(steps);
+        request();
+    }
     // Something to draw and nothing holding it back: the loop must not sleep.
     bool wants_frame() const { return surf_ && dirty_ && surf_->configured() && !surf_->frame_pending(); }
 

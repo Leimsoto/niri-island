@@ -218,7 +218,11 @@ void App::wire_wayland() {
         if (!capbar_rect_.inset(-16).contains(x, y)) close_capbar();
     };
     capbar_.moving = [this] { return !capbar_t_.settled() || !capbar_h_.settled(); };
-    settings_.moving = [this] { return !set_scroll_.settled() || !set_search_.text.empty() || !set_edit_key_.empty(); };
+    settings_.moving = [this] {
+        for (auto& [id, s] : mod_open_)
+            if (!s.settled()) return true;
+        return !set_scroll_.settled() || !set_search_.text.empty() || !set_edit_key_.empty();
+    };
     for (EdgeBar* b : {&bar_left_, &bar_right_}) {
         b->painter = [this](cairo_t* cr, Ui& u, float w, float h, bool left, std::vector<Rect>& input) {
             paint_edge(cr, u, w, h, left, input);

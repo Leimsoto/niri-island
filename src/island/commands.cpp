@@ -183,6 +183,10 @@ std::string App::command(const std::string& line) {
         wallpicker_.inject_click(std::stof(a[1]), std::stof(a[2]));
         return "ok";
     }
+    if (c == "debug-settings-scroll" && a.size() >= 4) {
+        settings_.inject_scroll(std::stof(a[1]), std::stof(a[2]), std::stof(a[3]));
+        return "ok";
+    }
     if (c == "debug-capbar-click" && a.size() >= 3) {
         capbar_.inject_click(std::stof(a[1]), std::stof(a[2]));
         return capbar_.is_open() ? "open" : "closed";
