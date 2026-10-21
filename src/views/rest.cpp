@@ -217,8 +217,9 @@ void App::draw_glance(cairo_t* cr, float w, float h) {
     text(cr, dx, 44, line, {mono(11.5f), p.text_dim, Align::Left, w - dx - 14});
 
     const Task* next = nullptr;
-    for (auto& t : store_.tasks())
-        if (!t.done() && (!next || t.date < next->date)) next = &t;
+    if (!demo_)
+        for (auto& t : store_.tasks())
+            if (!t.done() && (!next || t.date < next->date)) next = &t;
     std::string tl = next ? "󰄱  " + next->title + "  ·  " + Store::due_label(next->date) : "󰄬  Sin tareas pendientes";
     Color tc = next && next->date < Store::today() ? p.warn : p.text_faint;
     text(cr, dx, 64, tl, {ui(11.5f), tc, Align::Left, w - dx - 14});

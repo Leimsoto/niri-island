@@ -9,6 +9,19 @@ centro de control, lanzador, calendario, tareas, notas y más. Inspirado en
 Sustituye por sí solo a la barra, el demonio de notificaciones, el gestor de fondos, la bandeja del sistema y la
 pantalla de bloqueo.
 
+![El escritorio con la isla en reposo](docs/screenshots/desktop.png)
+
+| | |
+|---|---|
+| ![La isla en reposo, con la música sonando](docs/screenshots/island-rest.png) | ![El reproductor al pasar el ratón](docs/screenshots/island-player.png) |
+| **En reposo**: reloj, carátula y espectro; a los lados, workspaces, monitor, buscador y estado | **Al pasar el ratón**: el reproductor sale de la isla |
+| ![Centro de control](docs/screenshots/control-center.png) | ![Ajustes](docs/screenshots/settings.png) |
+| **Centro de control** | **Ajustes**, con buscador |
+| ![Selector de fondos en panal](docs/screenshots/wallpaper-picker.png) | ![Burbuja de captura](docs/screenshots/capture.png) |
+| **Selector de fondos** (estilo panal; también carrusel y tarjetas) | **Captura** (Mod+S): la pantalla se congela y sale la burbuja |
+| ![Pantalla de bloqueo](docs/screenshots/lock.png) | |
+| **Pantalla de bloqueo** propia | |
+
 ---
 
 ## Arquitectura
@@ -166,6 +179,9 @@ ni cambia nada. Para buscar errores de memoria, una compilación con sanitizers:
 cmake -B build-asan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
 cmake --build build-asan && build-asan/niri-island-tests
 ```
+
+Para capturas de pantalla, `niri-island debug-demo on` deja fuera lo personal (lugar del clima, nombres de
+Wi-Fi, notificaciones, tareas, el nombre en el bloqueo) hasta `debug-demo off`.
 
 Las comprobaciones con la isla en marcha se hacen con sus comandos de depuración por IPC (`debug-click`,
 `debug-move`, `debug-settings-click`, `debug-settings-scroll`, `debug-settings-search`, `debug-capbar-click`…),

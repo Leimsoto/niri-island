@@ -519,6 +519,10 @@ private:
     void save_screenshot(cairo_surface_t* img);
     void capture_keys(bool on);             // keys go to the capture alone
     bool capture_keys_ = false;
+    // Demo mode (debug-demo on|off), for screenshots: personal things are left
+    // out of what is drawn — the weather's place, Wi-Fi names, notifications,
+    // tasks, the name on the lock screen. Nothing stored changes.
+    bool demo_ = false;
     void start_recording();
     void with_output(std::function<void(const std::string&)> fn);
     void notify_file(const std::string& title, const std::string& path, cairo_surface_t* thumb, const std::string& body);

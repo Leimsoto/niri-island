@@ -155,7 +155,7 @@ void App::draw_control(cairo_t* cr, float w, float h) {
             bt_sub = d.name + (d.battery >= 0 ? " · " + std::to_string(d.battery) + "%" : "");
             break;
         }
-    std::string wifi_sub = !ns.wifi_enabled ? "Apagado" : !ns.ssid.empty() ? ns.ssid : ns.ethernet ? "Ethernet" : "Sin conexión";
+    std::string wifi_sub = !ns.wifi_enabled ? "Apagado" : !ns.ssid.empty() ? (demo_ ? "Mi Wi-Fi" : ns.ssid) : ns.ethernet ? "Ethernet" : "Sin conexión";
     std::string pp = power_.profile();
     const char* pp_glyph = pp == "performance" ? "󰓅" : pp == "power-saver" ? "󰾆" : "󰾅";
     std::string pp_sub = pp == "performance" ? "Rendimiento" : pp == "power-saver" ? "Ahorro" : "Equilibrado";
@@ -315,7 +315,7 @@ void App::draw_control(cairo_t* cr, float w, float h) {
             glyph(cr, wcard.x + 34, wcard.y + 36, wd.icon, 30, p.accent);
             text(cr, wcard.x + 62, wcard.y + 14, std::to_string(wd.temp) + "°", {ui(26, "Bold"), p.text});
             text(cr, wcard.x + 120, wcard.y + 18, wd.condition, {ui(12, "SemiBold"), p.text, Align::Left, wcard.w - 134});
-            std::string sub = wd.location.empty() ? "Sensación " + std::to_string(wd.feels) + "°"
+            std::string sub = wd.location.empty() || demo_ ? "Sensación " + std::to_string(wd.feels) + "°"
                                                   : wd.location + " · " + std::to_string(wd.feels) + "°";
             text(cr, wcard.x + 120, wcard.y + 36, sub, {ui(11), p.text_dim, Align::Left, wcard.w - 134});
             size_t step = wd.hours.size() >= 9 ? 2 : 1;
@@ -373,7 +373,8 @@ void App::draw_control(cairo_t* cr, float w, float h) {
     float c3 = 584, c3w = w - c3 - 16;
     Rect nc{c3, y0, c3w, h - y0 - 16};
     w::card(c, nc, 18);
-    const auto& hist = notifs_.history();
+    static const std::vector<NotificationPtr> none;
+    const auto& hist = demo_ ? none : notifs_.history();
     text(cr, nc.x + 16, nc.y + 14, "Notificaciones", {ui(14, "Bold"), p.text});
     if (!hist.empty())
         text(cr, nc.x + 16, nc.y + 33, std::to_string(hist.size()) + (notifs_.dnd() ? std::string(" · No molestar ") + Notifications::dnd_label(notifs_.dnd_mode()) : ""),

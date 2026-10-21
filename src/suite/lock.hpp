@@ -30,6 +30,7 @@ public:
     bool wants_frame() const;
 
     std::string wallpaper;  // set by the app (the backdrop's image)
+    std::string name_override;  // shown instead of the user's name (demo mode)
     static void on_locked_cb(void* data, ext_session_lock_v1*);
     static void on_finished_cb(void* data, ext_session_lock_v1*);
     std::function<void()> on_unlocked;

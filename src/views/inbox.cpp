@@ -15,7 +15,8 @@ using namespace paint;
 void App::draw_inbox(cairo_t* cr, float w, float h) {
     const auto& p = T();
     w::Ctx c{cr, ui_};
-    const auto& hist = notifs_.history();
+    static const std::vector<NotificationPtr> none;
+    const auto& hist = demo_ ? none : notifs_.history();
     w::header(c, ID("in.back"), w, "Notificaciones", hist.empty() ? "Nada nuevo" : std::to_string(hist.size()) + " guardadas")
         .click([this] { back(); });
     if (!hist.empty())

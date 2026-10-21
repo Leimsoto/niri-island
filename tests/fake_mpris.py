@@ -1,6 +1,9 @@
 # A pretend media player on the session bus (MPRIS), always "playing", for
-# testing the island without real music:  python3 tests/fake_mpris.py &
+# testing the island without real music:  python3 tests/fake_mpris.py [title] [artist] &
+import sys
 from gi.repository import Gio, GLib
+title = sys.argv[1] if len(sys.argv) > 1 else "Prueba de espectro"
+artist = sys.argv[2] if len(sys.argv) > 2 else "niri-island"
 XML = """<node>
 <interface name="org.mpris.MediaPlayer2">
   <property name="Identity" type="s" access="read"/>
@@ -21,8 +24,8 @@ XML = """<node>
 props = {
     "Identity": GLib.Variant("s", "Prueba"), "CanRaise": GLib.Variant("b", False),
     "PlaybackStatus": GLib.Variant("s", "Playing"), "Position": GLib.Variant("x", 0),
-    "Metadata": GLib.Variant("a{sv}", {"mpris:trackid": GLib.Variant("o", "/t/1"), "xesam:title": GLib.Variant("s", "Prueba de espectro"),
-                                         "xesam:artist": GLib.Variant("as", ["niri-island"]), "mpris:length": GLib.Variant("x", 600000000)}),
+    "Metadata": GLib.Variant("a{sv}", {"mpris:trackid": GLib.Variant("o", "/t/1"), "xesam:title": GLib.Variant("s", title),
+                                         "xesam:artist": GLib.Variant("as", [artist]), "mpris:length": GLib.Variant("x", 600000000)}),
     "CanPlay": GLib.Variant("b", True), "CanPause": GLib.Variant("b", True), "CanGoNext": GLib.Variant("b", False),
     "CanGoPrevious": GLib.Variant("b", False), "CanSeek": GLib.Variant("b", False),
 }

@@ -112,6 +112,7 @@ bool Lock::lock(double preview) {
         std::string gecos = pw->pw_gecos ? pw->pw_gecos : "";
         name_ = gecos.substr(0, gecos.find(','));
         if (name_.empty()) name_ = user_;
+        if (!name_override.empty()) name_ = name_override;
     }
     for (wl_output* o : wl_.outputs()) {
         Out out;

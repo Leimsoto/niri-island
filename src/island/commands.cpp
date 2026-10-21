@@ -183,6 +183,12 @@ std::string App::command(const std::string& line) {
         wallpicker_.inject_click(std::stof(a[1]), std::stof(a[2]));
         return "ok";
     }
+    if (c == "debug-demo") {
+        demo_ = a.size() < 2 || a[1] != "off";
+        lock_.name_override = demo_ ? "Usuario" : "";
+        request();
+        return demo_ ? "demo on" : "demo off";
+    }
     if (c == "debug-idle" && a.size() >= 2) {
         // the screensaver's idle watch, in seconds, to test it (setup_idle()
         // puts the configured one back on the next settings change)

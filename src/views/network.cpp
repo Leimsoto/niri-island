@@ -91,7 +91,7 @@ void App::draw_wifi(cairo_t* cr, float w, float h) {
     const auto& ns = net_.state();
     std::string sub = !ns.message.empty() ? ns.message
                     : !ns.wifi_enabled   ? "Desactivado"
-                    : !ns.ssid.empty()   ? "Conectado a " + ns.ssid
+                    : !ns.ssid.empty()   ? "Conectado a " + (demo_ ? std::string("Mi Wi-Fi") : ns.ssid)
                                          : "Sin conexión";
     w::header(c, ID("wifi.back"), w, "Wi-Fi", sub).click([this] { back(); });
 

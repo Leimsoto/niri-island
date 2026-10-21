@@ -176,7 +176,7 @@ void App::draw_weather(cairo_t* cr, float w, float h) {
     const auto& p = T();
     w::Ctx c{cr, ui_};
     const auto& d = weather_.data();
-    std::string sub = d.location.empty() ? "" : d.location;
+    std::string sub = d.location.empty() || demo_ ? "" : d.location;
     if (d.fetched_at > 0) sub += (sub.empty() ? "" : " · ") + std::string("hace ") + time_ago(d.fetched_at);
     w::header(c, ID("wx.back"), w, "Clima", sub).click([this] { back(); });
     w::icon_button(c, ID("wx.reload"), {w - 48, 14, 32, 32}, "󰑓", 14).click([this] { weather_.reload(); });
