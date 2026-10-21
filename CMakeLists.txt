@@ -55,9 +55,9 @@ generate_wayland_proto(ext-session-lock-v1 ${WL_PROTO_DIR}/staging/ext-session-l
 
 file(GLOB_RECURSE CORE_SRCS CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
-list(FILTER CORE_SRCS EXCLUDE REGEX ".*/src/(main\\.cpp|greeter/main\\.cpp)$")
+list(FILTER CORE_SRCS EXCLUDE REGEX ".*/src/main\\.cpp$")
 
-# Everything but the two entry points, shared by the shell and the greeter.
+# Everything but the entry point, shared by the shell and the tests.
 add_library(island-core STATIC ${CORE_SRCS} ${PROTO_SRCS})
 target_include_directories(island-core PUBLIC
     ${GEN_DIR}
@@ -71,10 +71,8 @@ target_link_libraries(island-core PUBLIC ${DEPS_LIBRARIES} Threads::Threads m rt
 add_executable(niri-island src/main.cpp)
 target_link_libraries(niri-island PRIVATE island-core)
 
-add_executable(niri-island-greeter src/greeter/main.cpp)
-target_link_libraries(niri-island-greeter PRIVATE island-core)
 
-install(TARGETS niri-island niri-island-greeter RUNTIME DESTINATION bin)
+install(TARGETS niri-island RUNTIME DESTINATION bin)
 
 # Tests: cmake --build build && ctest --test-dir build --output-on-failure
 enable_testing()
