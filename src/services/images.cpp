@@ -52,6 +52,10 @@ bool http_get(const std::string& url, std::string& body, long timeout_s) {
     curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 6L);
     curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(c, CURLOPT_USERAGENT, "niri-island/2.0");
+    // closing down: a transfer in flight gives up instead of holding the exit
+    curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION,
+                     +[](void*, curl_off_t, curl_off_t, curl_off_t, curl_off_t) -> int { return Loop::shutting_down() ? 1 : 0; });
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, curl_write);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &body);
     CURLcode rc = curl_easy_perform(c);

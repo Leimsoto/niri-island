@@ -420,7 +420,7 @@ int App::before_poll() {
     bar_left_.pump();
     bar_right_.pump();
     settings_.pump();
-    screensaver_.pump();
+    for (Overlay* o : screensavers()) o->pump();
     capbar_.pump();
     lock_.pump();
     pump_spectrum();
@@ -435,11 +435,13 @@ int App::before_poll() {
         bar_left_.pump();
         bar_right_.pump();
         settings_.pump();
-        screensaver_.pump();
+        for (Overlay* o : screensavers()) o->pump();
         capbar_.pump();
         lock_.pump();
     }
-    for (Overlay* o : std::initializer_list<Overlay*>{&wallpicker_, &capture_, &bar_left_, &bar_right_, &settings_, &screensaver_, &capbar_})
+    for (Overlay* o : std::initializer_list<Overlay*>{&wallpicker_, &capture_, &bar_left_, &bar_right_, &settings_, &capbar_})
+        if (o->wants_frame()) merge(0);
+    for (Overlay* o : screensavers())
         if (o->wants_frame()) merge(0);
     if (lock_.wants_frame()) merge(0);
     // Overlays commit after the dispatch above flushed: send their frames now,
@@ -806,6 +808,32 @@ bool App::perf_on() const {
     return false;
 }
 
+// The screensaver on every screen: the first on the first, one more for each
+// of the others. Activity on any of them ends them all.
+std::vector<Overlay*> App::screensavers() {
+    std::vector<Overlay*> v{&screensaver_};
+    for (auto& s : savers_) v.push_back(s.get());
+    return v;
+}
+
+void App::start_screensaver() {
+    const auto& outs = wl_.outputs();
+    while (savers_.size() + 1 < outs.size()) savers_.push_back(std::make_unique<Screensaver>(wl_));
+    screensaver_.output = outs.empty() ? nullptr : outs[0];
+    screensaver_.on_stop = [this] { stop_screensaver(); };
+    for (size_t i = 0; i < savers_.size(); ++i) {
+        savers_[i]->output = i + 1 < outs.size() ? outs[i + 1] : nullptr;
+        savers_[i]->on_stop = [this] { stop_screensaver(); };
+        if (savers_[i]->output) savers_[i]->start();
+    }
+    screensaver_.start();
+}
+
+void App::stop_screensaver() {
+    screensaver_.stop();
+    for (auto& s : savers_) s->stop();
+}
+
 // Video wallpapers stop while a window covers the screen (like skwd-wall).
 void App::update_wallpaper_pause() {
     backdrop_.set_paused(config().wallpaper_pause_covered && niri_.screen_covered(screen_w_, screen_h_));
@@ -814,7 +842,7 @@ void App::update_wallpaper_pause() {
 // Our own lock screen (ext-session-lock), or the configured command.
 void App::lock_screen(double preview) {
     close_all();
-    screensaver_.stop();
+    stop_screensaver();
     const std::string& cmd = config().cmd_lock;
     if (!cmd.empty() && cmd != "internal") {
         proc::spawn_shell(cmd);

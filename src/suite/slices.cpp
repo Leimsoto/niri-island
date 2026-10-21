@@ -701,7 +701,7 @@ void WallPicker::wh_fetch(bool more) {
                       };
     std::thread([url, body, ok, done] {
         *ok = http_get(url, *body, 15);
-        Loop::get().post(done);
+        Loop::post_if_alive(done);
     }).detach();
     request();
 }
@@ -722,10 +722,11 @@ void WallPicker::wh_thumbs(int gen) {
     for (int t = 0; t < 6; ++t) {
         std::thread([this, jobs, next, gen] {
             for (size_t i; (i = (*next)++) < jobs->size();) {
+                if (Loop::shutting_down()) return;
                 auto [url, file] = (*jobs)[i];
                 bool ok = file_exists(file) || http_download(url, file, 20);
                 if (!ok) continue;
-                Loop::get().post([this, gen, url, file] {
+                Loop::post_if_alive([this, gen, url, file] {
                     if (gen != wh_gen_) return;
                     for (auto& w : walls_)
                         if (w.remote && w.thumb == url) w.thumb = file;
@@ -766,7 +767,7 @@ void WallPicker::wh_apply(int index) {
     std::thread([dir, dest, url, ok, done] {
         make_dirs(dir);
         *ok = file_exists(dest) || http_download(url, dest, 60);
-        Loop::get().post(done);
+        Loop::post_if_alive(done);
     }).detach();
 }
 

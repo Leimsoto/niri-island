@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <atomic>
+#include <mutex>
 #include <iostream>
 #include <poll.h>
 #include <sys/eventfd.h>
@@ -14,11 +16,14 @@
 namespace island {
 
 static Loop* g_loop = nullptr;
+static std::mutex g_loop_mu;              // guards g_loop for threads outside the loop
+static std::atomic<bool> g_shutting{false};
 
 Loop& Loop::get() { return *g_loop; }
 
 Loop::Loop() {
     g_loop = this;
+    g_shutting = false;
     wake_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     watch(wake_fd_, POLLIN, [this](short) {
         uint64_t v;
@@ -30,6 +35,12 @@ Loop::Loop() {
 }
 
 Loop::~Loop() {
+    g_shutting = true;
+    {
+        // no thread may post into a loop being torn down
+        std::lock_guard<std::mutex> lock(g_loop_mu);
+        if (g_loop == this) g_loop = nullptr;
+    }
     {
         std::lock_guard<std::mutex> lock(work_mu_);
         stopping_ = true;
@@ -39,7 +50,6 @@ Loop::~Loop() {
     for (auto& t : workers_)
         if (t.joinable()) t.join();
     if (wake_fd_ >= 0) close(wake_fd_);
-    if (g_loop == this) g_loop = nullptr;
 }
 
 void Loop::watch(int fd, short events, FdCallback cb) {
@@ -67,6 +77,18 @@ uint64_t Loop::after(double delay, Task fn, double repeat) {
 
 void Loop::cancel(uint64_t id) {
     if (id) timers_.erase(id);
+}
+
+void Loop::quit() {
+    running_ = false;
+    g_shutting = true;
+}
+
+bool Loop::shutting_down() { return g_shutting; }
+
+void Loop::post_if_alive(Task fn) {
+    std::lock_guard<std::mutex> lock(g_loop_mu);
+    if (g_loop) g_loop->post(std::move(fn));
 }
 
 void Loop::post(Task fn) {

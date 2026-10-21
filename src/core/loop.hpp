@@ -34,6 +34,11 @@ public:
 
     // Thread safe: runs fn on the loop thread soon.
     void post(Task fn);
+    // From a thread that may outlive the loop (a detached download, PAM):
+    // posts if the loop still exists, else drops the task.
+    static void post_if_alive(Task fn);
+    // Set once the program is on its way out: long transfers give up.
+    static bool shutting_down();
 
     // Runs `work` on the worker pool, then `done` on the loop thread.
     void async(Task work, Task done = {});
@@ -42,7 +47,7 @@ public:
     std::function<int()> before_poll;
 
     void run();
-    void quit() { running_ = false; }
+    void quit();
     bool running() const { return running_; }
 
 private:

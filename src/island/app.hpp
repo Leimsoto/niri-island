@@ -135,6 +135,11 @@ private:
     void capbar_key(xkb_keysym_t sym, uint32_t mods);
     Backdrop backdrop_{wl_};
     Screensaver screensaver_{wl_};
+    // one more for every other screen; they start and stop together
+    std::vector<std::unique_ptr<Screensaver>> savers_;
+    void start_screensaver();
+    void stop_screensaver();
+    std::vector<Overlay*> screensavers();
     island::Lock lock_{wl_};
     float screen_w_ = 0, screen_h_ = 0;  // the output's logical size (from niri)
     void update_wallpaper_pause();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <map>
 #include <vector>
 
@@ -16,8 +17,12 @@ public:
     ~Screensaver() override;
     void start();
     void stop() {
-        if (is_open()) close();
+        if (!is_open()) return;
+        close();
+        if (on_stop) on_stop();  // the others (one per screen) go too
     }
+    wl_output* output = nullptr;      // which screen (none: the compositor picks)
+    std::function<void()> on_stop;
 
 protected:
     void draw(cairo_t* cr, float w, float h, float dt) override;
@@ -30,6 +35,7 @@ protected:
     void opened() override;
     bool animating() const override { return true; }
     const char* name() const override { return "niri-island-screensaver"; }
+    void adjust_spec(LayerSpec& s) const override { s.output = output; }
 
 private:
     struct Bubble {

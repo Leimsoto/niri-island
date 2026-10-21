@@ -159,8 +159,8 @@ std::string App::command(const std::string& line) {
     }
     if (c == "screensaver") {
         std::string op = a.size() > 1 ? a[1] : "start";
-        if (op == "stop") screensaver_.stop();
-        else screensaver_.start();
+        if (op == "stop") stop_screensaver();
+        else start_screensaver();
         return "ok";
     }
     if (c == "lock") {

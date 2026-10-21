@@ -64,7 +64,8 @@ void App::capture_keys(bool on) {
     if (on == capture_keys_) return;
     capture_keys_ = on;
     // Enter, Space, Esc… are the capture's: nothing else may take them
-    for (Overlay* o : std::initializer_list<Overlay*>{&settings_, &wallpicker_, &screensaver_}) o->suspend_keyboard(on);
+    for (Overlay* o : std::initializer_list<Overlay*>{&settings_, &wallpicker_}) o->suspend_keyboard(on);
+    for (Overlay* o : screensavers()) o->suspend_keyboard(on);
     request();
 }
 

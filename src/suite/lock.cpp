@@ -231,7 +231,7 @@ void Lock::submit() {
     std::thread([this, user, password]() mutable {
         bool ok = pam_check(user, password);
         std::fill(password.begin(), password.end(), '\0');
-        Loop::get().post([this, ok] {
+        Loop::post_if_alive([this, ok] {
             checking_ = false;
             if (ok) {
                 unlock();

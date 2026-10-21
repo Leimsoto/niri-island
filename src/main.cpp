@@ -69,21 +69,27 @@ int main(int argc, char* argv[]) {
     signal(SIGCHLD, SIG_DFL);
     int sfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
 
-    island::App app;
-    if (!app.init()) {
-        std::cerr << "niri-island: initialisation failed\n";
-        return 1;
-    }
-    island::Loop::get().watch(sfd, POLLIN, [sfd](short) {
-        signalfd_siginfo si;
-        while (read(sfd, &si, sizeof(si)) == sizeof(si)) {
-            if (si.ssi_signo == SIGHUP) continue;  // reserved for reload via IPC
-            island::Loop::get().quit();
+    {
+        island::App app;
+        if (!app.init()) {
+            std::cerr << "niri-island: initialisation failed\n";
+            return 1;
         }
-    });
-    std::cout << "niri-island running\n";
-    app.run();
-    island::Loop::get().unwatch(sfd);
-    close(sfd);
-    return 0;
+        island::Loop::get().watch(sfd, POLLIN, [sfd](short) {
+            signalfd_siginfo si;
+            while (read(sfd, &si, sizeof(si)) == sizeof(si)) {
+                if (si.ssi_signo == SIGHUP) continue;  // reserved for reload via IPC
+                island::Loop::get().quit();
+            }
+        });
+        std::cout << "niri-island running\n";
+        app.run();
+        island::Loop::get().unwatch(sfd);
+        close(sfd);
+    }  // the app is gone: notes, state and the IPC socket are saved/removed
+    // Out without the global destructors: a detached download still winding
+    // down must not meet libraries already torn down under it.
+    std::cout.flush();
+    std::cerr.flush();
+    _exit(0);
 }
