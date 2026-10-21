@@ -411,7 +411,9 @@ void WallPicker::set_remote(bool on) {
 }
 
 void WallPicker::wh_fetch(bool more) {
-    if (more && (wh_loading_ || wh_page_ >= wh_last_page_)) return;
+    // "More" only extends a page that came in: after a failure (or with
+    // nothing yet) it waited for nobody and asked again every frame.
+    if (more && (wh_loading_ || wh_failed_ || walls_.empty() || wh_page_ >= wh_last_page_)) return;
     int page = more ? wh_page_ + 1 : 1;
     if (!more) {
         ++wh_gen_;
@@ -777,8 +779,13 @@ void WallPicker::draw_filter_bar(cairo_t* cr, float W, float H, float t_in) {
                 fill(cr, {W / 2 - 18 + i * 18 - s2, y - s2, 2 * s2, 2 * s2}, s2, p.accent.with_alpha(0.9f * ca));
             }
         } else {
-            text(cr, W / 2, y - 9, wh_failed_ ? "Sin conexión con wallhaven" : "Nada encontrado",
+            text(cr, W / 2, y - 9, wh_failed_ ? "wallhaven no responde ahora mismo" : "Nada encontrado",
                  {ui(12.5f, "SemiBold"), p.text_dim.with_alpha(ca), Align::Center});
+            if (wh_failed_) {
+                w::Ctx c{cr, ui_};
+                w::pill(c, ID("wh.retry"), {W / 2 - 60, y + 16, 120, 32}, "Reintentar", "󰑐", w::Style::Tonal, 12)
+                    .click([this] { wh_fetch(false); });
+            }
         }
     }
 }

@@ -27,6 +27,7 @@ public:
     explicit WallPicker(Wayland& wl) : Overlay(wl) {}
     ~WallPicker() override;
     void show();
+    void show_wallhaven() { set_remote(true); }
     void prewarm();
     void backdrop_shown(const std::string& path);
     void dismiss() {
