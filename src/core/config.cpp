@@ -62,6 +62,7 @@ void Config::load() {
         get(*a, "battery_percent", c.battery_percent);
         get(*a, "perf_metrics", c.perf_metrics);
         get(*a, "perf_style", c.perf_style);
+        get(*a, "perf_split", c.perf_split);
         if (auto m = a->find("modules"); m != a->end() && m->is_array()) {
             std::vector<ModuleConf> mods;
             for (auto& e : *m) {
@@ -204,6 +205,7 @@ std::string Config::to_json() const {
     j["appearance"]["battery_percent"] = battery_percent;
     j["appearance"]["perf_metrics"] = perf_metrics;
     j["appearance"]["perf_style"] = perf_style;
+    j["appearance"]["perf_split"] = perf_split;
     j["suite"] = {{"wallpaper_dirs", wallpaper_dirs},
                   {"screenshot_dir", screenshot_dir},
                   {"wallhaven_dir", wallhaven_dir},

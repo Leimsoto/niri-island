@@ -445,10 +445,12 @@ private:
     void draw_stopwatch(cairo_t* cr, float w, float h);
     void draw_clock_strip(cairo_t* cr, const Rect& r);   // active timer/stopwatch in the summaries
     void draw_rec_strip(cairo_t* cr, const Rect& r);     // a recording, with its controls
-    float perf_item_w(const std::string& metric) const;
+    std::vector<std::string> perf_metrics_of(const std::string& id) const;  // "perf" or "perf:<metric>"
+    float perf_num_w(const std::string& metric) const;
+    float perf_width(const std::vector<std::string>& metrics) const;
     float perf_ring_margin() const;
     float perf_cap_h() const;
-    void draw_perf(cairo_t* cr, Ui& u, const Rect& r, float origin);
+    void draw_perf(cairo_t* cr, Ui& u, const Rect& r, float origin, const std::vector<std::string>& metrics);
     // Modules with options (gear in the modules list): how open each card is.
     std::map<std::string, Spring> mod_open_;
     float module_options_h(const std::string& id) const;  // the options' height when open

@@ -32,6 +32,7 @@ struct Config {
     // The performance island (module "perf"): what it shows, and how.
     std::vector<std::string> perf_metrics = {"cpu", "ram", "temp"};  // cpu ram temp net disk swap
     std::string perf_style = "numbers";      // numbers | rings
+    bool perf_split = false;                 // one capsule per metric
     static std::vector<ModuleConf> default_modules();
     std::string bar_layout = "grouped";      // grouped (round the island) | spread (to the edges) | island (one capsule)
     std::string island_style = "floating";

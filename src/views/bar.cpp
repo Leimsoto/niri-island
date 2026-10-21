@@ -157,7 +157,7 @@ static std::string battery_glyph(const BatteryState& b) {
 }
 
 // The performance island: margins, gaps, icon and ring sizes.
-constexpr float kPerfPad = 12, kPerfGap = 10, kPerfIcon = 16;
+constexpr float kPerfPad = 11, kPerfGap = 12, kPerfIcon = 14;
 
 // Width of a module inside its capsule (0: nothing to show right now).
 float App::module_w(const std::string& id) const {
@@ -178,15 +178,7 @@ float App::module_w(const std::string& id) const {
         return 26 + (config().battery_percent ? measure(std::to_string(b.percent) + "%", {ui(12, "SemiBold")}).w + 4 : 0);
     }
     if (id == "notifications" || id == "network" || id == "volume") return 26;
-    if (id == "perf") {
-        const auto& ms = config().perf_metrics;
-        if (ms.empty()) return 0;
-        bool rings = config().perf_style == "rings";
-        float gap = rings ? perf_ring_margin() : kPerfGap, pad = rings ? perf_ring_margin() : kPerfPad;
-        float w = 0;
-        for (auto& m : ms) w += perf_item_w(m);
-        return w - gap + 2 * pad;  // the same margin both sides
-    }
+    if (starts_with(id, "perf")) return perf_width(perf_metrics_of(id));
     return 0;
 }
 
@@ -227,51 +219,52 @@ static std::pair<float, std::string> perf_value(const SysStats& s, const std::st
 float App::perf_cap_h() const { return cap_geom(0, 1).h; }
 float App::perf_ring_margin() const { return std::round(perf_cap_h() * 0.17f); }
 
-float App::perf_item_w(const std::string& m) const {
-    if (config().perf_style == "rings") return (perf_cap_h() - 2 * perf_ring_margin()) + perf_ring_margin();
-    static const char* widest[] = {"100%", "100°", "999K"};
-    const char* w = m == "temp" ? widest[1] : m == "net" ? widest[2] : widest[0];
-    return kPerfIcon + 4 + measure(w, {ui(12, "SemiBold")}).w + kPerfGap;
+std::vector<std::string> App::perf_metrics_of(const std::string& id) const {
+    if (id.size() > 5 && id[4] == ':') return {id.substr(5)};
+    return config().perf_metrics;
 }
 
-void App::draw_perf(cairo_t* cr, Ui& u, const Rect& r, float origin) {
+// Numbers: the icon and its value side by side; the capsule fits them with
+// the same small margin at both ends.
+float App::perf_num_w(const std::string& m) const {
+    std::string label = perf_value(sysmon_.stats(), m).second;
+    return kPerfIcon + 4 + std::ceil(measure(label, {ui(12, "SemiBold")}).w);
+}
+
+float App::perf_width(const std::vector<std::string>& ms) const {
+    if (ms.empty()) return 0;
+    if (config().perf_style == "rings") {
+        float m = perf_ring_margin(), d = perf_cap_h() - 2 * m;
+        return ms.size() * d + (ms.size() - 1) * m + 2 * m;
+    }
+    float w = 0;
+    for (auto& m : ms) w += perf_num_w(m);
+    return w + (ms.size() - 1) * kPerfGap + 2 * kPerfPad;
+}
+
+void App::draw_perf(cairo_t* cr, Ui& u, const Rect& r, float origin, const std::vector<std::string>& ms) {
     const auto& p = T();
     const auto& st = sysmon_.stats();
-    bool rings = config().perf_style == "rings";
-    float margin = perf_ring_margin(), d = perf_cap_h() - 2 * margin;  // the ring's diameter
-    if (rings) {
+    if (config().perf_style == "rings") {
+        float margin = perf_ring_margin(), d = perf_cap_h() - 2 * margin;  // the ring's diameter
         float x = r.x + margin;
-        for (auto& m : config().perf_metrics) {
-            auto [v, label] = perf_value(st, m);
+        for (auto& m : ms) {
+            float v = perf_value(st, m).first;
             float cx = x + d / 2, stroke = 1.6f;
             ring(cr, cx, r.cy(), d / 2 - stroke / 2, stroke, std::clamp(v, 0.0f, 1.0f), p.accent, p.text.with_alpha(0.14f));
             glyph(cr, cx, r.cy(), perf_glyph(m), 11, p.text);
-            x += perf_item_w(m);
+            x += d + margin;
         }
     } else {
-        // The capsule keeps the width of the widest values (it never jumps);
-        // inside it, icon+value pairs at a fixed spacing, centred as a whole,
-        // so both margins are always alike.
         Text t{ui(12, "SemiBold"), p.text, Align::Left};
-        std::vector<std::pair<std::string, float>> items;
-        float total = 0;
-        for (auto& m : config().perf_metrics) {
-            std::string label = perf_value(st, m).second;
-            float w = kPerfIcon + 4 + measure(label, t).w;
-            items.push_back({label, w});
-            total += w;
-        }
-        total += kPerfGap * (items.size() - 1);
-        float x = std::round(r.x + (r.w - total) / 2);
-        size_t k = 0;
-        for (auto& m : config().perf_metrics) {
+        float x = r.x + kPerfPad;
+        for (auto& m : ms) {
             glyph(cr, x + kPerfIcon / 2, r.cy(), perf_glyph(m), 13, p.text_dim);
-            text(cr, x + kPerfIcon + 4, r.cy() - 8, items[k].first, t);
-            x += items[k].second + kPerfGap;
-            ++k;
+            text(cr, x + kPerfIcon + 4, r.cy() - 8, perf_value(st, m).second, t);
+            x += perf_num_w(m) + kPerfGap;
         }
     }
-    uint64_t mid = ID("mod.perf");
+    uint64_t mid = ID("mod.perf", static_cast<int64_t>(std::hash<std::string>{}(ms.empty() ? "" : ms.front()) & 0xffff));
     float ax = origin >= 0 ? origin + r.cx() : -1;
     u.add(mid, r).click([this, ax] {
         if (ax >= 0) anchor_at(ax);
@@ -283,6 +276,13 @@ std::vector<App::Cap> App::side_caps(bool left) const {
     std::vector<Cap> caps;
     for (auto& m : config().modules) {
         if (!m.on || (m.side == "left") != left) continue;
+        if (m.id == "perf" && config().perf_split) {
+            for (auto& metric : config().perf_metrics) {
+                std::string sub = "perf:" + metric;
+                caps.push_back({{sub}, false, module_w(sub)});
+            }
+            continue;
+        }
         float w = module_w(m.id);
         if (w <= 0) continue;
         if (joined_module(m.id)) {
@@ -339,8 +339,8 @@ void App::draw_module(cairo_t* cr, Ui& u, const std::string& id, const Rect& r, 
         u.add(ID("mod.window"), r).click([this] { niri_.action(R"({"Action":{"ToggleOverview":{}}})"); });
         return;
     }
-    if (id == "perf") {
-        draw_perf(cr, u, r, origin);
+    if (starts_with(id, "perf")) {
+        draw_perf(cr, u, r, origin, perf_metrics_of(id));
         return;
     }
     if (id == "search") {

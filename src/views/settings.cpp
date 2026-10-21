@@ -173,7 +173,7 @@ static size_t left_count(const std::vector<ModuleConf>& ms) {
 }
 
 float App::module_options_h(const std::string& id) const {
-    if (id == "perf") return 98;
+    if (id == "perf") return 140;
     if (id == "battery") return 44;
     return 0;
 }
@@ -229,6 +229,17 @@ void App::draw_module_options(cairo_t* cr, Ui& u, const std::string& id, const R
                     on ? w::Style::Accent : w::Style::Plain, 11.5f)
                 .click([this, k] {
                     config().perf_style = k == 1 ? "rings" : "numbers";
+                    save_config_soon();
+                });
+        }
+        text(cr, area.x, area.y + 96, "Cápsulas", {ui(12), p.text_dim, Align::Left});
+        const char* split[2] = {"Juntas", "Separadas"};
+        for (int k = 0; k < 2; ++k) {
+            bool on = cfg.perf_split == (k == 1);
+            w::pill(c, ID("set.perf.split", k), {area.x + 86 + k * 106, area.y + 88, 100, 30}, split[k], nullptr,
+                    on ? w::Style::Accent : w::Style::Plain, 11.5f)
+                .click([this, k] {
+                    config().perf_split = k == 1;
                     save_config_soon();
                 });
         }
