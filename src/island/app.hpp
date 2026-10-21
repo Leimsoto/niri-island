@@ -115,6 +115,7 @@ private:
     Spring capbar_h_{0, 420, 36};    // its height, between the two modes
     int capbar_mode_ = 0;            // 0 screenshot, 1 recording
     bool capbar_leaving_ = false;
+    Rect capbar_rect_;               // where it is on screen (clicks inside never close it)
     void open_capbar(int mode);
     void close_capbar(bool now = false);
     void draw_capbar(cairo_t* cr, Ui& u, float w, float h, float dt);

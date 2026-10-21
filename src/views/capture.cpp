@@ -269,6 +269,7 @@ void App::draw_capbar(cairo_t* cr, Ui& u, float W, float H, float dt) {
     float t = std::clamp(capbar_t_.value, 0.0f, 1.1f);
     float bh = capbar_h_.value;
     Rect shape{std::round(W / 2 - BW / 2), H - bh * std::min(t, 1.0f), BW, bh * std::min(t, 1.0f)};
+    capbar_rect_ = shape;
     // the body (and niri's blur behind it)
     float op = config().glass ? config().island_opacity : 1.0f;
     bottom_dock_path(cr, shape, std::min(R, shape.h / 2), E);

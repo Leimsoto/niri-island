@@ -213,7 +213,10 @@ void App::wire_wayland() {
     capbar_.instant = true;
     capbar_.painter = [this](cairo_t* cr, Ui& u, float w, float h, float dt) { draw_capbar(cr, u, w, h, dt); };
     capbar_.on_key = [this](xkb_keysym_t s, const std::string&, uint32_t m) { capbar_key(s, m); };
-    capbar_.on_backdrop_click = [this](float, float) { close_capbar(); };
+    capbar_.on_backdrop_click = [this](float x, float y) {
+        // a click on the bubble's own background is a slip, not "close"
+        if (!capbar_rect_.inset(-16).contains(x, y)) close_capbar();
+    };
     capbar_.moving = [this] { return !capbar_t_.settled() || !capbar_h_.settled(); };
     settings_.moving = [this] { return !set_scroll_.settled() || !set_search_.text.empty() || !set_edit_key_.empty(); };
     for (EdgeBar* b : {&bar_left_, &bar_right_}) {

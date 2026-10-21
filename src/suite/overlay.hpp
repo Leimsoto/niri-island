@@ -30,7 +30,12 @@ public:
     // Testing aid: a click at surface coordinates, through the Ui.
     void inject_click(float x, float y, Button b = Button::Left) {
         ui_.motion(x, y);
-        if (ui_.button(b, true)) ui_.button(b, false);
+        if (ui_.button(b, true)) {
+            ui_.button(b, false);
+        } else {  // like a real click: what no widget takes goes to the canvas
+            canvas_button(b, true, x, y);
+            canvas_button(b, false, x, y);
+        }
         request();
     }
     // Something to draw and nothing holding it back: the loop must not sleep.
