@@ -20,6 +20,8 @@ public:
 
     void open();
     void close();
+    // Gone right now, no fade (before a screenshot: it must not be in it).
+    void destroy_now();
     bool is_open() const { return surf_ != nullptr && !closing_; }
     bool exists() const { return surf_ != nullptr; }
     // Called from the loop before polling: draws when something changed.

@@ -89,6 +89,19 @@ void Overlay::close() {
     request();
 }
 
+void Overlay::destroy_now() {
+    if (!surf_) return;
+    surf_.reset();
+    closing_ = false;
+    if (fade_snap_) {
+        cairo_surface_destroy(fade_snap_);
+        fade_snap_ = nullptr;
+    }
+    fade_.reset(0);
+    ui_.leave();
+    closed();
+}
+
 void Overlay::pump() {
     if (!surf_ || !dirty_ || !surf_->configured() || surf_->frame_pending()) return;
     render();

@@ -1,6 +1,7 @@
 // Screenshots and screen recording from the island: the options panel, the
 // panel shown while recording, and the flows behind them.
 
+#include <cmath>
 #include <nlohmann/json.hpp>
 #include <unistd.h>
 
@@ -158,121 +159,277 @@ static float chips(w::Ctx& c, const char* id, float x, float y, float w, const c
     return 40;
 }
 
-void App::draw_capture(cairo_t* cr, float w, float h) {
+// ── the capture bubble ────────────────────────────────────────────────────
+// Rises from the bottom edge, docked like the island is at the top. Two
+// clearly separate modes: Captura (region, screen, window) and Grabar (zone,
+// audio, quality…), switched at the top.
+
+void App::open_capbar(int mode) {
+    close_all();
+    capbar_mode_ = mode;
+    cap_windows_ = false;
+    capbar_leaving_ = false;
+    if (!capbar_.exists()) {
+        capbar_t_.reset(0);
+        capbar_h_.reset(0);
+    }
+    capbar_t_.set(1);
+    capbar_.open();
+    capbar_.request();
+}
+
+void App::close_capbar(bool now) {
+    if (!capbar_.exists()) return;
+    if (now) {
+        // Before a screenshot: gone at once, blur and all.
+        capbar_.blur({});
+        capbar_.destroy_now();
+        wl_.dispatch_pending();
+        return;
+    }
+    capbar_leaving_ = true;
+    capbar_t_.set(0);
+    capbar_.request();
+}
+
+void App::capbar_key(xkb_keysym_t sym, uint32_t mods) {
+    (void)mods;
+    if (sym == XKB_KEY_Escape) {
+        if (cap_windows_) cap_windows_ = false;
+        else close_capbar();
+    } else if (sym == XKB_KEY_Tab || sym == XKB_KEY_Left || sym == XKB_KEY_Right) {
+        capbar_mode_ = 1 - capbar_mode_;
+        cap_windows_ = false;
+    } else if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+        // the obvious action of each mode
+        close_capbar(true);
+        if (capbar_mode_ == 0) take_screenshot(0, cap_delay_, 0, cap_edit_);
+        else start_recording();
+    }
+    capbar_.request();
+}
+
+// The docked shape: square to the bottom edge, with the concave ears.
+static void bottom_dock_path(cairo_t* cr, const Rect& r, float R, float e) {
+    float H = r.bottom();
+    cairo_new_path(cr);
+    cairo_move_to(cr, r.x - e, H);
+    cairo_arc_negative(cr, r.x - e, H - e, e, M_PI / 2, 0);
+    cairo_line_to(cr, r.x, r.y + R);
+    cairo_arc(cr, r.x + R, r.y + R, R, M_PI, 3 * M_PI / 2);
+    cairo_line_to(cr, r.right() - R, r.y);
+    cairo_arc(cr, r.right() - R, r.y + R, R, -M_PI / 2, 0);
+    cairo_line_to(cr, r.right(), H - e);
+    cairo_arc_negative(cr, r.right() + e, H - e, e, M_PI, M_PI / 2);
+    cairo_close_path(cr);
+}
+
+// A big choice tile (glyph and label); `on` keeps it lit.
+static Region& tile(w::Ctx& c, uint64_t id, const Rect& r, const char* g, const char* label, const char* sub, bool on,
+                    Color tint) {
     const auto& p = T();
-    w::Ctx c{cr, ui_};
+    float hv = c.ui.hover(id);
+    float s = w::press_scale(c.ui, id, 0.04f);
+    cairo_save(c.cr);
+    scale_around(c.cr, r.cx(), r.cy(), s);
+    fill(c.cr, r, 18, on ? tint.with_alpha(0.22f) : mix(p.surface, p.surface_hi, hv));
+    stroke(c.cr, r, 18, tint.with_alpha(on ? 0.7f : 0.12f + 0.3f * hv), on ? 1.5f : 1);
+    glyph(c.cr, r.cx(), r.y + 26, g, 22, on ? tint : mix(p.text_dim, tint, hv));
+    text(c.cr, r.cx(), r.y + 44, label, {ui(12.5f, "SemiBold"), p.text, Align::Center});
+    if (sub) text(c.cr, r.x + 6, r.y + 61, sub, {ui(10.5f), p.text_faint, Align::Center, r.w - 12});
+    cairo_restore(c.cr);
+    return c.ui.add(id, r);
+}
+
+void App::draw_capbar(cairo_t* cr, Ui& u, float W, float H, float dt) {
+    const auto& p = T();
+    w::Ctx c{cr, u};
+    const float BW = 640, R = 26, E = 14;
+    bool rec_busy = recorder_.active();
+    int nwin = 0;
+    for (auto& kv : niri_.windows()) {
+        (void)kv;
+        ++nwin;
+    }
+    // the height each mode needs
+    float want = cap_windows_ ? 64 + std::min(nwin, 6) * 52.0f + 14
+               : capbar_mode_ == 0 ? 64 + 84 + 12 + 80 + 16
+               : rec_busy ? 64 + 120
+                          : 64 + 84 + 12 + 120 + 8 + 44 + 18;
+    if (capbar_h_.value <= 0.5f) capbar_h_.reset(want);
+    capbar_h_.set(want);
+    capbar_h_.update(dt);
+    capbar_t_.update(dt);
+    if (capbar_leaving_ && capbar_t_.value < 0.02f) {
+        capbar_leaving_ = false;
+        capbar_.blur({});
+        capbar_.destroy_now();
+        return;
+    }
+    float t = std::clamp(capbar_t_.value, 0.0f, 1.1f);
+    float bh = capbar_h_.value;
+    Rect shape{std::round(W / 2 - BW / 2), H - bh * std::min(t, 1.0f), BW, bh * std::min(t, 1.0f)};
+    // the body (and niri's blur behind it)
+    float op = config().glass ? config().island_opacity : 1.0f;
+    bottom_dock_path(cr, shape, std::min(R, shape.h / 2), E);
+    set(cr, p.island.with_alpha(op));
+    cairo_fill(cr);
+    if (config().glass && config().compositor_blur && wl_.can_blur() && t > 0.05f)
+        capbar_.blur({{Rect{shape.x, shape.y, shape.w, shape.h + R}, R, false}});  // square at the edge
+    else capbar_.blur({});
+    float ca = std::clamp((t - 0.35f) / 0.65f, 0.0f, 1.0f);
+    if (ca <= 0.01f) return;
+
+    // content: laid out for the full height, sliding up with the body
+    float y0 = H - bh + (1 - std::min(t, 1.0f)) * bh;
+    float x0 = shape.x;
+    cairo_save(cr);
+    bottom_dock_path(cr, shape, std::min(R, shape.h / 2), E);
+    cairo_clip(cr);
+    cairo_push_group(cr);
+    u.push_clip(shape);
+
+    // ── top row: the two modes, clearly apart ──
+    Rect seg{std::round(W / 2 - 150), y0 + 14, 300, 36};
+    fill(cr, seg, 18, p.surface);
+    const char* names[2] = {"Captura", "Grabar"};
+    const char* glyphs[2] = {"󰄀", "󰑋"};
+    for (int m = 0; m < 2; ++m) {
+        Rect half{seg.x + 3 + m * (seg.w / 2 - 3), seg.y + 3, seg.w / 2 - 3, seg.h - 6};
+        bool on = capbar_mode_ == m;
+        Color tint = m == 0 ? p.accent : p.bad;
+        uint64_t id = ID("cb.mode", m);
+        float hv = u.hover(id);
+        if (on) fill(cr, half, half.h / 2, tint);
+        else if (hv > 0.01f) fill(cr, half, half.h / 2, p.text.with_alpha(0.06f * hv));
+        Color fg = on ? (m == 0 ? p.on_accent : Color{1, 1, 1, 1}) : p.text_dim;
+        float tw = measure(names[m], {ui(13, "SemiBold")}).w;
+        float gx = half.cx() - (tw + 22) / 2;
+        glyph(cr, gx + 8, half.cy(), glyphs[m], 14, fg);
+        text(cr, gx + 22, half.cy() - 9, names[m], {ui(13, "SemiBold"), fg});
+        u.add(id, half).click([this, m] {
+            capbar_mode_ = m;
+            cap_windows_ = false;
+        });
+    }
+    std::string pics = config().screenshot_dir.empty() ? user_dir("PICTURES", "Imágenes") + "/Capturas" : expand_home(config().screenshot_dir);
+    std::string vids = config().recording_dir.empty() ? user_dir("VIDEOS", "Vídeos") + "/Grabaciones" : expand_home(config().recording_dir);
+    std::string dir = capbar_mode_ == 0 ? pics : vids;
+    w::icon_button(c, ID("cb.dir"), {x0 + 16, y0 + 16, 32, 32}, "󰉏", 15).click([this, dir] {
+        make_dirs(dir);
+        proc::spawn({"xdg-open", dir});
+        close_capbar();
+    });
+    w::icon_button(c, ID("cb.close"), {x0 + BW - 48, y0 + 16, 32, 32}, "󰅖", 14).click([this] { close_capbar(); });
+
+    float y = y0 + 64;
     if (cap_windows_) {
-        w::header(c, ID("capw.back"), w, "Capturar ventana", "Elige cuál").click([this] { cap_windows_ = false; });
-        float y = 62;
+        // ── a window to capture ──
         int i = 0;
         for (auto& [id, win] : niri_.windows()) {
-            if (y + 50 > h - 10) break;
-            Rect r{16, y, w - 32, 46};
+            if (i >= 6) break;
+            Rect r{x0 + 16, y, BW - 32, 46};
             uint64_t wid = win.id;
-            uint64_t rid = ID("capw.row", static_cast<int64_t>(wid));
-            float hv = ui_.hover(rid);
+            uint64_t rid = ID("cb.win", static_cast<int64_t>(wid));
+            float hv = u.hover(rid);
             fill(cr, r, 14, mix(p.surface, p.surface_hi, hv));
             Rect ic{r.x + 10, r.cy() - 14, 28, 28};
-            cairo_surface_t* img = ImageCache::get().request("icon:" + win.app_id, 56);
-            if (img) image(cr, img, ic, 6);
+            if (cairo_surface_t* img = ImageCache::get().request("icon:" + win.app_id, 56)) image(cr, img, ic, 6);
             else glyph(cr, ic.cx(), ic.cy(), "󰖯", 15, p.text_dim);
             text(cr, r.x + 48, r.y + 6, win.title.empty() ? win.app_id : win.title, {ui(13, "SemiBold"), p.text, Align::Left, r.w - 60});
             text(cr, r.x + 48, r.y + 25, win.app_id + (win.focused ? " · enfocada" : ""), {ui(11), p.text_dim, Align::Left, r.w - 60});
-            ui_.add(rid, r).click([this, wid] {
+            u.add(rid, r).click([this, wid] {
                 cap_windows_ = false;
+                close_capbar(true);
                 take_screenshot(2, cap_delay_, wid);
             });
             y += 52;
             ++i;
         }
-        if (i == 0) text(cr, w / 2, h / 2, "No hay ventanas abiertas", {ui(13), p.text_dim, Align::Center});
-        return;
-    }
-
-    w::header(c, ID("cap.back"), w, "Captura y grabación", "").click([this] { back(); });
-    std::string pics = config().screenshot_dir.empty() ? user_dir("PICTURES", "Imágenes") + "/Capturas" : expand_home(config().screenshot_dir);
-    std::string vids = config().recording_dir.empty() ? user_dir("VIDEOS", "Vídeos") + "/Grabaciones" : expand_home(config().recording_dir);
-    w::icon_button(c, ID("cap.dirpics"), {w - 88, 14, 32, 32}, "󰉏", 15).click([pics] {
-        make_dirs(pics);
-        proc::spawn({"xdg-open", pics});
-    });
-    w::icon_button(c, ID("cap.dirvids"), {w - 50, 14, 32, 32}, "󰕧", 15).click([vids] {
-        make_dirs(vids);
-        proc::spawn({"xdg-open", vids});
-    });
-
-    // ── screenshot ───────────────────────────────────────────────────
-    text(cr, 18, 62, "CAPTURA", {ui(11, "Bold"), p.accent});
-    struct Big {
-        const char* glyph;
-        const char* label;
-        int mode;
-    };
-    Big bigs[] = {{"󰩬", "Región", 0}, {"󰍹", "Pantalla", 1}, {"󰖯", "Ventana", 2}};
-    float bw = (w - 32 - 20) / 3;
-    for (int i = 0; i < 3; ++i) {
-        Rect r{16 + i * (bw + 10), 82, bw, 76};
-        uint64_t id = ID("cap.big", i);
-        float hv = ui_.hover(id);
-        float s = w::press_scale(ui_, id, 0.04f);
-        cairo_save(cr);
-        scale_around(cr, r.cx(), r.cy(), s);
-        fill(cr, r, 18, mix(p.surface, p.surface_hi, hv));
-        stroke(cr, r, 18, p.accent.with_alpha(0.15f + 0.3f * hv), 1);
-        glyph(cr, r.cx(), r.y + 28, bigs[i].glyph, 22, mix(p.text_dim, p.accent, hv));
-        text(cr, r.cx(), r.y + 48, bigs[i].label, {ui(12.5f, "SemiBold"), p.text, Align::Center});
-        cairo_restore(cr);
-        int mode = bigs[i].mode;
-        ui_.add(id, r).click([this, mode] {
-            if (mode == 2) {
-                cap_windows_ = true;
-                return;
-            }
-            take_screenshot(mode, cap_delay_, 0, cap_edit_);
+        if (i == 0) text(cr, W / 2, y + 4, "No hay ventanas abiertas", {ui(13), p.text_dim, Align::Center});
+    } else if (capbar_mode_ == 0) {
+        // ── screenshot ──
+        struct Big {
+            const char* glyph;
+            const char* label;
+            const char* sub;
+        };
+        Big bigs[3] = {{"󰩬", "Región", "Arrastra una zona"}, {"󰍹", "Pantalla", "Toda la pantalla"}, {"󰖯", "Ventana", "Elige una ventana"}};
+        float bw = (BW - 32 - 20) / 3;
+        for (int i = 0; i < 3; ++i) {
+            Rect r{x0 + 16 + i * (bw + 10), y, bw, 76};
+            tile(c, ID("cb.shot", i), r, bigs[i].glyph, bigs[i].label, bigs[i].sub, false, p.accent).click([this, i] {
+                if (i == 2) {
+                    cap_windows_ = true;
+                    return;
+                }
+                close_capbar(true);
+                take_screenshot(i, cap_delay_, 0, cap_edit_);
+            });
+        }
+        y += 88;
+        static const int delays[] = {0, 3, 5, 10};
+        int di = 0;
+        for (int i = 0; i < 4; ++i)
+            if (delays[i] == cap_delay_) di = i;
+        y += chips(c, "cb.delay", x0 + 16, y, BW - 32, "Retardo", {"No", "3 s", "5 s", "10 s"}, di,
+                   [this](int i) { cap_delay_ = delays[i]; });
+        chips(c, "cb.edit", x0 + 16, y, BW - 32, "Al capturar", {"Abrir el editor", "Guardar directamente"}, cap_edit_ ? 0 : 1,
+              [this](int i) { cap_edit_ = i == 0; });
+    } else if (rec_busy) {
+        // ── a recording is running ──
+        text(cr, W / 2, y + 6, "Hay una grabación en curso", {ui(14, "SemiBold"), p.text, Align::Center});
+        float bw2 = (BW - 32 - 10) / 2;
+        w::pill(c, ID("cb.recctl"), {x0 + 16, y + 44, bw2, 42}, "Controles", "󰐊", w::Style::Tonal, 13).click([this] {
+            close_capbar();
+            open(View::Record, true);
         });
-    }
-    float y = 170;
-    static const int delays[] = {0, 3, 5, 10};
-    int di = 0;
-    for (int i = 0; i < 4; ++i)
-        if (delays[i] == cap_delay_) di = i;
-    y += chips(c, "cap.delay", 16, y, w - 32, "Retardo", {"No", "3 s", "5 s", "10 s"}, di,
-               [this](int i) { cap_delay_ = delays[i]; });
-    y += chips(c, "cap.edit", 16, y, w - 32, "Pantalla", {"Abrir editor", "Guardar directo"}, cap_edit_ ? 0 : 1,
-               [this](int i) { cap_edit_ = i == 0; });
-
-    // ── recording ────────────────────────────────────────────────────
-    y += 6;
-    text(cr, 18, y, "GRABACIÓN", {ui(11, "Bold"), p.bad});
-    y += 20;
-    RecOptions& o = recorder_.options();
-    auto save = [this] { recorder_.save_options(); };
-    float half = (w - 32 - 12) / 2;
-    chips(c, "rec.target", 16, y, half, "Zona", {"Pantalla", "Región"}, o.target, [&o, save](int i) { o.target = i; save(); });
-    chips(c, "rec.fps", 16 + half + 12, y, half, "Fotogramas", {"30", "60"}, o.fps == 30 ? 0 : 1,
-          [&o, save](int i) { o.fps = i == 0 ? 30 : 60; save(); });
-    y += 40;
-    y += chips(c, "rec.audio", 16, y, w - 32, "Audio", {"Sin audio", "Sistema", "Micrófono", "Ambos"}, o.audio,
-               [&o, save](int i) { o.audio = i; save(); });
-    chips(c, "rec.q", 16, y, half, "Calidad", {"Alta", "Media", "Baja"}, o.quality, [&o, save](int i) { o.quality = i; save(); });
-    chips(c, "rec.enc", 16 + half + 12, y, half, "Codificador", {"GPU", "CPU"}, o.encoder,
-          [&o, save](int i) { o.encoder = i; save(); });
-    y += 40;
-    static const int cds[] = {0, 3, 5, 10};
-    int ci = 0;
-    for (int i = 0; i < 4; ++i)
-        if (cds[i] == o.countdown) ci = i;
-    chips(c, "rec.fmt", 16, y, half, "Formato", {"MP4", "MKV", "GIF"}, o.format, [&o, save](int i) { o.format = i; save(); });
-    chips(c, "rec.cd", 16 + half + 12, y, half, "Cuenta atrás", {"0", "3", "5", "10"}, ci,
-          [&o, save](int i) { o.countdown = cds[i]; save(); });
-    y += 46;
-    bool busy = recorder_.active();
-    w::pill(c, ID("rec.go"), {16, y, w - 32, 42}, busy ? "Abrir controles de la grabación" : "Empezar a grabar", "󰑋",
-            busy ? w::Style::Tonal : w::Style::Danger, 13.5f)
-        .click([this, busy] {
-            if (busy) open(View::Record, true);
-            else start_recording();
+        w::pill(c, ID("cb.recstop"), {x0 + 26 + bw2, y + 44, bw2, 42}, "Detener y guardar", "󰓛", w::Style::Danger, 13).click([this] {
+            close_capbar();
+            recorder_.stop();
         });
+    } else {
+        // ── recording ──
+        RecOptions& o = recorder_.options();
+        auto save = [this] { recorder_.save_options(); };
+        float bw = (BW - 32 - 10) / 2;
+        const char* tg[2] = {"󰍹", "󰩬"};
+        const char* tl[2] = {"Pantalla", "Región"};
+        const char* ts[2] = {"Toda la pantalla", "La eliges al empezar"};
+        for (int i = 0; i < 2; ++i)
+            tile(c, ID("cb.zone", i), {x0 + 16 + i * (bw + 10), y, bw, 76}, tg[i], tl[i], ts[i], o.target == i, p.bad)
+                .click([&o, save, i] {
+                    o.target = i;
+                    save();
+                });
+        y += 88;
+        float half = (BW - 32 - 12) / 2;
+        y += chips(c, "cb.audio", x0 + 16, y, BW - 32, "Audio", {"Sin audio", "Sistema", "Micrófono", "Ambos"}, o.audio,
+                   [&o, save](int i) { o.audio = i; save(); });
+        chips(c, "cb.fps", x0 + 16, y, half, "Fotogramas", {"30", "60"}, o.fps == 30 ? 0 : 1,
+              [&o, save](int i) { o.fps = i == 0 ? 30 : 60; save(); });
+        chips(c, "cb.fmt", x0 + 28 + half, y, half, "Formato", {"MP4", "MKV", "GIF"}, o.format,
+              [&o, save](int i) { o.format = i; save(); });
+        y += 40;
+        static const int cds[] = {0, 3, 5, 10};
+        int ci = 0;
+        for (int i = 0; i < 4; ++i)
+            if (cds[i] == o.countdown) ci = i;
+        chips(c, "cb.q", x0 + 16, y, half, "Calidad", {"Alta", "Media", "Baja"}, o.quality, [&o, save](int i) { o.quality = i; save(); });
+        chips(c, "cb.cd", x0 + 28 + half, y, half, "Cuenta atrás", {"0", "3", "5", "10"}, ci,
+              [&o, save](int i) { o.countdown = cds[i]; save(); });
+        y += 48;
+        w::pill(c, ID("cb.recgo"), {x0 + 16, y, BW - 32, 44}, o.target == 1 ? "Elegir región y grabar" : "Empezar a grabar", "󰑋",
+                w::Style::Danger, 13.5f)
+            .click([this] {
+                close_capbar(true);
+                start_recording();
+            });
+    }
+    u.pop_clip();
+    cairo_pop_group_to_source(cr);
+    cairo_paint_with_alpha(cr, ca);
+    cairo_restore(cr);
 }
 
 void App::draw_record(cairo_t* cr, float w, float h) {
@@ -283,7 +440,7 @@ void App::draw_record(cairo_t* cr, float w, float h) {
     if (st == Recorder::State::Idle) {
         text(cr, w / 2, 40, "No hay ninguna grabación en curso", {ui(13.5f, "SemiBold"), p.text_dim, Align::Center});
         w::pill(c, ID("recp.new"), {w / 2 - 110, 80, 220, 40}, "Opciones de grabación", "󰑋", w::Style::Danger)
-            .click([this] { open(View::Capture, true); });
+            .click([this] { open_capbar(1); });
         return;
     }
     float pulse = st == Recorder::State::Recording ? 0.55f + 0.45f * std::fabs(std::sin(anim_time_ * 2.2f)) : 1.0f;

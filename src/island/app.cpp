@@ -210,6 +210,11 @@ void App::wire_wayland() {
     settings_.painter = [this](cairo_t* cr, Ui& u, float w, float h, float dt) { draw_settings(cr, u, w, h, dt); };
     settings_.on_key = [this](xkb_keysym_t s, const std::string& t, uint32_t m) { settings_key(s, t, m); };
     settings_.on_backdrop_click = [this](float, float) { settings_.close_now(); };
+    capbar_.instant = true;
+    capbar_.painter = [this](cairo_t* cr, Ui& u, float w, float h, float dt) { draw_capbar(cr, u, w, h, dt); };
+    capbar_.on_key = [this](xkb_keysym_t s, const std::string&, uint32_t m) { capbar_key(s, m); };
+    capbar_.on_backdrop_click = [this](float, float) { close_capbar(); };
+    capbar_.moving = [this] { return !capbar_t_.settled() || !capbar_h_.settled(); };
     settings_.moving = [this] { return !set_scroll_.settled() || !set_search_.text.empty() || !set_edit_key_.empty(); };
     for (EdgeBar* b : {&bar_left_, &bar_right_}) {
         b->painter = [this](cairo_t* cr, Ui& u, float w, float h, bool left, std::vector<Rect>& input) {
@@ -395,6 +400,7 @@ int App::before_poll() {
     bar_right_.pump();
     settings_.pump();
     screensaver_.pump();
+    capbar_.pump();
     lock_.pump();
     if (dirty_ && island_ && island_->configured() && !island_->frame_pending()) {
         render();
@@ -407,9 +413,10 @@ int App::before_poll() {
         bar_right_.pump();
         settings_.pump();
         screensaver_.pump();
+        capbar_.pump();
         lock_.pump();
     }
-    for (Overlay* o : std::initializer_list<Overlay*>{&wallpicker_, &capture_, &bar_left_, &bar_right_, &settings_, &screensaver_})
+    for (Overlay* o : std::initializer_list<Overlay*>{&wallpicker_, &capture_, &bar_left_, &bar_right_, &settings_, &screensaver_, &capbar_})
         if (o->wants_frame()) merge(0);
     if (lock_.wants_frame()) merge(0);
     // Overlays commit after the dispatch above flushed: send their frames now,
@@ -537,7 +544,6 @@ void App::on_view_enter(View v) {
             confirm_.clear();
             session_sel_ = 0;
             break;
-        case View::Capture: cap_windows_ = false; break;
         default: break;
     }
 }
@@ -687,7 +693,6 @@ void App::sizes_for(View v, float& w, float& h) {
             else if (tm_mode_ == 1) h = timer_.running() ? 214 : 322;
             else h = stopwatch_.laps().empty() ? 214 : std::min(214.0f + 14 + stopwatch_.laps().size() * 30.0f, 360.0f);
             break;
-        case View::Capture: w = 600; h = cap_windows_ ? 440 : 486; break;
         case View::Record: w = 440; h = 196; break;
     }
 }
@@ -1152,6 +1157,7 @@ void App::render() {
             island_->set_input_rects({});
             last_input_.clear();
         }
+        island_->set_blur({});  // niri's blur behind the panel would show in the picture
         island_->end_frame(bbox.unite(last_bbox_));
         last_bbox_ = bbox;
         return;
@@ -1453,7 +1459,6 @@ void App::draw_view(cairo_t* cr, View v, float w, float h) {
         case View::Session: draw_session(cr, w, h); break;
         case View::Stats: draw_stats(cr, w, h); break;
         case View::Timer: draw_timer(cr, w, h); break;
-        case View::Capture: draw_capture(cr, w, h); break;
         case View::Record: draw_record(cr, w, h); break;
     }
 }

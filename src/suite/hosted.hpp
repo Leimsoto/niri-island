@@ -18,6 +18,7 @@ public:
     std::function<void(float x, float y)> on_backdrop_click;
     std::function<bool()> moving;
     std::function<void()> on_closed;
+    bool instant = false;  // no fade in: the content animates by itself
     float fade() const { return alpha(); }
     void blur(const std::vector<LayerSurface::BlurShape>& shapes) {
         if (surf_) surf_->set_blur(shapes);
@@ -44,6 +45,7 @@ protected:
         if (on_closed) on_closed();
     }
     const char* name() const override { return name_; }
+    bool instant_open() const override { return instant; }
 
 private:
     const char* name_;

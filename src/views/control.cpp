@@ -110,7 +110,7 @@ void App::draw_control(cairo_t* cr, float w, float h) {
          }},
         {"cc.night", "󰖔", [] { proc::spawn_shell(config().cmd_night_light); }},
         {"cc.settings", "󰒓", [this] { open_settings(); }},
-        {"cc.capture", "󰄀", [this] { open(View::Capture); }},
+        {"cc.capture", "󰄀", [this] { open_capbar(0); }},
         {"cc.stats", "󰓅", [this] { open(View::Stats); }},
     };
     TopBtn right[] = {

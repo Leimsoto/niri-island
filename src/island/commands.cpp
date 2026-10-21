@@ -87,7 +87,16 @@ std::string App::command(const std::string& line) {
         open_note(id);
         return "note " + std::to_string(id);
     }
-    if (c == "capture") return toggle_panel(View::Capture);
+    if (c == "capture") {
+        // the bubble at the bottom; "capture record" opens it on recording
+        int mode = a.size() > 1 && (a[1] == "record" || a[1] == "grabar") ? 1 : 0;
+        if (capbar_.is_open() && !capbar_leaving_ && (a.size() < 2 || mode == capbar_mode_)) {
+            close_capbar();
+            return "closed";
+        }
+        open_capbar(mode);
+        return "opened";
+    }
     if (c == "screenshot" || c == "shot") {
         // screenshot [region|screen|window] [delay] [--no-edit]
         std::string mode = a.size() > 1 ? a[1] : "region";

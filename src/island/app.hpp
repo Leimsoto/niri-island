@@ -64,7 +64,6 @@ enum class View {
     Session,
     Stats,
     Timer,
-    Capture,
     Record,
     Clipboard,
     Inbox,
@@ -109,6 +108,17 @@ private:
     island::Capture capture_{wl_};
     EdgeBar bar_left_{wl_, true}, bar_right_{wl_, false};
     HostedOverlay settings_{wl_, "niri-island-settings"};
+    // The capture bubble: rises from the bottom edge (Mod+S), screenshot or
+    // recording, each with its own options.
+    HostedOverlay capbar_{wl_, "niri-island-capture"};
+    Spring capbar_t_{0, 420, 34};    // 0 hidden … 1 out
+    Spring capbar_h_{0, 420, 36};    // its height, between the two modes
+    int capbar_mode_ = 0;            // 0 screenshot, 1 recording
+    bool capbar_leaving_ = false;
+    void open_capbar(int mode);
+    void close_capbar(bool now = false);
+    void draw_capbar(cairo_t* cr, Ui& u, float w, float h, float dt);
+    void capbar_key(xkb_keysym_t sym, uint32_t mods);
     Backdrop backdrop_{wl_};
     Screensaver screensaver_{wl_};
     island::Lock lock_{wl_};
@@ -460,7 +470,6 @@ private:
     void start_recording();
     void with_output(std::function<void(const std::string&)> fn);
     void notify_file(const std::string& title, const std::string& path, cairo_surface_t* thumb, const std::string& body);
-    void draw_capture(cairo_t* cr, float w, float h);
     void draw_record(cairo_t* cr, float w, float h);
     bool airplane() const;
     void refresh_launcher();
