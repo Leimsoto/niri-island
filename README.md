@@ -13,14 +13,12 @@ pantalla de bloqueo.
 
 | | |
 |---|---|
-| ![La isla en reposo, con la música sonando](docs/screenshots/island-rest.png) | ![El reproductor al pasar el ratón](docs/screenshots/island-player.png) |
-| **En reposo**: reloj, carátula y espectro; a los lados, workspaces, monitor, buscador y estado | **Al pasar el ratón**: el reproductor sale de la isla |
-| ![Centro de control](docs/screenshots/control-center.png) | ![Ajustes](docs/screenshots/settings.png) |
-| **Centro de control** | **Ajustes**, con buscador |
-| ![Selector de fondos en panal](docs/screenshots/wallpaper-picker.png) | ![Burbuja de captura](docs/screenshots/capture.png) |
-| **Selector de fondos** (estilo panal; también carrusel y tarjetas) | **Captura** (Mod+S): la pantalla se congela y sale la burbuja |
-| ![Pantalla de bloqueo](docs/screenshots/lock.png) | |
-| **Pantalla de bloqueo** propia | |
+| ![El reproductor al pasar el ratón](docs/screenshots/island-player.png) | ![Centro de control](docs/screenshots/control-center.png) |
+| **Al pasar el ratón**: el reproductor sale de la isla | **Centro de control** |
+| ![Ajustes](docs/screenshots/settings.png) | ![Selector de fondos en panal](docs/screenshots/wallpaper-picker.png) |
+| **Ajustes**, con buscador | **Selector de fondos** (estilo panal; también carrusel y tarjetas) |
+| ![Burbuja de captura](docs/screenshots/capture.png) | ![Pantalla de bloqueo](docs/screenshots/lock.png) |
+| **Captura** (Mod+S): la pantalla se congela y sale la burbuja | **Pantalla de bloqueo** propia |
 
 ---
 
