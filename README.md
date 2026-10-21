@@ -9,7 +9,7 @@ centro de control, lanzador, calendario, tareas, notas y más. Inspirado en
 Sustituye por sí solo a la barra, el demonio de notificaciones, el gestor de fondos, la bandeja del sistema y la
 pantalla de bloqueo.
 
-![El escritorio con la isla en reposo](docs/screenshots/desktop.png)
+<p align="center"><img src="docs/screenshots/bar.png" alt="La barra con la isla en reposo"></p>
 
 | | |
 |---|---|
