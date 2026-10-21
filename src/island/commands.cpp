@@ -183,6 +183,14 @@ std::string App::command(const std::string& line) {
         wallpicker_.inject_click(std::stof(a[1]), std::stof(a[2]));
         return "ok";
     }
+    if (c == "debug-settings-search") {
+        std::string q;
+        for (size_t i = 1; i < a.size(); ++i) q += (i > 1 ? " " : "") + a[i];
+        set_search_.text = q;
+        set_search_.caret = q.size();
+        settings_.request();
+        return "ok";
+    }
     if (c == "debug-settings-scroll" && a.size() >= 4) {
         settings_.inject_scroll(std::stof(a[1]), std::stof(a[2]), std::stof(a[3]));
         return "ok";

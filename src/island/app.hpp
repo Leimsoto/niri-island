@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <vector>
@@ -454,6 +455,8 @@ private:
     // Modules with options (gear in the modules list): how open each card is.
     std::map<std::string, Spring> mod_open_;
     float module_options_h(const std::string& id) const;  // the options' height when open
+    std::string module_option_words(const std::string& id) const;  // for the settings search
+    std::set<std::string> mod_auto_open_;                 // opened by a search
     float module_extra_h(const std::string& id) const;     // …as it is right now
     void draw_module_options(cairo_t* cr, Ui& u, const std::string& id, const Rect& area);
     bool perf_on() const;

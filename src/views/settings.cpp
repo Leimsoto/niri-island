@@ -37,6 +37,7 @@ struct SetRow {
     std::function<void(cairo_t*, const Rect&, int, float)> preview;
     std::function<void(cairo_t*, const Rect&)> custom;
     float custom_h = 0;
+    std::string keywords;  // found by the search too (options inside a custom row)
 };
 
 struct Section {
@@ -170,6 +171,15 @@ static void sort_modules(std::vector<ModuleConf>& ms) {
 
 static size_t left_count(const std::vector<ModuleConf>& ms) {
     return static_cast<size_t>(std::count_if(ms.begin(), ms.end(), [](const ModuleConf& m) { return m.side == "left"; }));
+}
+
+// What the options inside a module's card are called, for the search.
+std::string App::module_option_words(const std::string& id) const {
+    if (id == "perf")
+        return "monitor rendimiento procesador cpu memoria ram temperatura red disco swap intercambio estilo números "
+               "anillos cápsulas juntas separadas";
+    if (id == "battery") return "batería porcentaje";
+    return "";
 }
 
 float App::module_options_h(const std::string& id) const {
@@ -697,6 +707,7 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
         r.sub = "Actívalos, elige su lado y su orden: la lista es la barra, de izquierda a derecha. La tuerca abre sus opciones";
         r.custom_h = 64 + 44.0f * cfg.modules.size() + 48;
         for (auto& m : cfg.modules) r.custom_h += module_extra_h(m.id);
+        for (auto& m : cfg.modules) r.keywords += " " + module_option_words(m.id);
         r.custom = [this, &u](cairo_t* c2, const Rect& card) { draw_modules_editor(c2, u, card); };
         rows.push_back(std::move(r));
     }
@@ -950,8 +961,24 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
     std::string q = fold(set_search_.text);
     std::vector<const SetRow*> shown;
     for (auto& r : rows) {
-        if (q.empty() ? r.section == set_section_ : fold(r.title + " " + r.sub + " " + r.group).find(q) != std::string::npos)
+        if (q.empty() ? r.section == set_section_
+                      : fold(r.title + " " + r.sub + " " + r.group + " " + r.keywords).find(q) != std::string::npos)
             shown.push_back(&r);
+    }
+    // A search that names a module's option opens that module's card (and
+    // closes it again once the search no longer does).
+    for (auto& m : config().modules) {
+        std::string words = module_option_words(m.id);
+        if (words.empty()) continue;
+        bool hit = !q.empty() && fold(words).find(q) != std::string::npos;
+        bool was = mod_auto_open_.count(m.id) > 0;
+        if (hit && !was) {
+            mod_auto_open_.insert(m.id);
+            mod_open_[m.id].set(1);
+        } else if (!hit && was) {
+            mod_auto_open_.erase(m.id);
+            mod_open_[m.id].set(0);
+        }
     }
     if (q.empty()) {
         text(cr, ca.x, ca.y, kSections[set_section_].title, {ui(22, "Bold"), p.text});
