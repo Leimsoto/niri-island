@@ -477,6 +477,8 @@ static void reg_global(void* data, wl_registry* reg, uint32_t id, const char* if
             wl_registry_bind(reg, id, &ext_session_lock_manager_v1_interface, 1));
     } else if (strcmp(iface, wl_output_interface.name) == 0) {
         self->outputs_.push_back(static_cast<wl_output*>(wl_registry_bind(reg, id, &wl_output_interface, std::min(ver, 3u))));
+        self->output_names_.push_back(id);
+        if (self->on_outputs_changed) self->on_outputs_changed();
     } else if (strcmp(iface, ext_background_effect_manager_v1_interface.name) == 0) {
         self->bg_effect_ = static_cast<ext_background_effect_manager_v1*>(
             wl_registry_bind(reg, id, &ext_background_effect_manager_v1_interface, 1));
@@ -484,7 +486,19 @@ static void reg_global(void* data, wl_registry* reg, uint32_t id, const char* if
         self->viewporter_ = static_cast<wp_viewporter*>(wl_registry_bind(reg, id, &wp_viewporter_interface, 1));
     }
 }
-static void reg_remove(void*, wl_registry*, uint32_t) {}
+static void reg_remove(void* data, wl_registry*, uint32_t id) {
+    auto* self = static_cast<Wayland*>(data);
+    for (size_t i = 0; i < self->output_names_.size(); ++i) {
+        if (self->output_names_[i] != id) continue;
+        // its surfaces get "closed" from the compositor and go by themselves
+        if (wl_output_get_version(self->outputs_[i]) >= 3) wl_output_release(self->outputs_[i]);
+        else wl_output_destroy(self->outputs_[i]);
+        self->outputs_.erase(self->outputs_.begin() + static_cast<long>(i));
+        self->output_names_.erase(self->output_names_.begin() + static_cast<long>(i));
+        if (self->on_outputs_changed) self->on_outputs_changed();
+        return;
+    }
+}
 static const wl_registry_listener registry_listener = {.global = reg_global, .global_remove = reg_remove};
 
 static void shield_configure(void* data, zwlr_layer_surface_v1* surface, uint32_t serial, uint32_t w, uint32_t h) {
@@ -566,7 +580,7 @@ std::unique_ptr<LayerSurface> Wayland::create_layer(const LayerSpec& spec) {
     s->height_ = spec.height;
     s->surface_ = wl_compositor_create_surface(compositor_);
     wl_surface_add_listener(s->surface_, &surface_listener, s.get());
-    s->layer_ = zwlr_layer_shell_v1_get_layer_surface(layer_shell_, s->surface_, nullptr, spec.layer, spec.name.c_str());
+    s->layer_ = zwlr_layer_shell_v1_get_layer_surface(layer_shell_, s->surface_, spec.output, spec.layer, spec.name.c_str());
     zwlr_layer_surface_v1_add_listener(s->layer_, &layer_listener, s.get());
     zwlr_layer_surface_v1_set_anchor(s->layer_, spec.anchor);
     zwlr_layer_surface_v1_set_size(s->layer_, spec.width, spec.height);

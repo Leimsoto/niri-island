@@ -76,11 +76,30 @@ void Greeter::start() {
         },
         [this, bg, avatars] {
             bg_ = *bg;
+            for (auto& e : extras_) e.dirty = true;
             for (size_t i = 0; i < users_.size() && i < avatars->size(); ++i) users_[i].avatar = (*avatars)[i];
             request();
         });
     tick_ = Loop::get().after(0.5, [this] { request(); }, 0.5);  // clock and caret
     open();
+    const auto& outs = wl_.outputs();
+    for (size_t i = 1; i < outs.size(); ++i) {
+        LayerSpec spec;
+        spec.layer = ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY;
+        spec.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+                      ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+        spec.exclusive_zone = -1;
+        spec.name = "niri-island-greeter-screen";
+        spec.output = outs[i];
+        Extra e;
+        e.surf = wl_.create_layer(spec);
+        LayerSurface* raw = e.surf.get();
+        raw->on_configure = [this, raw] {
+            for (auto& x : extras_)
+                if (x.surf.get() == raw) x.dirty = true;
+        };
+        extras_.push_back(std::move(e));
+    }
 }
 
 // People who can log in: real accounts with a real shell.
@@ -225,12 +244,8 @@ bool Greeter::animating() const {
     return checking_ || now - fail_at_ < 0.5;
 }
 
-void Greeter::draw(cairo_t* cr, float W, float H, float) {
-    const auto& p = T();
-    w::Ctx c{cr, ui_};
-    double now = now_mono();
-
-    // the wallpaper, blurred and darkened
+// The wallpaper, blurred and darkened (the login screen and the others).
+void Greeter::paint_backdrop(cairo_t* cr, float W, float H) const {
     cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
     cairo_set_source_rgb(cr, 0.06, 0.06, 0.08);
     cairo_paint(cr);
@@ -248,6 +263,31 @@ void Greeter::draw(cairo_t* cr, float W, float H, float) {
     }
     cairo_set_source_rgba(cr, 0, 0, 0, 0.30);
     cairo_paint(cr);
+}
+
+bool Greeter::extras_want_frame() const {
+    for (auto& e : extras_)
+        if (e.dirty && e.surf->configured() && !e.surf->frame_pending()) return true;
+    return false;
+}
+
+void Greeter::pump_extras() {
+    for (auto& e : extras_) {
+        if (!e.dirty || !e.surf->configured() || e.surf->frame_pending()) continue;
+        cairo_t* cr = e.surf->begin_frame();
+        if (!cr) continue;
+        e.dirty = false;
+        paint_backdrop(cr, static_cast<float>(e.surf->width()), static_cast<float>(e.surf->height()));
+        e.surf->end_frame({});
+    }
+}
+
+void Greeter::draw(cairo_t* cr, float W, float H, float) {
+    const auto& p = T();
+    w::Ctx c{cr, ui_};
+    double now = now_mono();
+
+    paint_backdrop(cr, W, H);
 
     // the docked island: the machine's name, a spinner while checking
     std::string label = host_.empty() ? "niri" : host_;

@@ -72,8 +72,9 @@ int main(int argc, char* argv[]) {
     loop.before_poll = [&] {
         wl.dispatch_pending();
         greeter.pump();
+        greeter.pump_extras();
         wl.dispatch_pending();
-        return greeter.wants_frame() ? 0 : -1;
+        return greeter.wants_frame() || greeter.extras_want_frame() ? 0 : -1;
     };
     greeter.start();
     loop.run();

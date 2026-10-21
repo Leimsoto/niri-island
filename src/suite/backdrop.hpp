@@ -24,6 +24,7 @@ public:
     void step(int dir);                   // next / previous in the wallpaper folders
     const std::string& current() const { return path_; }
     void pump();                          // draws when needed (from the loop)
+    void outputs_changed();               // a screen plugged in or out
     void set_paused(bool paused);         // a video wallpaper stops while hidden
 
     static std::string state_path();      // {"path": …}
@@ -35,10 +36,18 @@ public:
 
 private:
     Wayland& wl_;
-    std::unique_ptr<LayerSurface> surf_;
+    // One surface per screen (each gets the picture, covering it).
+    struct Out {
+        wl_output* output = nullptr;
+        std::unique_ptr<LayerSurface> surf;
+        bool dirty = true;
+    };
+    std::vector<Out> outs_;
     cairo_surface_t* img_ = nullptr;
     std::string path_;
-    bool dirty_ = false;
+    void mark_dirty() {
+        for (auto& o : outs_) o.dirty = true;
+    }
     uint64_t gen_ = 0;  // newest request wins when loads overlap
     proc::Child video_;
 
@@ -47,7 +56,7 @@ private:
     void stop_video();
     bool paused_ = false;
     void send_mpv(const std::string& cmd);
-    void render();
+    void render(Out& o);
     void save_state() const;
     void make_palette(const std::string& path, bool video);
 };

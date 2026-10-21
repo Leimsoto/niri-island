@@ -89,33 +89,61 @@ void Backdrop::init() {
 }
 
 void Backdrop::ensure_surface() {
-    if (surf_) return;
-    LayerSpec spec;
-    spec.layer = ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND;
-    spec.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
-                  ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
-    spec.exclusive_zone = -1;
-    spec.keyboard = KeyboardMode::None;
-    spec.name = "niri-island-wallpaper";
-    surf_ = wl_.create_layer(spec);
-    surf_->on_configure = [this] {
-        dirty_ = true;
-    };
-    surf_->on_closed = [this] {
-        // Output gone or changed: build it again shortly.
-        Loop::get().post([this] {
-            surf_.reset();
-            Loop::get().after(0.5, [this] {
-                if (!is_video(path_)) {
-                    ensure_surface();
-                    dirty_ = true;
-                }
+    // every screen there is (or, none known yet, wherever the compositor says)
+    std::vector<wl_output*> want = wl_.outputs();
+    if (want.empty()) want.push_back(nullptr);
+    for (wl_output* out : want) {
+        bool have = false;
+        for (auto& o : outs_) have |= o.output == out;
+        if (have) continue;
+        LayerSpec spec;
+        spec.layer = ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND;
+        spec.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+                      ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+        spec.exclusive_zone = -1;
+        spec.keyboard = KeyboardMode::None;
+        spec.name = "niri-island-wallpaper";
+        spec.output = out;
+        Out o;
+        o.output = out;
+        o.surf = wl_.create_layer(spec);
+        LayerSurface* raw = o.surf.get();
+        raw->on_configure = [this, raw] {
+            for (auto& x : outs_)
+                if (x.surf.get() == raw) x.dirty = true;
+        };
+        raw->on_closed = [this, raw] {
+            // that screen went away or changed: drop it, rebuild shortly
+            Loop::get().post([this, raw] {
+                outs_.erase(std::remove_if(outs_.begin(), outs_.end(), [raw](const Out& x) { return x.surf.get() == raw; }),
+                            outs_.end());
+                Loop::get().after(0.5, [this] {
+                    if (!is_video(path_) && img_) ensure_surface();
+                });
             });
-        });
-    };
+        };
+        outs_.push_back(std::move(o));
+    }
 }
 
-void Backdrop::drop_surface() { surf_.reset(); }
+void Backdrop::outputs_changed() {
+    // surfaces on screens that are gone; new screens get one
+    const auto& now = wl_.outputs();
+    outs_.erase(std::remove_if(outs_.begin(), outs_.end(),
+                               [&](const Out& x) {
+                                   return x.output && std::find(now.begin(), now.end(), x.output) == now.end();
+                               }),
+                outs_.end());
+    if (!is_video(path_) && img_) {
+        // the one made before any screen was known is replaced by real ones
+        if (!now.empty())
+            outs_.erase(std::remove_if(outs_.begin(), outs_.end(), [](const Out& x) { return !x.output; }), outs_.end());
+        ensure_surface();
+        mark_dirty();
+    }
+}
+
+void Backdrop::drop_surface() { outs_.clear(); }
 
 void Backdrop::stop_video() {
     if (video_.pid > 0) {
@@ -190,7 +218,7 @@ void Backdrop::set(const std::string& path) {
                           if (img_) cairo_surface_destroy(img_);
                           img_ = *img;
                           ensure_surface();
-                          dirty_ = true;
+                          mark_dirty();
                           // Under our surface by now: the video can stop.
                           Loop::get().after(0.3, [this, gen] {
                               if (gen == gen_) stop_video();
@@ -200,15 +228,16 @@ void Backdrop::set(const std::string& path) {
 }
 
 void Backdrop::pump() {
-    if (!surf_ || !dirty_ || !surf_->configured() || surf_->frame_pending()) return;
-    render();
+    for (auto& o : outs_)
+        if (o.dirty && o.surf && o.surf->configured() && !o.surf->frame_pending()) render(o);
 }
 
-void Backdrop::render() {
-    cairo_t* cr = surf_->begin_frame();
+void Backdrop::render(Out& o) {
+    LayerSurface* surf = o.surf.get();
+    cairo_t* cr = surf->begin_frame();
     if (!cr) return;
-    dirty_ = false;
-    float w = static_cast<float>(surf_->width()), h = static_cast<float>(surf_->height());
+    o.dirty = false;
+    float w = static_cast<float>(surf->width()), h = static_cast<float>(surf->height());
     cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
     cairo_set_source_rgb(cr, 0.05, 0.05, 0.06);
     cairo_paint(cr);
@@ -226,7 +255,7 @@ void Backdrop::render() {
             cairo_restore(cr);
         }
     }
-    surf_->end_frame({});
+    surf->end_frame({});
     if (on_shown) {
         std::string shown = path_;
         Loop::get().post([this, shown] {

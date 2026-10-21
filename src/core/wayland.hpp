@@ -36,6 +36,7 @@ struct LayerSpec {
     KeyboardMode keyboard = KeyboardMode::None;
     std::string name = "niri-island";
     bool input_everywhere = false;      // full input region (overlays)
+    wl_output* output = nullptr;        // a given screen; none = the compositor picks (the focused one)
 };
 
 // One layer-shell surface with its own buffers, input and callbacks. Several
@@ -125,6 +126,8 @@ public:
     std::unique_ptr<LayerSurface> create_lock_surface(ext_session_lock_v1* lock, wl_output* output);
     bool can_lock() const { return lock_mgr_ != nullptr; }
     const std::vector<wl_output*>& outputs() const { return outputs_; }
+    // A screen plugged in or out (after start-up).
+    std::function<void()> on_outputs_changed;
 
     void set_shield(bool on);
     bool shield_active() const { return shield_surface_ != nullptr; }
@@ -153,6 +156,7 @@ public:
     ext_background_effect_manager_v1* bg_effect_ = nullptr;
     ext_session_lock_manager_v1* lock_mgr_ = nullptr;
     std::vector<wl_output*> outputs_;
+    std::vector<uint32_t> output_names_;  // their registry names, to notice one unplugged
     wp_cursor_shape_device_v1* cursor_dev_ = nullptr;
     wp_viewporter* viewporter_ = nullptr;
 

@@ -56,6 +56,9 @@ bool App::init() {
     };
     backdrop_.on_error = [this](const std::string& m) { show_toast(m); };
     lock_.on_failed = [] { proc::spawn_shell("swaylock -f -c 141218"); };
+    // A screen plugged in or out: the wallpaper follows (out of the
+    // Wayland dispatch, on the next turn of the loop).
+    wl_.on_outputs_changed = [this] { loop_.post([this] { backdrop_.outputs_changed(); }); };
     backdrop_.on_shown = [this](const std::string& path) {
         wallpicker_.backdrop_shown(path);
         update_wallpaper_pause();

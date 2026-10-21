@@ -25,6 +25,9 @@ public:
     ~Greeter() override;
 
     void start();
+    // The other screens: the blurred wallpaper, so none stays bare.
+    void pump_extras();
+    bool extras_want_frame() const;
     std::function<void()> on_done;  // a session was started (or demo left): exit
 
 protected:
@@ -32,6 +35,10 @@ protected:
     void key(xkb_keysym_t sym, const std::string& utf8, uint32_t mods) override;
     bool animating() const override;
     const char* name() const override { return "niri-island-greeter"; }
+    // the login itself on the first screen
+    void adjust_spec(LayerSpec& s) const override {
+        if (!wl_.outputs().empty()) s.output = wl_.outputs().front();
+    }
 
 private:
     struct User {
@@ -52,6 +59,12 @@ private:
     cairo_surface_t* bg_ = nullptr;
     uint64_t tick_ = 0;
     std::string host_;
+    struct Extra {
+        std::unique_ptr<LayerSurface> surf;
+        bool dirty = true;
+    };
+    std::vector<Extra> extras_;
+    void paint_backdrop(cairo_t* cr, float W, float H) const;
 
     void load_users();
     void load_sessions();
