@@ -14,6 +14,9 @@ here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(dirname "$here")"
 conf=/etc/greetd/config.toml
 backup=/etc/greetd/config.toml.before-niri-island
+# Some greeters (noctalia's) ship a drop-in that points greetd at their own
+# config file; ours, with the same name, takes its place.
+dropin=/etc/systemd/system/greetd.service.d/noctalia-greeter.conf
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Ejecútalo con sudo." >&2
@@ -23,6 +26,10 @@ fi
 if [ "${1:-}" = "--disable" ]; then
     if [ -f "$backup" ]; then
         cp "$backup" "$conf"
+        if grep -q "niri-island" "$dropin" 2>/dev/null; then
+            rm -f "$dropin"
+            systemctl daemon-reload
+        fi
         echo "greetd vuelve a usar el greeter anterior (se aplica en el próximo inicio)."
     else
         echo "No hay copia de la configuración anterior ($backup)." >&2
@@ -80,5 +87,17 @@ if [ "${1:-}" = "--enable" ]; then
     ' "$conf" > "$tmp"
     install -m644 "$tmp" "$conf"
     rm -f "$tmp"
+    # greetd started with another config file (a vendor drop-in)? point it at ours
+    if systemctl cat greetd 2>/dev/null | grep -q -- "--config" && ! systemctl cat greetd | grep -q -- "--config $conf"; then
+        mkdir -p "$(dirname "$dropin")"
+        cat > "$dropin" <<EOT
+# niri-island: replaces the drop-in of the same name that pointed greetd at
+# another config. Remove this file to go back.
+[Service]
+ExecStart=
+ExecStart=greetd --config $conf
+EOT
+        systemctl daemon-reload
+    fi
     echo "greetd usará niri-island en el próximo inicio. Para volver atrás: sudo $0 --disable"
 fi
