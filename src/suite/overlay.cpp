@@ -24,6 +24,7 @@ void Overlay::open() {
         spec.input_everywhere = true;
         spec.name = name();
         adjust_spec(spec);
+        if (kb_suspended_) spec.keyboard = KeyboardMode::None;
         surf_ = wl_.create_layer(spec);
         fade_.reset(0);
         LayerSurface* s = surf_.get();
@@ -87,6 +88,11 @@ void Overlay::close() {
     surf_->set_keyboard(KeyboardMode::None);
     surf_->set_input_rects({});
     request();
+}
+
+void Overlay::suspend_keyboard(bool on) {
+    kb_suspended_ = on;
+    if (surf_ && !closing_) surf_->set_keyboard(on ? KeyboardMode::None : KeyboardMode::Exclusive);
 }
 
 void Overlay::destroy_now() {

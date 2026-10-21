@@ -68,7 +68,10 @@ void App::refresh_launcher() {
         {"󰍹", "Capturar pantalla", "captura screenshot pantalla", [this] { take_screenshot(1, 0); }, true},
         {"󰑋", recorder_.active() ? "Detener grabación" : "Grabar pantalla", "grabar record video pantalla",
          [this] { recorder_.active() ? recorder_.stop() : start_recording(); }, true},
-        {"󰄀", "Captura y grabación", "captura grabacion opciones", [this] { open_capbar(0); }, false},
+        {"󰄀", "Captura y grabación", "captura grabacion opciones", [this] {
+             close_all();
+             loop_.after(0.35, [this] { start_capture(0); });
+         }, false},
         {"󰕮", "Centro de control", "control centro ajustes", [this] { open(View::Control, true); }, false},
         {"󰌾", "Bloquear pantalla", "bloquear lock", [this] { run_session("lock"); }, true},
         {"󰂛", notifs_.dnd() ? "Desactivar No molestar" : "Activar No molestar", "dnd no molestar silencio",

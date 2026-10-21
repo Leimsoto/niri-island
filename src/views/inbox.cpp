@@ -133,7 +133,7 @@ void App::draw_tray(cairo_t* cr, float w, float h) {
         const TrayItem* it = nullptr;
         for (auto& x : items)
             if (x.key == tray_menu_key_) it = &x;
-        std::string title = it ? (it->title.empty() ? it->id : it->title) : "Menú";
+        std::string title = it ? it->name : "Menú";
         const std::vector<TrayMenuItem>* level = &tray_menu_;
         for (int idx : tray_menu_path_)
             if (idx >= 0 && idx < static_cast<int>(level->size())) level = &(*level)[idx].children;
@@ -212,7 +212,7 @@ void App::draw_tray(cairo_t* cr, float w, float h) {
         if (cairo_surface_t* img = tray_icon(it)) image(cr, img, ic, 4);
         else glyph(cr, ib.cx(), ib.cy(), "󰣆", 15, p.text_dim);
         bool attention = it.status == "NeedsAttention";
-        std::string name = !it.title.empty() ? it.title : it.id;
+        std::string name = it.name;
         if (!name.empty()) name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
         std::string sub = attention ? "Necesita tu atención" : it.item_is_menu ? "Clic para ver opciones" : "Clic para abrir · clic derecho, opciones";
         text(cr, r.x + 50, r.y + 7, name, {ui(13, "SemiBold"), p.text, Align::Left, r.w - 100});

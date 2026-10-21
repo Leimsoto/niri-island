@@ -24,6 +24,8 @@ struct TrayItem {
     std::string key;           // service + path
     std::string service, path;
     std::string id, title, status, icon_name, theme_path, menu_path;
+    std::string proc;          // the owner's process name (from the bus)
+    std::string name;          // what to show: the title, or the id tidied up
     bool item_is_menu = false;
     std::shared_ptr<cairo_surface_t> pixmap;  // when the app sends pixels, not a name
 };

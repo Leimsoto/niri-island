@@ -1,7 +1,9 @@
 #include "services/tray.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
+#include <strings.h>
 #include <iostream>
 #include <unistd.h>
 
@@ -201,6 +203,34 @@ int Tray::p_version(sd_bus*, const char*, const char*, const char*, sd_bus_messa
     return sd_bus_message_append(reply, "i", 0);
 }
 
+// A name a person would recognise: apps often leave Title empty and give an
+// Id like "discord_status_icon_1" or "nm-applet-tray".
+static std::string display_name(const TrayItem& it) {
+    if (!it.title.empty()) return it.title;
+    std::string s = it.id;
+    for (bool again = true; again;) {
+        again = false;
+        while (!s.empty() && (std::isdigit(static_cast<unsigned char>(s.back())) || s.back() == '_' || s.back() == '-')) {
+            s.pop_back();
+            again = true;
+        }
+        for (const char* tail : {"_status_icon", "-status-icon", "statusicon", "_tray", "-tray", "_indicator", "-indicator",
+                                 "_applet", "-applet", "StatusNotifierItem", "-sni", "_sni"}) {
+            size_t n = strlen(tail);
+            if (s.size() > n && strcasecmp(s.c_str() + s.size() - n, tail) == 0) {
+                s.resize(s.size() - n);
+                again = true;
+            }
+        }
+    }
+    if (s.empty() || s.size() < 2) s = it.proc;
+    if (s.empty()) return it.id;
+    for (char& ch : s)
+        if (ch == '_' || ch == '-') ch = ' ';
+    s[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(s[0])));
+    return s;
+}
+
 void Tray::add(const std::string& service, const std::string& path) {
     std::string key = service + path;
     if (!find(key)) {
@@ -208,6 +238,14 @@ void Tray::add(const std::string& service, const std::string& path) {
         it.key = key;
         it.service = service;
         it.path = path;
+        // whose it is: the process name, for when the app gives no name
+        sd_bus_creds* creds = nullptr;
+        if (sd_bus_get_name_creds(bus_, service.c_str(), SD_BUS_CREDS_PID | SD_BUS_CREDS_COMM, &creds) >= 0 && creds) {
+            const char* comm = nullptr;
+            if (sd_bus_creds_get_comm(creds, &comm) >= 0 && comm) it.proc = comm;
+            sd_bus_creds_unref(creds);
+        }
+        it.name = display_name(it);
         items_.push_back(it);
         emit("StatusNotifierItemRegistered", key);
         sd_bus_emit_properties_changed(bus_, kWatcherPath, kWatcher, "RegisteredStatusNotifierItems", nullptr);
@@ -301,6 +339,7 @@ void Tray::refresh(const std::string& key) {
                 }
                 sd_bus_message_exit_container(reply);
             }
+            it->name = display_name(*it);
             if (c->self->on_change) c->self->on_change();
             return 0;
         },

@@ -22,6 +22,8 @@ public:
     void close();
     // Gone right now, no fade (before a screenshot: it must not be in it).
     void destroy_now();
+    // While a capture is going on, keys are the capture's alone.
+    void suspend_keyboard(bool on);
     bool is_open() const { return surf_ != nullptr && !closing_; }
     bool exists() const { return surf_ != nullptr; }
     // Called from the loop before polling: draws when something changed.
@@ -75,6 +77,7 @@ protected:
     float px_ = -1, py_ = -1;
     bool pointer_in_ = false;
     bool ui_owns_press_ = false;
+    bool kb_suspended_ = false;
 
 private:
     Spring fade_{0, 300, 32};

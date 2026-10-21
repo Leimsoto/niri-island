@@ -47,83 +47,93 @@ void App::notify_file(const std::string& title, const std::string& path, cairo_s
     notifs_.post(n);
 }
 
-void App::take_screenshot(int mode, int delay, uint64_t window_id, bool edit) {
-    // mode: 0 region, 1 whole screen, 2 one window
-    if (!capture_.exists()) shot_depth_ = 0;  // the editor was closed: start over
-    if (shot_pending_ || shot_depth_ >= 2) {
-        std::string msg = shot_pending_ ? "Ya se está tomando una captura" : "Máximo dos capturas a la vez";
-        if (capture_.is_open()) capture_.notice(msg);  // the editor covers the island
-        else show_toast(msg);
-        return;
+// The focused output as it is now, islands and panels included.
+static cairo_surface_t* grab_screen_blocking() {
+    std::string out = focused_output_blocking();
+    std::string file = runtime_dir() + "/niri-island-shot.ppm";
+    std::vector<std::string> cmd = {"grim", "-t", "ppm"};
+    if (!out.empty()) cmd.insert(cmd.end(), {"-o", out});
+    cmd.push_back(file);
+    proc::run(cmd, 8000);
+    cairo_surface_t* img = load_image_full(file);
+    unlink(file.c_str());
+    return img;
+}
+
+void App::capture_keys(bool on) {
+    if (on == capture_keys_) return;
+    capture_keys_ = on;
+    // Enter, Space, Esc… are the capture's: nothing else may take them
+    for (Overlay* o : std::initializer_list<Overlay*>{&settings_, &wallpicker_, &screensaver_}) o->suspend_keyboard(on);
+    request();
+}
+
+void App::save_screenshot(cairo_surface_t* img) {
+    Capture::save_async(img, true, config().screenshot_copy, [this](const std::string& path, cairo_surface_t* thumb) {
+        if (path.empty()) {
+            cairo_surface_destroy(thumb);
+            show_toast("No se pudo guardar la captura");
+            return;
+        }
+        notify_file("Captura guardada", path, thumb, config().screenshot_copy ? "Copiada al portapapeles" : "");
+    });
+}
+
+void App::take_screenshot(int mode, int delay, uint64_t window_id, bool edit, bool counted) {
+    // mode: 0 region, 1 whole screen, 2 one window. Nothing on screen is
+    // touched: the islands and any open panel stay, as they are, in the shot.
+    if (!counted) {
+        if (!capture_.exists()) shot_depth_ = 0;  // the editor was closed: start over
+        if (shot_pending_ || shot_depth_ >= 2) {
+            std::string msg = shot_pending_ ? "Ya se está tomando una captura" : "Máximo dos capturas a la vez";
+            if (capture_.is_open()) capture_.notice(msg);  // the editor covers the island
+            else show_toast(msg);
+            return;
+        }
+        ++shot_depth_;
     }
     shot_pending_ = true;
-    ++shot_depth_;
-    close_all();
-    notifs_.dismiss_current();
-    osd_.until = 0;
     auto shoot = [this, mode, window_id, edit] {
-        island_hidden_ = true;
-        request();
-        // Two frames for the island to disappear from the screen.
-        loop_.after(0.15, [this, mode, window_id, edit] {
-            auto img = std::make_shared<cairo_surface_t*>(nullptr);
-            loop_.async(
-                [mode, window_id, img] {
-                    if (mode == 2) {
-                        // niri renders the window by itself and puts it in the clipboard.
-                        proc::run({"niri", "msg", "action", "screenshot-window", "--id", std::to_string(window_id), "-d",
-                                   "false", "-p", "false"},
-                                  5000);
-                        usleep(350000);
-                        auto r = proc::run({"wl-paste", "--type", "image/png"}, 5000);
-                        if (!r.ok() || r.out.empty()) return;
-                        std::string file = runtime_dir() + "/niri-island-shot.png";
-                        write_file_atomic(file, r.out);
-                        *img = load_image_full(file);
-                        unlink(file.c_str());
-                        return;
-                    }
-                    std::string out = focused_output_blocking();
-                    std::string file = runtime_dir() + "/niri-island-shot.ppm";
-                    std::vector<std::string> cmd = {"grim", "-t", "ppm"};
-                    if (!out.empty()) cmd.insert(cmd.end(), {"-o", out});
-                    cmd.push_back(file);
-                    proc::run(cmd, 8000);
+        auto img = std::make_shared<cairo_surface_t*>(nullptr);
+        loop_.async(
+            [mode, window_id, img] {
+                if (mode == 2) {
+                    // niri renders the window by itself and puts it in the clipboard.
+                    proc::run({"niri", "msg", "action", "screenshot-window", "--id", std::to_string(window_id), "-d",
+                               "false", "-p", "false"},
+                              5000);
+                    usleep(350000);
+                    auto r = proc::run({"wl-paste", "--type", "image/png"}, 5000);
+                    if (!r.ok() || r.out.empty()) return;
+                    std::string file = runtime_dir() + "/niri-island-shot.png";
+                    write_file_atomic(file, r.out);
                     *img = load_image_full(file);
                     unlink(file.c_str());
-                },
-                [this, img, mode, edit] {
-                    island_hidden_ = false;
-                    shot_pending_ = false;
-                    request();
-                    // saved straight away: no editor stays open to stack on
-                    if (!*img || (mode == 1 && !edit)) shot_depth_ = std::max(0, shot_depth_ - 1);
-                    if (!*img) {
-                        show_toast("No se pudo capturar la pantalla");
-                        return;
-                    }
-                    if (mode == 1 && !edit) {
-                        Capture::save_async(*img, true, config().screenshot_copy,
-                                            [this](const std::string& path, cairo_surface_t* thumb) {
-                                                if (path.empty()) {
-                                                    cairo_surface_destroy(thumb);
-                                                    show_toast("No se pudo guardar la captura");
-                                                    return;
-                                                }
-                                                notify_file("Captura guardada", path, thumb,
-                                                            config().screenshot_copy ? "Copiada al portapapeles" : "");
-                                            });
-                        return;
-                    }
-                    capture_.edit(*img, mode != 0, mode != 2);
-                });
-        });
+                    return;
+                }
+                *img = grab_screen_blocking();
+            },
+            [this, img, mode, edit] {
+                shot_pending_ = false;
+                // saved straight away: no editor stays open to stack on
+                if (!*img || (mode == 1 && !edit)) shot_depth_ = std::max(0, shot_depth_ - 1);
+                if (!*img) {
+                    show_toast("No se pudo capturar la pantalla");
+                    return;
+                }
+                if (mode == 1 && !edit) {
+                    save_screenshot(*img);
+                    return;
+                }
+                capture_keys(true);
+                capture_.edit(*img, mode != 0, mode != 2);
+            });
     };
     if (delay <= 0) {
         shoot();
         return;
     }
-    // Countdown on the island, then shoot.
+    // Countdown on the island; it is gone (a frame) before the shot.
     for (int i = delay; i >= 1; --i) {
         loop_.after(delay - i, [this, i] {
             OsdInfo o;
@@ -134,7 +144,59 @@ void App::take_screenshot(int mode, int delay, uint64_t window_id, bool edit) {
             show_osd(o, 0.95);
         });
     }
-    loop_.after(delay, shoot);
+    loop_.after(delay, [this, shoot] {
+        osd_.until = 0;
+        request();
+        loop_.after(0.12, shoot);
+    });
+}
+
+// Mod+S: freeze first (the screen exactly as it was when the key went down),
+// then the bubble over it. The same key again closes it all.
+void App::start_capture(int mode) {
+    if (capbar_.exists() || capture_.frozen()) {
+        close_capbar();
+        return;
+    }
+    if (!capture_.exists()) shot_depth_ = 0;
+    if (shot_pending_ || shot_depth_ >= 2) {
+        std::string msg = shot_pending_ ? "Ya se está tomando una captura" : "Máximo dos capturas a la vez";
+        if (capture_.is_open()) capture_.notice(msg);
+        else show_toast(msg);
+        return;
+    }
+    shot_pending_ = true;
+    ++shot_depth_;
+    capture_keys(true);
+    auto img = std::make_shared<cairo_surface_t*>(nullptr);
+    loop_.async([img] { *img = grab_screen_blocking(); },
+                [this, img, mode] {
+                    shot_pending_ = false;
+                    if (!*img) {
+                        shot_depth_ = std::max(0, shot_depth_ - 1);
+                        if (!capture_.exists()) capture_keys(false);
+                        show_toast("No se pudo capturar la pantalla");
+                        return;
+                    }
+                    capture_.freeze(*img);
+                    open_capbar(mode);
+                });
+}
+
+// A choice in the bubble, on the frozen screen (a delay takes a new one).
+void App::capture_action(int mode) {
+    close_capbar(true);
+    if (cap_delay_ > 0 || !capture_.frozen()) {
+        if (capture_.frozen()) capture_.destroy_now();
+        take_screenshot(mode, cap_delay_, 0, cap_edit_, true);
+        return;
+    }
+    if (mode == 0) capture_.edit_frozen(false);
+    else if (cap_edit_) capture_.edit_frozen(true);
+    else {
+        shot_depth_ = std::max(0, shot_depth_ - 1);
+        save_screenshot(capture_.take_frozen());
+    }
 }
 
 void App::start_recording() {
@@ -149,7 +211,10 @@ void App::start_recording() {
     auto go = [this, sink, source](const Rect& region) {
         with_output([this, region, sink, source](const std::string& out) { recorder_.start(region, out, sink, source); });
     };
-    if (recorder_.options().target == 1) capture_.select_region(go, [] {});
+    if (recorder_.options().target == 1) {
+        capture_keys(true);
+        capture_.select_region(go, [] {});
+    }
     else go(Rect{});
 }
 
@@ -177,7 +242,6 @@ static float chips(w::Ctx& c, const char* id, float x, float y, float w, const c
 // audio, quality…), switched at the top.
 
 void App::open_capbar(int mode) {
-    close_all();
     capbar_mode_ = mode;
     cap_windows_ = false;
     capbar_leaving_ = false;
@@ -214,9 +278,12 @@ void App::capbar_key(xkb_keysym_t sym, uint32_t mods) {
         cap_windows_ = false;
     } else if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
         // the obvious action of each mode
-        close_capbar(true);
-        if (capbar_mode_ == 0) take_screenshot(0, cap_delay_, 0, cap_edit_);
-        else start_recording();
+        if (capbar_mode_ == 0) capture_action(0);
+        else {
+            close_capbar(true);
+            if (capture_.frozen()) capture_.destroy_now();
+            start_recording();
+        }
     }
     capbar_.request();
 }
@@ -276,6 +343,7 @@ void App::draw_capbar(cairo_t* cr, Ui& u, float W, float H, float dt) {
         capbar_leaving_ = false;
         capbar_.blur({});
         capbar_.destroy_now();
+        if (capture_.frozen()) capture_.destroy_now();  // cancelled: the live screen again
         return;
     }
     float t = std::clamp(capbar_t_.value, 0.0f, 1.1f);
@@ -354,7 +422,8 @@ void App::draw_capbar(cairo_t* cr, Ui& u, float W, float H, float dt) {
             u.add(rid, r).click([this, wid] {
                 cap_windows_ = false;
                 close_capbar(true);
-                take_screenshot(2, cap_delay_, wid);
+                if (capture_.frozen()) capture_.destroy_now();  // niri draws the window itself
+                take_screenshot(2, cap_delay_, wid, true, true);
             });
             y += 52;
             ++i;
@@ -376,8 +445,7 @@ void App::draw_capbar(cairo_t* cr, Ui& u, float W, float H, float dt) {
                     cap_windows_ = true;
                     return;
                 }
-                close_capbar(true);
-                take_screenshot(i, cap_delay_, 0, cap_edit_);
+                capture_action(i);
             });
         }
         y += 88;
@@ -436,6 +504,7 @@ void App::draw_capbar(cairo_t* cr, Ui& u, float W, float H, float dt) {
                 w::Style::Danger, 13.5f)
             .click([this] {
                 close_capbar(true);
+                if (capture_.frozen()) capture_.destroy_now();  // recording is live
                 start_recording();
             });
     }

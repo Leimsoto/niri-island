@@ -94,7 +94,7 @@ std::string App::command(const std::string& line) {
             close_capbar();
             return "closed";
         }
-        open_capbar(mode);
+        start_capture(mode);
         return "opened";
     }
     if (c == "screenshot" || c == "shot") {
@@ -154,7 +154,7 @@ std::string App::command(const std::string& line) {
     if (c == "tray") return toggle_panel(View::Tray);
     if (c == "tray-list") {
         std::string out;
-        for (auto& it : tray_.items()) out += it.key + "  " + (it.title.empty() ? it.id : it.title) + "  [" + it.icon_name + "]\n";
+        for (auto& it : tray_.items()) out += it.key + "  " + it.name + "  [" + it.icon_name + "]\n";
         return out.empty() ? "(vacía)" : out;
     }
     if (c == "screensaver") {

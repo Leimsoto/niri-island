@@ -211,6 +211,14 @@ void App::wire_wayland() {
     settings_.on_key = [this](xkb_keysym_t s, const std::string& t, uint32_t m) { settings_key(s, t, m); };
     settings_.on_backdrop_click = [this](float, float) { settings_.close_now(); };
     capbar_.instant = true;
+    // Once the capture is over (bubble and editor both gone), keys go back.
+    auto keys_back = [this] {
+        loop_.post([this] {
+            if (!capture_.exists() && !capbar_.exists()) capture_keys(false);
+        });
+    };
+    capture_.on_gone = keys_back;
+    capbar_.on_closed = keys_back;
     capbar_.painter = [this](cairo_t* cr, Ui& u, float w, float h, float dt) { draw_capbar(cr, u, w, h, dt); };
     capbar_.on_key = [this](xkb_keysym_t s, const std::string&, uint32_t m) { capbar_key(s, m); };
     capbar_.on_backdrop_click = [this](float x, float y) {
@@ -583,7 +591,8 @@ bool App::text_input_active() const {
 }
 
 void App::update_keyboard() {
-    if (island_) island_->set_keyboard(text_input_active() ? KeyboardMode::Exclusive : KeyboardMode::None);
+    if (island_)
+        island_->set_keyboard(text_input_active() && !capture_keys_ ? KeyboardMode::Exclusive : KeyboardMode::None);
 }
 
 void App::sizes_for(View v, float& w, float& h) {
@@ -1174,17 +1183,6 @@ void App::render() {
         return;
     }
     dirty_ = false;
-    if (island_hidden_) {
-        // Out of the way while a screenshot is taken.
-        if (!last_input_.empty()) {
-            island_->set_input_rects({});
-            last_input_.clear();
-        }
-        island_->set_blur({});  // niri's blur behind the panel would show in the picture
-        island_->end_frame(bbox.unite(last_bbox_));
-        last_bbox_ = bbox;
-        return;
-    }
 
     float bh = bar_h();
     float radius = shape_radius(ir.h);

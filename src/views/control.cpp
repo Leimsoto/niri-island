@@ -110,7 +110,11 @@ void App::draw_control(cairo_t* cr, float w, float h) {
          }},
         {"cc.night", "󰖔", [] { proc::spawn_shell(config().cmd_night_light); }},
         {"cc.settings", "󰒓", [this] { open_settings(); }},
-        {"cc.capture", "󰄀", [this] { open_capbar(0); }},
+        {"cc.capture", "󰄀", [this] {
+             // the panel goes first: it is not wanted in the frozen screen
+             close_all();
+             loop_.after(0.35, [this] { start_capture(0); });
+         }},
         {"cc.stats", "󰓅", [this] { open(View::Stats); }},
     };
     TopBtn right[] = {

@@ -116,7 +116,7 @@ private:
     int capbar_mode_ = 0;            // 0 screenshot, 1 recording
     bool capbar_leaving_ = false;
     Rect capbar_rect_;               // where it is on screen (clicks inside never close it)
-    void open_capbar(int mode);
+    void open_capbar(int mode);  // the bubble alone (start_capture freezes first)
     void close_capbar(bool now = false);
     void draw_capbar(cairo_t* cr, Ui& u, float w, float h, float dt);
     void capbar_key(xkb_keysym_t sym, uint32_t mods);
@@ -146,7 +146,6 @@ private:
     int config_gen_ = 0;
     std::string bar_signature() const;
     Recorder recorder_;
-    bool island_hidden_ = false;
     // capture panel
     bool cap_windows_ = false;   // choosing a window to capture
     int cap_delay_ = 0;
@@ -483,7 +482,14 @@ private:
     void run_session(const std::string& action);
     void set_airplane(bool on);
     void open_wallpaper_picker();
-    void take_screenshot(int mode, int delay, uint64_t window_id = 0, bool edit = true);
+    // `counted`: the capture already went through the limit (from the bubble).
+    void take_screenshot(int mode, int delay, uint64_t window_id = 0, bool edit = true, bool counted = false);
+    // Mod+S: the screen freezes as it is, and the bubble asks what to do.
+    void start_capture(int mode);
+    void capture_action(int mode);          // region / screen, on the frozen screen
+    void save_screenshot(cairo_surface_t* img);
+    void capture_keys(bool on);             // keys go to the capture alone
+    bool capture_keys_ = false;
     void start_recording();
     void with_output(std::function<void(const std::string&)> fn);
     void notify_file(const std::string& title, const std::string& path, cairo_surface_t* thumb, const std::string& body);

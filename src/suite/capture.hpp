@@ -35,6 +35,16 @@ public:
     // of the whole output, shown 1:1; otherwise it is fitted and centred.
     void edit(cairo_surface_t* img, bool select_all, bool screen);
     void select_region(std::function<void(const island::Rect&)> done, std::function<void()> cancelled);
+    // The screen as it was when the capture key was pressed, shown still
+    // (islands and panels included) while the capture bubble asks what to do.
+    // No keys, no pointer: the bubble on top takes them.
+    void freeze(cairo_surface_t* img);
+    bool frozen() const { return frozen_ && exists(); }
+    // From the frozen screen into the editor: a region to draw, or all of it.
+    void edit_frozen(bool select_all);
+    // The frozen picture, handed over (the overlay closes).
+    cairo_surface_t* take_frozen();
+    std::function<void()> on_gone;  // closed, whatever the way
 
     // Encodes, saves to the screenshots folder and/or copies, off the main
     // thread; `done` gets the saved path ("" if not saved) and a thumbnail.
@@ -60,12 +70,15 @@ protected:
     CursorShape canvas_cursor() const override;
     void closed() override;
     const char* name() const override { return "niri-island-capture"; }
+    // It is the screen itself: shown at once, no fade.
+    bool instant_open() const override { return true; }
 
 private:
     std::string notice_;
     double notice_at_ = -10;
     enum class Drag { None, Create, Move, Resize, Draw, ShapeMove };
     bool picking_ = false;  // region picker for the recorder
+    bool frozen_ = false;
     cairo_surface_t* img_ = nullptr;
     int iw_ = 0, ih_ = 0;
     bool screen_ = true;

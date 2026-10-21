@@ -55,6 +55,8 @@ void Capture::reset() {
 }
 
 void Capture::edit(cairo_surface_t* img, bool select_all, bool screen) {
+    frozen_ = false;
+    suspend_keyboard(false);
     if (img_) cairo_surface_destroy(img_);
     img_ = img;
     iw_ = cairo_image_surface_get_width(img);
@@ -70,6 +72,8 @@ void Capture::edit(cairo_surface_t* img, bool select_all, bool screen) {
 }
 
 void Capture::select_region(std::function<void(const Rect&)> done, std::function<void()> cancelled) {
+    frozen_ = false;
+    suspend_keyboard(false);
     if (img_) {
         cairo_surface_destroy(img_);
         img_ = nullptr;
@@ -87,8 +91,43 @@ void Capture::closed() {
         cairo_surface_destroy(img_);
         img_ = nullptr;
     }
+    frozen_ = false;
     region_done_ = nullptr;
     region_cancel_ = nullptr;
+    if (on_gone) on_gone();
+}
+
+void Capture::freeze(cairo_surface_t* img) {
+    if (img_) cairo_surface_destroy(img_);
+    img_ = img;
+    iw_ = cairo_image_surface_get_width(img);
+    ih_ = cairo_image_surface_get_height(img);
+    screen_ = true;
+    picking_ = false;
+    frozen_ = true;
+    reset();
+    suspend_keyboard(true);
+    open();
+}
+
+void Capture::edit_frozen(bool select_all) {
+    if (!frozen()) return;
+    frozen_ = false;
+    reset();
+    if (select_all) {
+        sel_ = {0, 0, static_cast<float>(iw_), static_cast<float>(ih_)};
+        has_sel_ = true;
+    }
+    suspend_keyboard(false);
+    request();
+}
+
+cairo_surface_t* Capture::take_frozen() {
+    cairo_surface_t* img = img_;
+    img_ = nullptr;
+    frozen_ = false;
+    destroy_now();
+    return img;
 }
 
 // ── geometry helpers ───────────────────────────────────────────────────────
@@ -367,6 +406,7 @@ void Capture::finish(bool save, bool copy) {
 // ── input ──────────────────────────────────────────────────────────────────
 
 void Capture::canvas_button(Button b, bool pressed, float x, float y) {
+    if (frozen_) return;  // the bubble on top is in charge
     if (b == Button::Right && pressed) {
         if (drag_ != Drag::None) {
             // Right click while drawing drops the shape being drawn.
@@ -487,6 +527,7 @@ void Capture::canvas_button(Button b, bool pressed, float x, float y) {
 }
 
 void Capture::canvas_motion(float x, float y) {
+    if (frozen_) return;  // the bubble on top is in charge
     float ix = to_ix(x), iy = to_iy(y);
     float maxw = img_ ? iw_ : width() / vs_, maxh = img_ ? ih_ : height() / vs_;
     ix = std::clamp(ix, 0.0f, maxw);
@@ -543,12 +584,14 @@ void Capture::canvas_motion(float x, float y) {
 }
 
 void Capture::canvas_scroll(float dy) {
+    if (frozen_) return;  // the bubble on top is in charge
     if (picking_) return;
     width_ = std::clamp(width_ - dy, 1.0f, 30.0f);
     if (selected_ >= 0 && selected_ < static_cast<int>(shapes_.size())) shapes_[selected_].width = width_;
 }
 
 CursorShape Capture::canvas_cursor() const {
+    if (frozen_) return CursorShape::Default;
     if (drag_ == Drag::Move || drag_ == Drag::ShapeMove) return CursorShape::Grabbing;
     float x = px_, y = py_;
     int h = handle_at(x, y);
@@ -565,6 +608,7 @@ CursorShape Capture::canvas_cursor() const {
 }
 
 void Capture::key(xkb_keysym_t sym, const std::string& utf8, uint32_t mods) {
+    if (frozen_) return;  // the bubble on top is in charge
     bool ctrl = mods & Wayland::MOD_CTRL, shift = mods & Wayland::MOD_SHIFT;
     if (typing_) {
         if (sym == XKB_KEY_Escape) {
@@ -949,6 +993,14 @@ void Capture::draw_loupe(cairo_t* cr, float x, float y, float w, float h) {
 void Capture::draw(cairo_t* cr, float w, float h, float dt) {
     (void)dt;
     const auto& p = T();
+    if (frozen_ && img_) {  // just the still screen, 1:1
+        cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+        cairo_scale(cr, w / iw_, w / iw_);
+        cairo_set_source_surface(cr, img_, 0, 0);
+        cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_FAST);
+        cairo_paint(cr);
+        return;
+    }
     // Image placement: whole-output captures map 1:1 onto the overlay.
     if (img_) {
         if (screen_) {

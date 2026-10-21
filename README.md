@@ -68,7 +68,9 @@ temporizador y cronómetro con vueltas, **notificaciones** (historial y No moles
   aplicación instantánea. Modo **wallhaven**: cuadrícula desplazable, búsqueda, orden, color, contenido
   +18 opcional (marcado en rojo) y descarga a `~/Imágenes/wallpapers/wallhaven`. Los fondos de vídeo **se pausan**
   mientras una ventana ocupa la pantalla (completa o maximizada), como en skwd-wall; se desactiva en Ajustes → Fondos.
-- **Capturas** con editor (región, formas, flechas, texto, pixelado, contador, deshacer) y **grabación** con pausa,
+- **Capturas** (Mod+S): la pantalla se congela al instante tal cual está, islas y paneles incluidos, y una burbuja
+  que sale del borde inferior pregunta qué hacer; editor con región, formas, flechas, texto, pixelado, contador y
+  deshacer. Mientras dura, el teclado es solo de la captura. **Grabación** con pausa,
   audio del sistema y/o micrófono, VA-API y MP4/MKV/GIF.
 - **Protector de pantalla** "Burbujas" (a lo Windows Vista): salen en fila soplando, se dispersan y rebotan.
 - **Pantalla de bloqueo** propia sobre `ext-session-lock`: fondo difuminado, fecha, reloj grande, avatar
