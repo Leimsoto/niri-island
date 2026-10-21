@@ -10,6 +10,9 @@
 
 namespace island {
 
+// Box blur of an ARGB32 surface, in place (three passes: close to a gaussian).
+void blur_argb(cairo_surface_t* s, int radius);
+
 // The lock screen, on ext-session-lock: the compositor keeps the session
 // locked until we say so (even if the island were to die). Blurred
 // wallpaper, the date and a big two-line clock, a small docked island with

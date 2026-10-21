@@ -7,7 +7,7 @@ centro de control, lanzador, calendario, tareas, notas y más. Inspirado en
 [noctalia](https://github.com/noctalia-dev/noctalia) (backend nativo basado en `poll`). **Sin Qt, sin QML, sin JS.**
 
 Sustituye por sí solo a la barra, el demonio de notificaciones, el gestor de fondos, la bandeja del sistema y la
-pantalla de bloqueo.
+pantalla de bloqueo, y trae su propia pantalla de inicio de sesión.
 
 ---
 
@@ -70,6 +70,24 @@ temporizador y cronómetro con vueltas, **notificaciones** (historial y No moles
 - **Protector de pantalla** "Burbujas" (a lo Windows Vista): salen en fila soplando, se dispersan y rebotan.
 - **Pantalla de bloqueo** propia sobre `ext-session-lock`: fondo difuminado, fecha, reloj grande, avatar
   (`~/.face`) y contraseña comprobada con PAM. Si la isla se cerrara, la sesión sigue bloqueada.
+
+## Pantalla de inicio de sesión (prototipo)
+
+`niri-island-greeter` es un greeter para **greetd** con el mismo estilo que el bloqueo: fondo y colores de tu
+escritorio, reloj grande, la isla acoplada con el nombre del equipo, tu cápsula (↑ ↓ o las flechas para cambiar de
+usuario), selector de sesión (clic o F2; incluye «Terminal» como salida de emergencia) y suspender / reiniciar /
+apagar. Recuerda el último usuario y sesión. greetd sigue siendo el pequeño proceso root que abre la sesión con PAM;
+el greeter solo le habla por su socket.
+
+```bash
+niri-island-greeter --demo                 # probarlo sobre el escritorio (contraseña «demo», Esc sale)
+sudo ./greeter/install.sh                  # instalar sin activarlo (copia tu fondo, colores y ~/.face)
+sudo ./greeter/install.sh --enable         # que greetd lo use en el próximo arranque (guarda copia)
+sudo ./greeter/install.sh --disable        # volver al greeter anterior
+```
+
+Corre dentro de un niri mínimo (`/etc/niri-island/greeter.kdl`): al iniciar la sesión el greeter termina, niri se
+cierra y greetd lanza la sesión elegida.
 
 ## Compilar
 

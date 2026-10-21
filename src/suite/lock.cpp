@@ -52,6 +52,8 @@ bool pam_check(const std::string& user, const std::string& password) {
     return r == PAM_SUCCESS;
 }
 
+}  // namespace
+
 // Box blur of an ARGB32 surface, three passes per direction.
 void blur_argb(cairo_surface_t* s, int radius) {
     cairo_surface_flush(s);
@@ -86,8 +88,6 @@ void blur_argb(cairo_surface_t* s, int radius) {
     }
     cairo_surface_mark_dirty(s);
 }
-
-}  // namespace
 
 static const ext_session_lock_v1_listener kListener = {.locked = Lock::on_locked_cb, .finished = Lock::on_finished_cb};
 

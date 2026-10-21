@@ -1,0 +1,31 @@
+// niri for the login screen only: no bar, no shortcuts, just the greeter.
+// When the greeter exits (a session was started), niri quits and greetd
+// launches the session.
+
+input {
+    keyboard {
+        xkb {
+            layout "latam"
+        }
+        numlock
+    }
+    touchpad {
+        tap
+    }
+}
+
+hotkey-overlay {
+    skip-at-startup
+}
+
+prefer-no-csd
+
+cursor {
+    xcursor-size 24
+}
+
+animations {
+    off
+}
+
+spawn-sh-at-startup "niri-island-greeter; niri msg action quit --skip-confirmation"

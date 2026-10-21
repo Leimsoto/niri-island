@@ -617,7 +617,7 @@ void App::sizes_for(View v, float& w, float& h) {
             break;
         }
         case View::Tray: {
-            w = 380;
+            w = 340;
             if (!tray_menu_key_.empty()) {
                 const std::vector<TrayMenuItem>* lv = &tray_menu_;
                 for (int idx : tray_menu_path_)
@@ -626,8 +626,8 @@ void App::sizes_for(View v, float& w, float& h) {
                 for (auto& m : *lv) c += !m.visible ? 0 : m.separator ? 11 : 38;
                 h = std::clamp(60 + c + 12, 120.0f, 560.0f);
             } else {
-                size_t rows = (tray_.items().size() + 3) / 4;
-                h = tray_.items().empty() ? 150 : 58 + rows * 84 + 10;
+                size_t n = tray_.items().size();
+                h = n ? std::min(560.0f, 62 + n * 54.0f + 8) : 160;
             }
             break;
         }

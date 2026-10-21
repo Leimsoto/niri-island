@@ -2,6 +2,7 @@
 // with a search, and cards of toggles, choices, sliders and fields. Every
 // change goes straight into config.json, which the island reloads live.
 
+#include <algorithm>
 #include <map>
 
 #include "core/config.hpp"
@@ -105,10 +106,22 @@ void preview_style(cairo_t* cr, const Rect& r, int which, float) {
 }  // namespace
 
 // The bar's modules: on/off, side, and order.
+// The list is shown as the bar is: the left group, then the right one, each
+// left to right on screen. Changing a module's side moves it there (next to
+// the island), and moving past the edge of a group changes its side.
+static void sort_modules(std::vector<ModuleConf>& ms) {
+    std::stable_partition(ms.begin(), ms.end(), [](const ModuleConf& m) { return m.side == "left"; });
+}
+
+static size_t left_count(const std::vector<ModuleConf>& ms) {
+    return static_cast<size_t>(std::count_if(ms.begin(), ms.end(), [](const ModuleConf& m) { return m.side == "left"; }));
+}
+
 void App::draw_modules_editor(cairo_t* cr, Ui& u, const Rect& card) {
     const auto& p = T();
     w::Ctx c{cr, u};
     auto& mods = config().modules;
+    sort_modules(mods);
     static const std::map<std::string, std::pair<const char*, const char*>> names = {
         {"workspaces", {"󰕰", "Espacios de trabajo"}}, {"window", {"󰖯", "Ventana activa"}},
         {"search", {"󰍉", "Buscador"}},                {"tray", {"󰀻", "Bandeja del sistema"}},
@@ -116,8 +129,16 @@ void App::draw_modules_editor(cairo_t* cr, Ui& u, const Rect& card) {
         {"bluetooth", {"󰂯", "Bluetooth (solo si está activo)"}}, {"volume", {"󰕾", "Volumen"}},
         {"battery", {"󰁹", "Batería"}},
     };
+    size_t nl = left_count(mods);
     float y = card.y + 58;
+    auto heading = [&](const char* t) {
+        text(cr, card.x + 18, y + 4, t, {ui(10.5f, "Bold"), p.text_faint, Align::Left});
+        y += 24;
+    };
+    heading("IZQUIERDA");
+    if (nl == 0) heading("DERECHA");
     for (size_t i = 0; i < mods.size(); ++i) {
+        if (i == nl && nl > 0) heading("DERECHA");
         auto& m = mods[i];
         auto nm = names.count(m.id) ? names.at(m.id) : std::make_pair("󰘔", m.id.c_str());
         Rect row{card.x + 12, y, card.w - 24, 40};
@@ -125,17 +146,23 @@ void App::draw_modules_editor(cairo_t* cr, Ui& u, const Rect& card) {
         glyph(cr, row.x + 20, row.cy(), nm.first, 15, m.on ? p.accent : p.text_faint);
         text(cr, row.x + 42, row.cy() - 9, nm.second, {ui(13), m.on ? p.text : p.text_dim, Align::Left, row.w - 330});
         float x = row.right() - 8;
-        // order
+        // order (crossing the edge of the group changes the side)
         x -= 30;
         w::icon_button(c, ID("set.mod.dn", static_cast<int64_t>(i)), {x, row.y + 5, 30, 30}, "󰅀", 14).click([this, i] {
             auto& ms = config().modules;
-            if (i + 1 < ms.size()) std::swap(ms[i], ms[i + 1]);
+            size_t n = left_count(ms);
+            if (i + 1 == n) ms[i].side = "right";  // last on the left: first on the right
+            else if (i + 1 < ms.size()) std::swap(ms[i], ms[i + 1]);
+            sort_modules(ms);
             save_config_soon();
         });
         x -= 32;
         w::icon_button(c, ID("set.mod.up", static_cast<int64_t>(i)), {x, row.y + 5, 30, 30}, "󰅃", 14).click([this, i] {
             auto& ms = config().modules;
-            if (i > 0) std::swap(ms[i], ms[i - 1]);
+            size_t n = left_count(ms);
+            if (i == n) ms[i].side = "left";  // first on the right: last on the left
+            else if (i > 0) std::swap(ms[i], ms[i - 1]);
+            sort_modules(ms);
             save_config_soon();
         });
         // side
@@ -147,7 +174,16 @@ void App::draw_modules_editor(cairo_t* cr, Ui& u, const Rect& card) {
             w::pill(c, ID("set.mod.side", static_cast<int64_t>(i * 2 + sd)), {x, row.y + 6, 50, 28}, lab, nullptr,
                     on ? w::Style::Accent : w::Style::Plain, 11.5f)
                 .click([this, i, sd] {
-                    config().modules[i].side = sd ? "right" : "left";
+                    auto& ms = config().modules;
+                    std::string side = sd ? "right" : "left";
+                    if (ms[i].side == side) return;
+                    // to the other group, next to the island: the end of the
+                    // left one or the start of the right one
+                    ModuleConf mv = ms[i];
+                    mv.side = side;
+                    ms.erase(ms.begin() + static_cast<long>(i));
+                    size_t at = left_count(ms);
+                    ms.insert(ms.begin() + static_cast<long>(at), mv);
                     save_config_soon();
                 });
             x -= 2;
@@ -160,6 +196,7 @@ void App::draw_modules_editor(cairo_t* cr, Ui& u, const Rect& card) {
         });
         y += 44;
     }
+    if (nl == mods.size()) heading("DERECHA");
 }
 
 // The shadow pad: a dial instead of four sliders.
@@ -498,8 +535,8 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
         SetRow r;
         r.kind = SetRow::Custom;
         r.section = 1, r.group = "Módulos", r.title = "Módulos de la barra",
-        r.sub = "Actívalos, elige su lado y su orden (de izquierda a derecha en pantalla)";
-        r.custom_h = 64 + 44.0f * cfg.modules.size();
+        r.sub = "Actívalos, elige su lado y su orden: la lista es la barra, de izquierda a derecha";
+        r.custom_h = 64 + 44.0f * cfg.modules.size() + 48;
         r.custom = [this, &u](cairo_t* c2, const Rect& card) { draw_modules_editor(c2, u, card); };
         rows.push_back(std::move(r));
     }

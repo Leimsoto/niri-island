@@ -167,11 +167,7 @@ float App::module_w(const std::string& id) const {
         return 12 + 20 + 8 + std::min(240.0f, measure(title, {ui(12, "SemiBold")}).w) + 14;
     }
     if (id == "search") return bar_h();
-    if (id == "tray") {
-        // the apps' own icons, inline; nothing at all when no app has one
-        size_t n = tray_.items().size();
-        return n ? 10 + n * 26.0f : 0;
-    }
+    if (id == "tray") return bar_h();  // one icon; the apps live in its drop-down
     if (id == "bluetooth") return bt_.state().powered ? 26 : 0;  // only while it is on
     if (id == "battery") {
         const auto& b = power_.battery();
@@ -254,34 +250,24 @@ void App::draw_module(cairo_t* cr, Ui& u, const std::string& id, const Rect& r, 
         return;
     }
     if (id == "tray") {
-        float x = r.x + 5;
-        for (auto& it : tray_.items()) {
-            Rect cell{x, r.y + 3, 26, r.h - 6};
-            uint64_t mid = ID("mod.tray", static_cast<int64_t>(std::hash<std::string>{}(it.key) & 0xffffff));
-            float hv = u.hover(mid);
-            if (hv > 0.01f) fill(cr, cell, cell.h / 2, p.text.with_alpha(0.09f * hv));
-            float sz = 18;
-            Rect ic{std::round(cell.cx() - sz / 2), std::round(cell.cy() - sz / 2), sz, sz};
-            if (cairo_surface_t* img = tray_icon(it)) image(cr, img, ic, 3);
-            else glyph(cr, cell.cx(), cell.cy(), "󰣆", 13, p.text_dim);
-            if (it.status == "NeedsAttention") fill(cr, {ic.right() - 3, ic.y - 1, 6, 6}, 3, p.accent);
-            std::string key = it.key;
-            bool menu_only = it.item_is_menu;
-            float ax = origin >= 0 ? origin + cell.cx() : -1;
-            auto open_menu = [this, key, ax] {
-                if (ax >= 0) anchor_at(ax);
-                open_tray_menu(key);
-            };
-            u.add(mid, cell)
-                .click([this, key, menu_only, open_menu] {
-                    if (menu_only) open_menu();
-                    else tray_.activate(key);
-                })
-                .right(open_menu)
-                .middle([this, key] { tray_.secondary(key); })
-                .scroll([this, key](float dy) { tray_.scroll(key, dy > 0 ? -1 : 1); });
-            x += 26;
-        }
+        uint64_t mid = ID("mod.tray");
+        float hv = u.hover(mid);
+        bool open_now = !nav_.empty() && nav_.back() == View::Tray;
+        if (hv > 0.01f || open_now) fill(cr, r.inset(4), (r.h - 8) / 2, p.text.with_alpha(open_now ? 0.12f : 0.09f * hv));
+        glyph(cr, r.cx(), r.cy(), "󰀻", 15, p.text);
+        // an app asking for attention: the accent, on the icon itself (no badge)
+        bool attention = false;
+        for (auto& it : tray_.items()) attention |= it.status == "NeedsAttention";
+        if (attention) glyph(cr, r.cx(), r.cy(), "󰀻", 15, p.accent);
+        u.add(mid, r).click([this, here, open_now] {
+            if (open_now) {
+                close_all();
+                return;
+            }
+            here();
+            tray_menu_key_.clear();
+            open(View::Tray);
+        });
         return;
     }
     // the status ones

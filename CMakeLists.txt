@@ -53,19 +53,25 @@ generate_wayland_proto(cursor-shape-v1 ${WL_PROTO_DIR}/staging/cursor-shape/curs
 generate_wayland_proto(ext-background-effect-v1 ${WL_PROTO_DIR}/staging/ext-background-effect/ext-background-effect-v1.xml)
 generate_wayland_proto(ext-session-lock-v1 ${WL_PROTO_DIR}/staging/ext-session-lock/ext-session-lock-v1.xml)
 
-file(GLOB_RECURSE APP_SRCS CONFIGURE_DEPENDS
+file(GLOB_RECURSE CORE_SRCS CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+list(FILTER CORE_SRCS EXCLUDE REGEX ".*/src/(main\\.cpp|greeter/main\\.cpp)$")
 
-add_executable(niri-island ${APP_SRCS} ${PROTO_SRCS})
-
-target_include_directories(niri-island PRIVATE
+# Everything but the two entry points, shared by the shell and the greeter.
+add_library(island-core STATIC ${CORE_SRCS} ${PROTO_SRCS})
+target_include_directories(island-core PUBLIC
     ${GEN_DIR}
     ${DEPS_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-
-target_compile_options(niri-island PRIVATE -Wall -Wextra -Wno-missing-field-initializers
+target_compile_options(island-core PUBLIC -Wall -Wextra -Wno-missing-field-initializers
     $<$<CONFIG:Release>:-O2>)
-target_link_libraries(niri-island PRIVATE ${DEPS_LIBRARIES} Threads::Threads m rt pam)
+target_link_libraries(island-core PUBLIC ${DEPS_LIBRARIES} Threads::Threads m rt pam)
 
-install(TARGETS niri-island RUNTIME DESTINATION bin)
+add_executable(niri-island src/main.cpp)
+target_link_libraries(niri-island PRIVATE island-core)
+
+add_executable(niri-island-greeter src/greeter/main.cpp)
+target_link_libraries(niri-island-greeter PRIVATE island-core)
+
+install(TARGETS niri-island niri-island-greeter RUNTIME DESTINATION bin)

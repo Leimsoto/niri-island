@@ -185,30 +185,38 @@ void App::draw_tray(cairo_t* cr, float w, float h) {
         return;
     }
 
-    w::header(c, ID("tr.back"), w, "Bandeja", items.empty() ? "Ninguna app en segundo plano" : std::to_string(items.size()) + (items.size() == 1 ? " app" : " apps"))
+    w::header(c, ID("tr.back"), w, "Bandeja del sistema",
+              items.empty() ? "Ninguna app en segundo plano" : std::to_string(items.size()) + (items.size() == 1 ? " app en segundo plano" : " apps en segundo plano"))
         .click([this] { back(); });
     if (items.empty()) {
-        glyph(cr, w / 2, h / 2 + 4, "󰀻", 28, p.text_faint);
+        glyph(cr, w / 2, h / 2 + 2, "󰀻", 28, p.text_faint);
+        text(cr, w / 2, h / 2 + 24, "Las apps con icono de bandeja aparecerán aquí", {ui(11.5f), p.text_faint, Align::Center, w - 40});
         return;
     }
-    // A grid of icons: click opens the app, right click its menu.
-    int cols = 4;
-    float cw = (w - 24) / cols, chh = 84;
+    // One row per app: click opens it, the ⋮ (or right click) shows its menu.
+    float y = 62;
     for (size_t i = 0; i < items.size(); ++i) {
         const TrayItem& it = items[i];
-        Rect r{12 + (i % cols) * cw, 58 + (i / cols) * chh, cw - 6, chh - 6};
-        uint64_t id = ID("tr.i", static_cast<int64_t>(std::hash<std::string>{}(it.key) & 0xffffff));
+        Rect r{12, y, w - 24, 48};
+        if (r.y > h) break;
+        int64_t hk = static_cast<int64_t>(std::hash<std::string>{}(it.key) & 0xffffff);
+        uint64_t id = ID("tr.i", hk);
         float hv = ui_.hover(id);
-        float s = w::press_scale(ui_, id, 0.05f);
+        float s = w::press_scale(ui_, id, 0.02f);
         cairo_save(cr);
         scale_around(cr, r.cx(), r.cy(), s);
-        fill(cr, r, 14, p.text.with_alpha(0.04f + 0.06f * hv));
-        Rect ic{r.cx() - 16, r.y + 12, 32, 32};
-        if (cairo_surface_t* img = tray_icon(it)) image(cr, img, ic, 6);
-        else glyph(cr, ic.cx(), ic.cy(), "󰣆", 20, p.text_dim);
-        if (it.status == "NeedsAttention") fill(cr, {ic.right() - 4, ic.y - 2, 9, 9}, 4.5f, p.bad);
+        fill(cr, r, 14, p.text.with_alpha(0.04f + 0.05f * hv));
+        Rect ib{r.x + 8, r.y + 8, 32, 32};
+        fill(cr, ib, 10, p.text.with_alpha(0.06f));
+        Rect ic{ib.x + 6, ib.y + 6, 20, 20};
+        if (cairo_surface_t* img = tray_icon(it)) image(cr, img, ic, 4);
+        else glyph(cr, ib.cx(), ib.cy(), "󰣆", 15, p.text_dim);
+        bool attention = it.status == "NeedsAttention";
         std::string name = !it.title.empty() ? it.title : it.id;
-        text(cr, r.cx(), r.y + 52, name, {ui(11), p.text_dim, Align::Center, r.w - 10});
+        if (!name.empty()) name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
+        std::string sub = attention ? "Necesita tu atención" : it.item_is_menu ? "Clic para ver opciones" : "Clic para abrir · clic derecho, opciones";
+        text(cr, r.x + 50, r.y + 7, name, {ui(13, "SemiBold"), p.text, Align::Left, r.w - 100});
+        text(cr, r.x + 50, r.y + 26, sub, {ui(10.5f), attention ? p.accent : p.text_faint, Align::Left, r.w - 100});
         cairo_restore(cr);
         std::string key = it.key;
         bool menu_only = it.item_is_menu;
@@ -224,6 +232,9 @@ void App::draw_tray(cairo_t* cr, float w, float h) {
             .right([this, key] { open_tray_menu(key); })
             .middle([this, key] { tray_.secondary(key); })
             .scroll([this, key](float dy) { tray_.scroll(key, dy > 0 ? -1 : 1); });
+        if (!it.menu_path.empty() || menu_only)
+            w::icon_button(c, ID("tr.dots", hk), {r.right() - 40, r.y + 9, 30, 30}, "󰇙", 14).click([this, key] { open_tray_menu(key); });
+        y += 54;
     }
 }
 
