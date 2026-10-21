@@ -103,6 +103,61 @@ void preview_style(cairo_t* cr, const Rect& r, int which, float) {
     cairo_restore(cr);
 }
 
+// The wallpaper picker's styles, in miniature.
+void preview_picker(cairo_t* cr, const Rect& r, int which, float) {
+    const auto& p = T();
+    fill(cr, r, 12, mix(p.surface, p.surface_hi, 0.5f));
+    Rect scr = r.inset(10);
+    rrect(cr, scr, 8);
+    set(cr, p.island.with_alpha(0.9f));
+    cairo_fill(cr);
+    cairo_save(cr);
+    rrect(cr, scr, 8);
+    cairo_clip(cr);
+    Color a = p.accent, b = p.accent.with_alpha(0.55f), c = p.text.with_alpha(0.35f);
+    if (which == 0) {
+        // the carousel: skewed slices, the middle one wide
+        float sw[5] = {14, 14, 38, 14, 14};
+        float x = scr.cx() - (14 * 4 + 38 + 4 * 4) / 2;
+        for (int i = 0; i < 5; ++i) {
+            float y0 = scr.y + 8, y1 = scr.bottom() - 8, k = 6;
+            cairo_new_path(cr);
+            cairo_move_to(cr, x + k, y0);
+            cairo_line_to(cr, x + sw[i] + k, y0);
+            cairo_line_to(cr, x + sw[i] - k, y1);
+            cairo_line_to(cr, x - k, y1);
+            cairo_close_path(cr);
+            set(cr, i == 2 ? a : i % 2 ? b : c);
+            cairo_fill(cr);
+            x += sw[i] + 4;
+        }
+    } else if (which == 1) {
+        // the honeycomb
+        float R = 11, cs = 1.5f * R + 1.5f, rs = std::sqrt(3.0f) * R + 1.5f;
+        for (int col = 0; col < 7; ++col)
+            for (int row = 0; row < 3; ++row) {
+                float cx = scr.x + 8 + col * cs, cy = scr.y + 6 + row * rs + (col % 2 ? rs / 2 : 0);
+                cairo_new_path(cr);
+                for (int k = 0; k < 6; ++k) {
+                    double an = M_PI / 3 * k;
+                    double px = cx + R * std::cos(an), py = cy + R * std::sin(an);
+                    k ? cairo_line_to(cr, px, py) : cairo_move_to(cr, px, py);
+                }
+                cairo_close_path(cr);
+                set(cr, (col + row) % 3 == 0 ? a : (col + row) % 3 == 1 ? b : c);
+                cairo_fill(cr);
+            }
+    } else {
+        // wallhaven's cards
+        float gw = scr.w - 16, cw = (gw - 2 * 5) / 3, ch = cw * 9 / 16;
+        for (int i = 0; i < 6; ++i) {
+            Rect q{scr.x + 8 + (i % 3) * (cw + 5), scr.y + 8 + (i / 3) * (ch + 5), cw, ch};
+            fill(cr, q, 3, i == 1 ? a : i % 2 ? b : c);
+        }
+    }
+    cairo_restore(cr);
+}
+
 }  // namespace
 
 // The bar's modules: on/off, side, and order.
@@ -125,6 +180,7 @@ void App::draw_modules_editor(cairo_t* cr, Ui& u, const Rect& card) {
     static const std::map<std::string, std::pair<const char*, const char*>> names = {
         {"workspaces", {"󰕰", "Espacios de trabajo"}}, {"window", {"󰖯", "Ventana activa"}},
         {"search", {"󰍉", "Buscador"}},                {"tray", {"󰀻", "Bandeja del sistema"}},
+        {"perf", {"󰓅", "Monitor de rendimiento"}},
         {"notifications", {"󰂚", "Notificaciones"}},   {"network", {"󰤨", "Red"}},
         {"bluetooth", {"󰂯", "Bluetooth (solo si está activo)"}}, {"volume", {"󰕾", "Volumen"}},
         {"battery", {"󰁹", "Batería"}},
@@ -540,6 +596,44 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
         r.custom = [this, &u](cairo_t* c2, const Rect& card) { draw_modules_editor(c2, u, card); };
         rows.push_back(std::move(r));
     }
+    // The performance island
+    {
+        struct Metric {
+            const char* id;
+            const char* title;
+            const char* sub;
+        };
+        static const Metric metrics[] = {{"cpu", "Procesador", "Uso de la CPU"},
+                                         {"ram", "Memoria", "RAM en uso"},
+                                         {"temp", "Temperatura", "De la CPU"},
+                                         {"net", "Red", "Velocidad de descarga"},
+                                         {"disk", "Disco", "Espacio usado en /"},
+                                         {"swap", "Intercambio", "Swap en uso"}};
+        for (const auto& m : metrics) {
+            std::string id = m.id;
+            toggle(1, "Monitor de rendimiento", m.title, m.sub,
+                   [&cfg, id] { return std::find(cfg.perf_metrics.begin(), cfg.perf_metrics.end(), id) != cfg.perf_metrics.end(); },
+                   [&cfg, id, save](bool v) {
+                       auto& pm = cfg.perf_metrics;
+                       pm.erase(std::remove(pm.begin(), pm.end(), id), pm.end());
+                       if (v) {
+                           // keep the order of the list above
+                           static const std::vector<std::string> order = {"cpu", "ram", "temp", "net", "disk", "swap"};
+                           auto pos = std::find(order.begin(), order.end(), id) - order.begin();
+                           auto it = pm.begin();
+                           while (it != pm.end() && std::find(order.begin(), order.end(), *it) - order.begin() < pos) ++it;
+                           pm.insert(it, id);
+                       }
+                       save();
+                   });
+        }
+        choice(1, "Monitor de rendimiento", "Estilo", "Actívalo en «Módulos de la barra»", {"Números", "Anillos"},
+               [&cfg] { return cfg.perf_style == "rings" ? 1 : 0; },
+               [&cfg, save](int i) {
+                   cfg.perf_style = i == 1 ? "rings" : "numbers";
+                   save();
+               });
+    }
     toggle(1, "Módulos", "Porcentaje de batería", "El número junto al icono de la batería", [&] { return cfg.battery_percent; },
            [&, save](bool v) {
                cfg.battery_percent = v;
@@ -698,6 +792,17 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
                cfg.wallpaper_pause_covered = v;
                save();
            });
+    preview(5, "Selector", "Estilo del selector", "", {"Carrusel", "Panal", "Tarjetas"},
+            [&] {
+                const std::string& st = cfg.wallpaper_picker_style;
+                return st == "cards" ? 2 : (st == "hex" || st == "grid") ? 1 : 0;
+            },
+            [&, save](int i) {
+                static const char* styles[3] = {"slices", "hex", "cards"};
+                cfg.wallpaper_picker_style = styles[i];
+                save();
+            },
+            preview_picker);
     buttons(5, "Selector", "Selector de fondos", "", {{"Abrir selector", [this] {
                                                            settings_.close_now();
                                                            open_wallpaper_picker();

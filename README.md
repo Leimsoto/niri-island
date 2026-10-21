@@ -40,8 +40,9 @@ src/
 - **Resumen** al posar el puntero: hora, fecha, clima, batería, CPU/RAM, próxima tarea, o el **reproductor** con el
   color de la carátula. Si hay un temporizador activo aparece en una franja con sus controles.
 - **Módulos de la barra** (Ajustes → Barra e isla): espacios de trabajo, ventana activa, buscador, bandeja del
-  sistema, notificaciones, red, Bluetooth (solo si está activo), volumen y batería (con o sin porcentaje; rayo al
-  cargar). Cada uno se activa o desactiva, se coloca a la izquierda o a la derecha y se ordena.
+  sistema, notificaciones, red, Bluetooth (solo si está activo), volumen, batería (con o sin porcentaje; rayo al
+  cargar) y un **monitor de rendimiento** en su propia isla (CPU, RAM, temperatura, red, disco y swap a elegir; en
+  números o en anillos; clic abre el panel del sistema). Cada uno se activa o desactiva, se coloca a la izquierda o a la derecha y se ordena.
 - **Distribuciones**: agrupada (cápsulas junto a la isla), extendida (en las esquinas; los paneles caen bajo su
   botón) o una sola isla. La isla puede flotar o acoplarse al borde (con o sin las laterales).
 - **Aspecto**: altura de las píldoras, redondez, sombras (control circular de dirección, distancia, suavidad y
@@ -62,8 +63,9 @@ temporizador y cronómetro con vueltas, **notificaciones** (historial y No moles
 ## Suite
 
 - **Fondos de pantalla propios**: la isla pinta el fondo (imágenes; vídeos con `mpvpaper`), lo recuerda y genera la
-  paleta. Selector al estilo skwd-wall: carrusel de slices retroiluminados que sale de la isla, filtros por tipo y
-  color, y aplicación instantánea. Modo **wallhaven**: cuadrícula desplazable, búsqueda, orden, color, contenido
+  paleta. Selector con tres estilos (Ajustes → Fondos): **carrusel** de slices retroiluminados que sale de la isla,
+  **panal** de hexágonos como el de skwd-wall y **tarjetas** como la web de wallhaven; filtros por tipo y color, y
+  aplicación instantánea. Modo **wallhaven**: cuadrícula desplazable, búsqueda, orden, color, contenido
   +18 opcional (marcado en rojo) y descarga a `~/Imágenes/wallpapers/wallhaven`. Los fondos de vídeo **se pausan**
   mientras una ventana ocupa la pantalla (completa o maximizada), como en skwd-wall; se desactiva en Ajustes → Fondos.
 - **Capturas** con editor (región, formas, flechas, texto, pixelado, contador, deshacer) y **grabación** con pausa,

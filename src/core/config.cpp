@@ -60,6 +60,8 @@ void Config::load() {
         get(*a, "show_workspaces", c.show_workspaces);
         get(*a, "show_status", c.show_status);
         get(*a, "battery_percent", c.battery_percent);
+        get(*a, "perf_metrics", c.perf_metrics);
+        get(*a, "perf_style", c.perf_style);
         if (auto m = a->find("modules"); m != a->end() && m->is_array()) {
             std::vector<ModuleConf> mods;
             for (auto& e : *m) {
@@ -149,7 +151,8 @@ void Config::load() {
 
 std::vector<ModuleConf> Config::default_modules() {
     return {{"workspaces", "left", true},   {"window", "left", true},     {"search", "left", false},
-            {"tray", "right", true},        {"notifications", "right", true}, {"network", "right", true},
+            {"perf", "right", false},       {"tray", "right", true},      {"notifications", "right", true},
+            {"network", "right", true},
             {"bluetooth", "right", true},   {"volume", "right", true},    {"battery", "right", true}};
 }
 
@@ -199,6 +202,8 @@ std::string Config::to_json() const {
     for (auto& m : modules) mods.push_back({{"id", m.id}, {"side", m.side}, {"on", m.on}});
     j["appearance"]["modules"] = mods;
     j["appearance"]["battery_percent"] = battery_percent;
+    j["appearance"]["perf_metrics"] = perf_metrics;
+    j["appearance"]["perf_style"] = perf_style;
     j["suite"] = {{"wallpaper_dirs", wallpaper_dirs},
                   {"screenshot_dir", screenshot_dir},
                   {"wallhaven_dir", wallhaven_dir},

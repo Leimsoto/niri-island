@@ -141,12 +141,18 @@ void hex_path(cairo_t* cr, float cx, float cy, float r) {
     cairo_close_path(cr);
 }
 
-float ease_out_back(float t) {
-    t = clamp01(t);
-    const float c1 = 1.4f, c3 = c1 + 1;
-    float u = t - 1;
-    return 1 + c3 * u * u * u + c1 * u * u;
+// Flat-topped hexagon (skwd-wall's honeycomb).
+void hex_flat_path(cairo_t* cr, float cx, float cy, float r) {
+    cairo_new_path(cr);
+    for (int i = 0; i < 6; ++i) {
+        double a = M_PI / 180.0 * (60 * i);
+        double x = cx + r * std::cos(a), y = cy + r * std::sin(a);
+        if (i == 0) cairo_move_to(cr, x, y);
+        else cairo_line_to(cr, x, y);
+    }
+    cairo_close_path(cr);
 }
+
 
 }  // namespace
 
@@ -157,11 +163,50 @@ std::string WallPicker::current_wallpaper() const {
     return j.is_object() ? j.value("path", "") : "";
 }
 
-WallPicker::~WallPicker() { free_caches(); }
+WallPicker::~WallPicker() {
+    free_caches();
+    free_tiles();
+}
+
+void WallPicker::free_tiles() {
+    for (auto& [k, s] : tiles_) cairo_surface_destroy(s);
+    tiles_.clear();
+    if (grid_veil_) cairo_surface_destroy(grid_veil_);
+    grid_veil_ = nullptr;
+}
+
+cairo_surface_t* WallPicker::tile_image(const std::string& thumb, float tw, float th, bool hex) {
+    int sc = std::max(1, scale());
+    std::string key = std::to_string(static_cast<int>(tw)) + "x" + std::to_string(static_cast<int>(th)) + (hex ? "h" : "c") +
+                      std::to_string(sc);
+    if (key != tiles_key_) {  // another size or style: start over
+        free_tiles();
+        tiles_key_ = key;
+    }
+    if (auto it = tiles_.find(thumb); it != tiles_.end()) return it->second;
+    cairo_surface_t* src = ImageCache::get().request(thumb, 420);
+    if (!src) return nullptr;  // not decoded yet: next frame
+    if (tiles_.size() > 160) free_tiles();  // bounded: they are cheap to remake
+    int pw = static_cast<int>(std::ceil(tw)) + 2, ph = static_cast<int>(std::ceil(th)) + 2;
+    cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw * sc, ph * sc);
+    cairo_surface_set_device_scale(s, sc, sc);
+    cairo_t* c = cairo_create(s);
+    float cx = pw / 2.0f, cy = ph / 2.0f;
+    if (hex) hex_flat_path(c, cx, cy, tw / 2);
+    else rrect(c, {cx - tw / 2, cy - th / 2, tw, th}, 12);
+    cairo_clip(c);
+    image(c, src, {cx - tw / 2, cy - th / 2, tw, th}, 0);
+    cairo_destroy(c);
+    tiles_[thumb] = s;
+    return s;
+}
 
 void WallPicker::show() {
     if (exists()) return;
-    slices_ = config().wallpaper_picker_style != "grid";
+    // slices (carousel) | hex (skwd-wall's honeycomb; "grid" before) | cards (wallhaven)
+    const std::string& st = config().wallpaper_picker_style;
+    style_ = st == "cards" ? 2 : (st == "hex" || st == "grid") ? 1 : 0;
+    slices_ = style_ == 0;
     open();
 }
 
@@ -456,14 +501,28 @@ void WallPicker::draw(cairo_t* cr, float w, float h, float dt) {
     scroll_.update(dt);
 
     // Backdrop: the desktop shows through, darkened, with a vignette.
-    cairo_set_source_rgba(cr, 0.02, 0.02, 0.03, 0.74);
+    // Made once per size: the full-screen radial gradient cost ~24 ms a frame.
+    int sc = std::max(1, scale());
+    std::string vkey = std::to_string(static_cast<int>(w)) + "x" + std::to_string(static_cast<int>(h)) + "/" +
+                       std::to_string(style_) + "/" + std::to_string(sc);
+    if (!grid_veil_ || grid_veil_key_ != vkey) {
+        if (grid_veil_) cairo_surface_destroy(grid_veil_);
+        grid_veil_ = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, static_cast<int>(w) * sc, static_cast<int>(h) * sc);
+        cairo_surface_set_device_scale(grid_veil_, sc, sc);
+        cairo_t* vc = cairo_create(grid_veil_);
+        cairo_set_source_rgba(vc, 0.02, 0.02, 0.03, style_ == 2 ? 0.86 : 0.5);
+        cairo_paint(vc);
+        cairo_pattern_t* vg = cairo_pattern_create_radial(w / 2, h / 2, h * 0.25, w / 2, h / 2, w * 0.75);
+        cairo_pattern_add_color_stop_rgba(vg, 0, 0, 0, 0, 0);
+        cairo_pattern_add_color_stop_rgba(vg, 1, 0, 0, 0, 0.45);
+        cairo_set_source(vc, vg);
+        cairo_paint(vc);
+        cairo_pattern_destroy(vg);
+        cairo_destroy(vc);
+        grid_veil_key_ = vkey;
+    }
+    cairo_set_source_surface(cr, grid_veil_, 0, 0);
     cairo_paint(cr);
-    cairo_pattern_t* vg = cairo_pattern_create_radial(w / 2, h / 2, h * 0.25, w / 2, h / 2, w * 0.75);
-    cairo_pattern_add_color_stop_rgba(vg, 0, 0, 0, 0, 0);
-    cairo_pattern_add_color_stop_rgba(vg, 1, 0, 0, 0, 0.45);
-    cairo_set_source(cr, vg);
-    cairo_paint(cr);
-    cairo_pattern_destroy(vg);
     // Anything not on a control closes nothing: the grid takes the whole screen.
     ui_.add(ID("wp.bg"), {0, 0, w, h}).cursor_shape(CursorShape::Default);
 
@@ -536,20 +595,47 @@ void WallPicker::draw(cairo_t* cr, float w, float h, float dt) {
     w::icon_button(c, ID("wp.rescan"), {bx + 40, bar.y + 9, 34, 34}, "󰑓", 15, scanning_).click([this] { scan(); });
     w::icon_button(c, ID("wp.close"), {bx + 80, bar.y + 9, 34, 34}, "󰅖", 15).click([this] { close(); });
 
-    // ── grid ─────────────────────────────────────────────────────────
-    float R = std::clamp(w / 18.5f, 80.0f, 122.0f);
-    float hw = std::sqrt(3.0f) * R, gap = 12;
-    cols_ = std::max(1, static_cast<int>((w - 80 - (hw + gap) / 2) / (hw + gap)));
-    float grid_w = cols_ * (hw + gap) + (hw + gap) / 2;
-    float gx0 = (w - grid_w) / 2 + hw / 2;
-    grid_y0_ = bar.bottom() + 40 + R;
-    row_step_ = 1.5f * R + gap * 0.87f;
-    int rows = (static_cast<int>(visible_.size()) + cols_ - 1) / cols_;
-    content_h_ = rows * row_step_ + R;
+    // ── grid: the honeycomb (skwd-wall) or wallhaven's cards ─────────
+    bool cards = style_ == 2;
     float top_clip = bar.bottom() + 14, bottom_clip = h - 54;
-    radius_ = R;
     top_clip_ = top_clip;
     bottom_clip_ = bottom_clip;
+    int n = static_cast<int>(visible_.size());
+    float R = 0, tw = 0, th = 0, colstep = 0, x0 = 0;
+    if (cards) {
+        float gw = std::min(w - 80, 1560.0f), gap = 16;
+        cols_ = gw > 1300 ? 5 : gw > 1000 ? 4 : 3;
+        tw = std::floor((gw - gap * (cols_ - 1)) / cols_);
+        th = std::round(tw * 9 / 16);
+        colstep = tw + gap;
+        row_step_ = th + gap;
+        x0 = std::round((w - (cols_ * colstep - gap)) / 2 + tw / 2);
+        grid_y0_ = bar.bottom() + 30 + th / 2;
+        radius_ = th / 2;
+    } else {
+        // flat-topped hexagons nearly edge to edge, odd columns half a row down
+        R = std::clamp(h / 7.4f, 90.0f, 170.0f);
+        float gap = 5;
+        tw = 2 * R;
+        th = std::sqrt(3.0f) * R;
+        colstep = 1.5f * R + gap * 0.87f;
+        row_step_ = th + gap;
+        cols_ = std::max(1, static_cast<int>((w - 40 - tw) / colstep) + 1);
+        x0 = (w - ((cols_ - 1) * colstep + tw)) / 2 + R;
+        grid_y0_ = bar.bottom() + 26 + th / 2;
+        radius_ = th / 2 + row_step_ / 4;
+    }
+    int rows = (n + cols_ - 1) / cols_;
+    content_h_ = rows * row_step_ + (cards ? 0 : row_step_ / 2);
+    auto centre = [&](int pos, float& cx, float& cy) {
+        int row = pos / cols_, col = pos % cols_;
+        cx = x0 + col * colstep;
+        cy = grid_y0_ + row * row_step_ + (!cards && col % 2 ? row_step_ / 2 : 0) - scroll_.value;
+    };
+    auto shape = [&](float cx, float cy, float s) {
+        if (cards) rrect(cr, {cx - tw * s / 2, cy - th * s / 2, tw * s, th * s}, 12 * s);
+        else hex_flat_path(cr, cx, cy, R * s);
+    };
 
     cairo_save(cr);
     cairo_rectangle(cr, 0, top_clip, w, bottom_clip - top_clip);
@@ -562,75 +648,124 @@ void WallPicker::draw(cairo_t* cr, float w, float h, float dt) {
     float hot_cx = 0, hot_cy = 0, hot_s = 1;
     auto draw_tile = [&](int pos, float cx, float cy, float s, float a, bool lifted) {
         const Wallpaper& wp = walls_[visible_[pos]];
-        float r = R * s;
-        if (lifted) {
-            // a soft glow under the lifted tile
-            hex_path(cr, cx, cy + 6, r + 6);
+        float bw = tw * s, bh = th * s;
+        bool current = wp.path == current_;
+        bool sel = pos == sel_;
+        if (lifted) {  // a soft shadow under the lifted tile
+            shape(cx, cy + 7, s * 1.02f);
             cairo_set_source_rgba(cr, 0, 0, 0, 0.45 * a);
             cairo_fill(cr);
         }
-        cairo_save(cr);
-        hex_path(cr, cx, cy, r);
-        cairo_clip_preserve(cr);
-        set(cr, p.surface_hi.with_alpha(a));
-        cairo_fill(cr);
-        cairo_surface_t* img = wp.thumb.empty() ? nullptr : ImageCache::get().request(wp.thumb, 420);
-        if (img) image(cr, img, {cx - r, cy - r, 2 * r, 2 * r}, 0, a);
-        else glyph(cr, cx, cy, wp.video ? "󰕧" : "󰋩", r * 0.28f, p.text_faint.fade(a));
-        cairo_restore(cr);
-        bool current = wp.path == current_;
-        bool sel = pos == sel_;
-        hex_path(cr, cx, cy, r - 1);
-        if (current || sel || lifted) {
-            set(cr, (current ? p.accent : Color{1, 1, 1, 1}).with_alpha((sel || lifted ? 0.95f : 0.8f) * a));
-            cairo_set_line_width(cr, current ? 3.5 : 2.5);
+        cairo_surface_t* img = wp.thumb.empty() ? nullptr : tile_image(wp.thumb, tw, th, !cards);
+        if (img) {
+            // the ready-made tile, only scaled when it grows or pops in
+            int iw = cairo_image_surface_get_width(img) / std::max(1, scale());
+            int ih = cairo_image_surface_get_height(img) / std::max(1, scale());
+            cairo_save(cr);
+            bool scaled = std::abs(s - 1) > 0.002f;
+            if (scaled) {
+                cairo_translate(cr, cx, cy);
+                cairo_scale(cr, s, s);
+                cairo_set_source_surface(cr, img, -iw / 2.0, -ih / 2.0);
+                cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
+            } else {
+                // whole pixels: a straight copy, no resampling (the slow part)
+                cairo_set_source_surface(cr, img, std::round(cx - iw / 2.0), std::round(cy - ih / 2.0));
+                cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_FAST);
+            }
+            if (a >= 0.999f) cairo_paint(cr);
+            else cairo_paint_with_alpha(cr, a);
+            cairo_restore(cr);
         } else {
-            set(cr, Color{0, 0, 0, 0.45f * a});
+            shape(cx, cy, s);
+            set(cr, p.surface_hi.with_alpha(a));
+            cairo_fill(cr);
+            glyph(cr, cx, cy, wp.video ? "󰕧" : "󰋩", bh * 0.18f, p.text_faint.fade(a));
+        }
+        cairo_save(cr);
+        shape(cx, cy, s);
+        cairo_clip(cr);
+        if (cards && (lifted || sel)) {
+            // wallhaven's hover: a dark foot with the name and the kind
+            float fh = 44;
+            cairo_pattern_t* g = cairo_pattern_create_linear(0, cy + bh / 2 - fh * 1.6f, 0, cy + bh / 2);
+            cairo_pattern_add_color_stop_rgba(g, 0, 0, 0, 0, 0);
+            cairo_pattern_add_color_stop_rgba(g, 1, 0, 0, 0, 0.78 * a);
+            cairo_set_source(cr, g);
+            cairo_rectangle(cr, cx - bw / 2, cy + bh / 2 - fh * 1.6f, bw, fh * 1.6f);
+            cairo_fill(cr);
+            cairo_pattern_destroy(g);
+            std::string kind = wp.video ? "Vídeo" : "Imagen";
+            if (!wp.resolution.empty()) kind += "  ·  " + wp.resolution;
+            text(cr, cx - bw / 2 + 12, cy + bh / 2 - 40, wp.name, {ui(12.5f, "SemiBold"), Color{1, 1, 1, a}, Align::Left, bw - 24});
+            text(cr, cx - bw / 2 + 12, cy + bh / 2 - 21, kind, {ui(11), Color{1, 1, 1, 0.7f * a}, Align::Left, bw - 24});
+        }
+        cairo_restore(cr);
+        // the rim
+        shape(cx, cy, s);
+        if (current || sel || lifted) {
+            set(cr, (current ? p.accent : Color{1, 1, 1, 1}).with_alpha((sel || lifted ? 0.95f : 0.85f) * a));
+            cairo_set_line_width(cr, current ? 3.5 : 2.5);
+        } else if (cards) {
+            set(cr, Color{1, 1, 1, 0.08f * a});
+            cairo_set_line_width(cr, 1);
+        } else {
+            set(cr, Color{1, 1, 1, 0.55f * a});  // skwd-wall's light seams
             cairo_set_line_width(cr, 1.5);
         }
         cairo_stroke(cr);
         if (wp.video) {
-            Rect bd{cx - 14, cy + r * 0.52f, 28, 20};
+            Rect bd = cards ? Rect{cx + bw / 2 - 40, cy - bh / 2 + 10, 30, 20} : Rect{cx - 14, cy + bh * 0.3f, 28, 20};
             fill(cr, bd, 10, Color{0, 0, 0, 0.6f * a});
             glyph(cr, bd.cx(), bd.cy(), "󰐊", 12, Color{1, 1, 1, a});
         }
         if (current) {
-            fill(cr, {cx - 5, cy - r * 0.78f, 10, 10}, 5, p.accent.fade(a));
+            if (cards) {
+                Rect badge{cx - bw / 2 + 10, cy - bh / 2 + 10, 64, 22};
+                fill(cr, badge, 11, p.accent.fade(a));
+                text(cr, badge.cx(), badge.y + 3, "En uso", {ui(11, "Bold"), p.on_accent.fade(a), Align::Center});
+            } else {
+                fill(cr, {cx - 5, cy - bh * 0.4f, 10, 10}, 5, p.accent.fade(a));
+            }
         }
     };
 
-    for (size_t pos = 0; pos < visible_.size(); ++pos) {
-        int row = static_cast<int>(pos) / cols_, col = static_cast<int>(pos) % cols_;
-        float cx = gx0 + col * (hw + gap) + (row % 2 ? (hw + gap) / 2 : 0);
-        float cy = grid_y0_ + row * row_step_ - scroll_.value;
-        if (cy + R < top_clip || cy - R > bottom_clip) continue;
+    for (int pos = 0; pos < n; ++pos) {
+        float cx, cy;
+        centre(pos, cx, cy);
+        if (cy + th / 2 < top_clip || cy - th / 2 > bottom_clip) continue;
+        int row = pos / cols_, col = pos % cols_;
         // Staggered entrance, rippling out from the top-left.
         float delay = std::min(0.55f, 0.018f * (row * 2 + col));
         float t = clamp01(static_cast<float>((since - delay) / 0.42));
         if (t < 1) still_entering = true;
-        float pop = 0.55f + 0.45f * ease_out_back(t);
-        uint64_t id = ID("wp.tile", static_cast<int64_t>(pos));
+        // in: rising and fading (a shift of a ready tile is nearly free; a
+        // scale of ~35 of them every frame was not)
+        float e = 1 - (1 - t) * (1 - t) * (1 - t);
+        cy += std::round((1 - e) * 28);
+        uint64_t id = ID("wp.tile", pos);
         float hv = ui_.hover(id);
         float press = ui_.press(id);
-        float s = pop * (1.0f + 0.10f * hv + (static_cast<int>(pos) == sel_ ? 0.03f : 0)) * (1.0f - 0.05f * press);
+        float grow = cards ? 0.04f : 0.08f;
+        float s = (1.0f + grow * hv + (pos == sel_ ? 0.02f : 0)) * (1.0f - 0.05f * press);
         if (hv > 0.02f && hot_pos < 0) {
-            hot_pos = static_cast<int>(pos);
+            hot_pos = pos;  // drawn last so it rises above its neighbours
             hot_cx = cx;
             hot_cy = cy;
             hot_s = s;
-            // drawn last so it rises above its neighbours
         } else {
-            draw_tile(static_cast<int>(pos), cx, cy, s, clamp01(t * 1.5f), false);
+            // opaque: a see-through tile costs ~1 ms each to blend
+            if (t > 0) draw_tile(pos, cx, cy, s, 1.0f, false);
         }
         int index = visible_[pos];
-        int p_i = static_cast<int>(pos);
-        ui_.add(id, {cx - hw / 2, cy - R * 0.75f, hw, R * 1.5f})
-            .click([this, index, p_i] {
-                sel_ = p_i;
+        Rect hit = cards ? Rect{cx - tw / 2, cy - th / 2, tw, th} : Rect{cx - R * 0.75f, cy - th / 2, R * 1.5f, th};
+        ui_.add(id, hit)
+            .click([this, index, pos] {
+                sel_ = pos;
                 apply(index, false);
             })
-            .right([this, index, p_i] {
-                sel_ = p_i;
+            .right([this, index, pos] {
+                sel_ = pos;
                 apply(index, true);
             });
     }
@@ -640,18 +775,17 @@ void WallPicker::draw(cairo_t* cr, float w, float h, float dt) {
     ui_.pop_clip();
     cairo_restore(cr);
 
-    // Name of the tile under the pointer (or selected).
+    // Name of the tile under the pointer (or selected); the cards carry their own.
     int label_pos = hot_pos >= 0 ? hot_pos : sel_;
-    if (label_pos >= 0 && label_pos < static_cast<int>(visible_.size())) {
-        int row = label_pos / cols_, col = label_pos % cols_;
-        float cx = gx0 + col * (hw + gap) + (row % 2 ? (hw + gap) / 2 : 0);
-        float cy = grid_y0_ + row * row_step_ - scroll_.value;
+    if (!cards && label_pos >= 0 && label_pos < n) {
+        float cx, cy;
+        centre(label_pos, cx, cy);
         const Wallpaper& wp = walls_[visible_[label_pos]];
         Text lt{ui(12.5f, "SemiBold"), Color{1, 1, 1, 1}};
         std::string label = wp.name;
         if (utf8_length(label) > 42) label = label.substr(0, 40) + "…";
         Size ls = measure(label, lt);
-        Rect pill{cx - ls.w / 2 - 12, cy + R * 1.02f, ls.w + 24, 26};
+        Rect pill{cx - ls.w / 2 - 12, cy + th / 2 + 6, ls.w + 24, 26};
         if (pill.bottom() < bottom_clip && pill.y > top_clip) {
             fill(cr, pill, 13, Color{0, 0, 0, 0.72f});
             text(cr, pill.x + 12, pill.y + 5, label, lt);
@@ -677,7 +811,7 @@ void WallPicker::draw(cairo_t* cr, float w, float h, float dt) {
     }
 
     // Last row fully above the footer at the end of the scroll.
-    float maxs = std::max(0.0f, grid_y0_ + (rows - 1) * row_step_ + R + 36 - bottom_clip);
+    float maxs = std::max(0.0f, grid_y0_ + (rows - 1) * row_step_ + th / 2 + (cards ? 0 : row_step_ / 2) + 36 - bottom_clip);
     max_scroll_ = maxs;
     if (scroll_.target > maxs) scroll_.set(maxs);
     if (maxs > 0) {

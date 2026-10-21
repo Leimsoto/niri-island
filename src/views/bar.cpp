@@ -175,7 +175,71 @@ float App::module_w(const std::string& id) const {
         return 26 + (config().battery_percent ? measure(std::to_string(b.percent) + "%", {ui(12, "SemiBold")}).w + 4 : 0);
     }
     if (id == "notifications" || id == "network" || id == "volume") return 26;
+    if (id == "perf") {
+        float w = 8;
+        for (auto& m : config().perf_metrics) w += perf_item_w(m);
+        return w > 8 ? w + 4 : 0;
+    }
     return 0;
+}
+
+// ── the performance island ─────────────────────────────────────────────────
+// A few numbers, chosen in the settings. Fixed widths, so the capsule does
+// not twitch as they change.
+
+static const char* perf_glyph(const std::string& m) {
+    return m == "cpu" ? "󰍛" : m == "ram" ? "󰘚" : m == "temp" ? "󰔏" : m == "net" ? "󰇚" : m == "disk" ? "󰋊" : "󰾴";
+}
+
+static std::string short_rate(float bps) {
+    char b[16];
+    if (bps < 1024 * 1000) snprintf(b, sizeof(b), "%.0fK", bps / 1024);
+    else snprintf(b, sizeof(b), "%.1fM", bps / (1024 * 1024));
+    return b;
+}
+
+// value (0..1, for the ring) and its label
+static std::pair<float, std::string> perf_value(const SysStats& s, const std::string& m) {
+    auto pct = [](float v) { return std::to_string(static_cast<int>(std::lround(v))) + "%"; };
+    if (m == "cpu") return {s.cpu / 100, pct(s.cpu)};
+    if (m == "ram") return {s.ram / 100, pct(s.ram)};
+    if (m == "disk") return {s.disk / 100, pct(s.disk)};
+    if (m == "swap") return {s.swap / 100, pct(s.swap)};
+    if (m == "temp") return {s.temp < 0 ? 0 : s.temp / 100, s.temp < 0 ? "–" : std::to_string(static_cast<int>(std::lround(s.temp))) + "°"};
+    if (m == "net") return {s.net_hist.empty() ? 0 : s.net_hist.back(), short_rate(s.net_down)};
+    return {0, ""};
+}
+
+float App::perf_item_w(const std::string& m) const {
+    static const char* widest[] = {"100%", "100°", "999K"};
+    const char* w = m == "temp" ? widest[1] : m == "net" ? widest[2] : widest[0];
+    float tw = measure(w, {ui(12, "SemiBold")}).w;
+    return (config().perf_style == "rings" ? 20 : 17) + 3 + tw + 8;
+}
+
+void App::draw_perf(cairo_t* cr, Ui& u, const Rect& r, float origin) {
+    const auto& p = T();
+    const auto& st = sysmon_.stats();
+    bool rings = config().perf_style == "rings";
+    float x = r.x + 10;
+    for (auto& m : config().perf_metrics) {
+        auto [v, label] = perf_value(st, m);
+        float cx = x + (rings ? 9 : 7);
+        if (rings) {
+            ring(cr, cx, r.cy(), 8, 2.4f, std::clamp(v, 0.0f, 1.0f), p.accent, p.text.with_alpha(0.14f));
+            glyph(cr, cx, r.cy(), perf_glyph(m), 8, p.text_dim);
+        } else {
+            glyph(cr, cx, r.cy(), perf_glyph(m), 13, p.text_dim);
+        }
+        text(cr, x + (rings ? 20 : 17) + 3, r.cy() - 8, label, {ui(12, "SemiBold"), p.text});
+        x += perf_item_w(m);
+    }
+    uint64_t mid = ID("mod.perf");
+    float ax = origin >= 0 ? origin + r.cx() : -1;
+    u.add(mid, r).click([this, ax] {
+        if (ax >= 0) anchor_at(ax);
+        open(View::Stats);
+    });
 }
 
 std::vector<App::Cap> App::side_caps(bool left) const {
@@ -236,6 +300,10 @@ void App::draw_module(cairo_t* cr, Ui& u, const std::string& id, const Rect& r, 
         else glyph(cr, r.x + 22, r.cy(), "󰣆", 13, p.text_dim);
         text(cr, r.x + 40, r.cy() - 8, title, {ui(12, "SemiBold"), p.text, Align::Left, r.w - 54});
         u.add(ID("mod.window"), r).click([this] { niri_.action(R"({"Action":{"ToggleOverview":{}}})"); });
+        return;
+    }
+    if (id == "perf") {
+        draw_perf(cr, u, r, origin);
         return;
     }
     if (id == "search") {

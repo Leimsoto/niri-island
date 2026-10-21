@@ -438,7 +438,8 @@ void App::tick_second() {
     if (minute || seconds_visible || mpris_.info().playing) request();
 
     // Sample the system while someone is looking at it.
-    if (shown_ == View::Control || shown_ == View::Stats || shown_ == View::Glance) sysmon_.sample();
+    if (shown_ == View::Control || shown_ == View::Stats || shown_ == View::Glance || perf_on()) sysmon_.sample();
+    if (perf_on()) request();  // its numbers change every second
     static int n = 0;
     ++n;
     if (n % 30 == 0) power_.poll();
@@ -767,7 +768,21 @@ std::string App::bar_signature() const {
              b.charging, b.plugged, notifs_.dnd_mode(), !notifs_.history().empty(), config_gen_);
     s += buf;
     for (auto& m : config().modules) s += m.id + m.side + (m.on ? "1" : "0");
+    if (perf_on()) {
+        const auto& st = sysmon_.stats();
+        snprintf(buf, sizeof(buf), "|%d,%d,%d,%d,%d,%d", static_cast<int>(st.cpu), static_cast<int>(st.ram),
+                 static_cast<int>(st.temp), static_cast<int>(st.net_down / 1024), static_cast<int>(st.disk), static_cast<int>(st.swap));
+        s += buf;
+        s += config().perf_style;
+        for (auto& m : config().perf_metrics) s += m;
+    }
     return s;
+}
+
+bool App::perf_on() const {
+    for (auto& m : config().modules)
+        if (m.id == "perf") return m.on && !config().perf_metrics.empty();
+    return false;
 }
 
 // Video wallpapers stop while a window covers the screen (like skwd-wall).

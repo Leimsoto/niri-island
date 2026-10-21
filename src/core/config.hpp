@@ -29,6 +29,9 @@ struct Config {
     bool show_status = true;                 // wifi / bluetooth / volume / battery capsule
     std::vector<ModuleConf> modules = default_modules();
     bool battery_percent = true;             // the number next to the battery icon
+    // The performance island (module "perf"): what it shows, and how.
+    std::vector<std::string> perf_metrics = {"cpu", "ram", "temp"};  // cpu ram temp net disk swap
+    std::string perf_style = "numbers";      // numbers | rings
     static std::vector<ModuleConf> default_modules();
     std::string bar_layout = "grouped";      // grouped (round the island) | spread (to the edges) | island (one capsule)
     std::string island_style = "floating";

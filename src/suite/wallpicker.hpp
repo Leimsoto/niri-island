@@ -60,6 +60,15 @@ private:
     Spring scroll_{0, 300, 34};
     float content_h_ = 0;
     int cols_ = 1;
+    int style_ = 0;  // 0 slices, 1 honeycomb, 2 cards
+    // Honeycomb/cards: each tile scaled and cut to its shape once, then only
+    // copied (scaling ~30 thumbnails every frame cost up to 45 ms).
+    std::unordered_map<std::string, cairo_surface_t*> tiles_;
+    std::string tiles_key_;
+    cairo_surface_t* grid_veil_ = nullptr;  // the darkened backdrop with its vignette
+    std::string grid_veil_key_;
+    cairo_surface_t* tile_image(const std::string& thumb, float tw, float th, bool hex);
+    void free_tiles();
     float grid_y0_ = 0, row_step_ = 0, radius_ = 100, top_clip_ = 0, bottom_clip_ = 0, max_scroll_ = 0;
     double opened_at_ = 0;
     std::string current_;
