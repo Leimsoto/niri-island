@@ -1050,6 +1050,17 @@ void Capture::draw(cairo_t* cr, float w, float h, float dt) {
         request();
     }
 
+    // A notice (another capture refused…), fading after two seconds
+    if (double age = now_mono() - notice_at_; age < 2.4) {
+        float a = static_cast<float>(std::min(1.0, (2.4 - age) * 3));
+        Text t{ui(14, "SemiBold"), Color{1, 1, 1, a}, Align::Center};
+        Size ts = measure(notice_, t);
+        Rect r{w / 2 - ts.w / 2 - 18, 90, ts.w + 36, 38};
+        fill(cr, r, 19, Color{0.55f, 0.1f, 0.12f, 0.85f * a});
+        text(cr, w / 2, r.y + 10, notice_, t);
+        request();
+    }
+
     // Help before anything is selected
     if (!has_sel_ || (drag_ == Drag::Create && (sel_.w < 4 || sel_.h < 4))) {
         std::string msg = picking_ ? "Arrastra para elegir la zona a grabar  ·  clic = pantalla completa  ·  Esc cancela"

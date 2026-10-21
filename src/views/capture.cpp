@@ -49,6 +49,15 @@ void App::notify_file(const std::string& title, const std::string& path, cairo_s
 
 void App::take_screenshot(int mode, int delay, uint64_t window_id, bool edit) {
     // mode: 0 region, 1 whole screen, 2 one window
+    if (!capture_.exists()) shot_depth_ = 0;  // the editor was closed: start over
+    if (shot_pending_ || shot_depth_ >= 2) {
+        std::string msg = shot_pending_ ? "Ya se está tomando una captura" : "Máximo dos capturas a la vez";
+        if (capture_.is_open()) capture_.notice(msg);  // the editor covers the island
+        else show_toast(msg);
+        return;
+    }
+    shot_pending_ = true;
+    ++shot_depth_;
     close_all();
     notifs_.dismiss_current();
     osd_.until = 0;
@@ -85,7 +94,10 @@ void App::take_screenshot(int mode, int delay, uint64_t window_id, bool edit) {
                 },
                 [this, img, mode, edit] {
                     island_hidden_ = false;
+                    shot_pending_ = false;
                     request();
+                    // saved straight away: no editor stays open to stack on
+                    if (!*img || (mode == 1 && !edit)) shot_depth_ = std::max(0, shot_depth_ - 1);
                     if (!*img) {
                         show_toast("No se pudo capturar la pantalla");
                         return;

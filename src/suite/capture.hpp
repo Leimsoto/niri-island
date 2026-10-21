@@ -44,6 +44,12 @@ public:
     // path is empty when only copied.
     std::function<void(const std::string& path, cairo_surface_t* thumb, bool copied)> on_saved;
     std::function<void(const std::string& msg)> on_toast;
+    // A short message over the editor (the island's toasts are under it).
+    void notice(const std::string& msg) {
+        notice_ = msg;
+        notice_at_ = now_mono();
+        request();
+    }
 
 protected:
     void draw(cairo_t* cr, float w, float h, float dt) override;
@@ -56,6 +62,8 @@ protected:
     const char* name() const override { return "niri-island-capture"; }
 
 private:
+    std::string notice_;
+    double notice_at_ = -10;
     enum class Drag { None, Create, Move, Resize, Draw, ShapeMove };
     bool picking_ = false;  // region picker for the recorder
     cairo_surface_t* img_ = nullptr;

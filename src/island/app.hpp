@@ -150,6 +150,10 @@ private:
     // capture panel
     bool cap_windows_ = false;   // choosing a window to capture
     int cap_delay_ = 0;
+    // Screenshots on top of one another: one more while the editor is open,
+    // never a third; and never two being taken at once.
+    int shot_depth_ = 0;
+    bool shot_pending_ = false;
     bool cap_edit_ = true;
     int scale() const { return island_ ? island_->scale() : 1; }
     Ui ui_;
