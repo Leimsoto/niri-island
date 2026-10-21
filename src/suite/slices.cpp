@@ -148,6 +148,22 @@ Geo geo_for(float W, float H) {
     return g;
 }
 
+// Honeycomb and cards: a flat-topped hexagon, or a rounded card, in a box.
+void tile_path(cairo_t* cr, int kind, float x, float y, float w, float h) {
+    if (kind == 1) {
+        float cx = x + w / 2, cy = y + h / 2, r = w / 2;
+        cairo_new_path(cr);
+        for (int i = 0; i < 6; ++i) {
+            double a = M_PI / 3 * i;
+            double px = cx + r * std::cos(a), py = cy + r * std::sin(a);
+            i ? cairo_line_to(cr, px, py) : cairo_move_to(cr, px, py);
+        }
+        cairo_close_path(cr);
+    } else {
+        rrect(cr, {x, y, w, h}, std::min(12.0f, h / 4));
+    }
+}
+
 float island_y() { return (config().island_style == "attached" ? 0 : config().margin_top) + config().bar_height / 2.0f; }
 
 }  // namespace
@@ -273,6 +289,213 @@ cairo_surface_t* WallPicker::shape_image(float w, float h, float sk) {
                },
                &shape_cache_);
     return nullptr;
+}
+
+cairo_surface_t* WallPicker::tile_cut(const std::string& thumb, int kind, float tw, float th) {
+    if (starts_with(thumb, "http")) return nullptr;
+    int sc = std::max(1, scale());
+    std::string key = thumb + "@t" + std::to_string(kind) + size_key(tw, th, 0) + "@" + std::to_string(sc);
+    auto it = slice_cache_.find(key);
+    if (it != slice_cache_.end()) return it->second;
+    int w = static_cast<int>(std::ceil(tw)), h = static_cast<int>(std::ceil(th));
+    make_async(key,
+               [thumb, kind, w, h, sc]() -> cairo_surface_t* {
+                   cairo_surface_t* src = load_image_blocking(thumb, 520);
+                   if (!src) return nullptr;
+                   cairo_surface_t* out = fitted(src, w * sc, h * sc);
+                   cairo_surface_destroy(src);
+                   if (!out) return nullptr;
+                   cairo_t* c = cairo_create(out);  // cut to shape once
+                   cairo_scale(c, sc, sc);
+                   cairo_set_operator(c, CAIRO_OPERATOR_DEST_IN);
+                   tile_path(c, kind, 0, 0, static_cast<float>(w), static_cast<float>(h));
+                   cairo_set_source_rgba(c, 0, 0, 0, 1);
+                   cairo_fill(c);
+                   cairo_destroy(c);
+                   cairo_surface_set_device_scale(out, sc, sc);
+                   return out;
+               },
+               &slice_cache_);
+    return nullptr;
+}
+
+cairo_surface_t* WallPicker::tile_glow(int kind, float tw, float th, Color col) {
+    char ck[16];
+    snprintf(ck, sizeof(ck), "%02x%02x%02x", static_cast<int>(col.r * 255), static_cast<int>(col.g * 255),
+             static_cast<int>(col.b * 255));
+    std::string key = "tglow" + std::to_string(kind) + size_key(tw, th, 0) + ck;
+    auto it = glow_cache_.find(key);
+    if (it != glow_cache_.end()) return it->second;
+    make_async(key,
+               [kind, tw, th, col]() -> cairo_surface_t* {
+                   int pw = static_cast<int>(tw + 2 * kGlowPad), ph = static_cast<int>(th + 2 * kGlowPad);
+                   cairo_surface_t* m = cairo_image_surface_create(CAIRO_FORMAT_A8, pw, ph);
+                   cairo_t* c = cairo_create(m);
+                   tile_path(c, kind, kGlowPad, kGlowPad, tw, th);
+                   cairo_set_source_rgba(c, 0, 0, 0, 1);
+                   cairo_set_line_width(c, 8);
+                   cairo_stroke_preserve(c);
+                   cairo_fill(c);
+                   cairo_destroy(c);
+                   cairo_surface_flush(m);
+                   blur_a8(cairo_image_surface_get_data(m), pw, ph, cairo_image_surface_get_stride(m), 13);
+                   cairo_surface_mark_dirty(m);
+                   cairo_surface_t* out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw, ph);
+                   cairo_t* oc = cairo_create(out);
+                   cairo_set_source_rgba(oc, col.r, col.g, col.b, 0.9);
+                   cairo_mask_surface(oc, m, 0, 0);
+                   cairo_destroy(oc);
+                   cairo_surface_destroy(m);
+                   return out;
+               },
+               &glow_cache_);
+    return nullptr;
+}
+
+// The honeycomb (skwd-wall) and the cards (wallhaven): the carousel's
+// machinery with other pictures. Three rows, columns sliding sideways off the
+// screen's edges; the selection lit and a little larger.
+void WallPicker::draw_tiles(cairo_t* cr, float W, float H, float t_open, float t_leave, float ie, bool input) {
+    const auto& p = T();
+    int n = static_cast<int>(visible_.size());
+    int kind = style_;
+    float ix = W / 2, iy = island_y();
+    float cyc = std::round(H * 0.53f);
+    float tw, th, colstep, rowstep, y0;
+    if (kind == 1) {
+        float R = std::round(H * 0.112f), gap = 6;
+        tw = 2 * R;
+        th = std::round(std::sqrt(3.0f) * R);
+        colstep = 1.5f * R + gap * 0.87f;
+        rowstep = th + gap;
+        y0 = cyc - 1.25f * rowstep;  // odd columns sit half a row lower
+    } else {
+        th = std::round(H * 0.2f);
+        tw = std::round(th * 16 / 9);
+        float gap = 14;
+        colstep = tw + gap;
+        rowstep = th + gap;
+        y0 = cyc - rowstep;
+    }
+    Color glow = p.accent;
+    cairo_surface_t* glow_img = tile_glow(kind, tw, th, glow);
+    float filt = filter_t0_ > 0 ? ease_out(static_cast<float>(now_mono() - filter_t0_) / 0.3f) : 1.0f;
+    float centre = colpos_.value;
+    int c_lo = std::max(0, static_cast<int>(std::floor(centre - W / 2 / colstep)) - 1);
+    int c_hi = static_cast<int>(std::ceil(centre + W / 2 / colstep)) + 1;
+    int lo = c_lo * kTileRows, hi = std::min(n - 1, (c_hi + 1) * kTileRows - 1);
+    // nearest last, so the lit ones lie on top
+    std::vector<int> order;
+    for (int i = lo; i <= hi; ++i) order.push_back(i);
+    auto dist = [&](int i) { return std::fabs(static_cast<float>(i / kTileRows) - centre) + (i == sel_ ? -1 : 0); };
+    std::sort(order.begin(), order.end(), [&](int a, int b) { return dist(a) > dist(b); });
+    for (auto it = order.rbegin(); it != order.rend(); ++it)  // pictures queued nearest first
+        if (!walls_[visible_[*it]].thumb.empty()) tile_cut(walls_[visible_[*it]].thumb, kind, tw, th);
+
+    for (int i : order) {
+        int col = i / kTileRows, row = i % kTileRows;
+        float cx = std::round(W / 2 + (col - centre) * colstep);
+        float cy = std::round(y0 + row * rowstep + (kind == 1 && col % 2 ? rowstep / 2 : 0));
+        if (cx + tw < -40 || cx - tw > W + 40) continue;
+        const Wallpaper& wp = walls_[visible_[i]];
+        bool chosen = inserting_ && i == ins_index_;
+        bool sel = i == sel_;
+        float a = std::fabs(col - centre) + row * 0.15f;
+        float k_in = ease_out_back((t_open - 0.06f - 0.03f * std::min(a, 14.0f)) / 0.5f);
+        float k_out = leaving_ ? 1.0f - ease_in((t_leave - 0.015f * std::max(0.0f, 14.0f - a)) / 0.3f) : 1.0f;
+        float k = std::min(k_in, k_out);
+        if (k <= 0.01f) continue;
+        float fade = clamp01(k * 2) * (chosen ? 1.0f : 1.0f - ie) * filt;
+        if (fade <= 0.01f) continue;
+        bool flying = k < 0.999f;
+        uint64_t id = ID("sl.tile", i);
+        float hv = input && !chosen ? ui_.hover(id) : 0;
+        float grow = sel ? 1.1f : 1.0f + 0.06f * hv;
+        float ty = (1 - filt) * 30;
+        cairo_save(cr);
+        if (flying) {  // poured out of the island
+            float s = lerp(0.04f, 1.0f, k);
+            cairo_translate(cr, lerp(ix, cx, k), lerp(iy, cy, k));
+            cairo_scale(cr, s, s);
+            cairo_translate(cr, -cx, -cy);
+        }
+        if (chosen) {
+            // the insertion: it becomes the screen
+            Rect from{cx - tw * grow / 2, cy - th * grow / 2, tw * grow, th * grow};
+            Rect box{lerp(from.x, 0, ie), lerp(from.y, 0, ie), lerp(from.w, W, ie), lerp(from.h, H, ie)};
+            cairo_save(cr);
+            if (kind == 1) {
+                float rr = lerp(tw * grow / 2, std::hypot(W, H) * 0.62f, ie);
+                tile_path(cr, 1, box.cx() - rr, box.cy() - rr * 0.866f, 2 * rr, rr * 1.732f);
+            } else {
+                rrect(cr, box, lerp(12, 0, ie));
+            }
+            cairo_clip(cr);
+            const std::string& src = wp.video ? wp.thumb : wp.path;
+            if (big_fit_ && big_path_ == src) cover(cr, big_fit_, box, 1, ie < 0.999f ? CAIRO_FILTER_FAST : CAIRO_FILTER_BILINEAR);
+            else if (!wp.thumb.empty() && !starts_with(wp.thumb, "http"))
+                if (cairo_surface_t* t2 = ImageCache::get().request(wp.thumb, 520)) cover(cr, t2, box, 1, CAIRO_FILTER_FAST);
+            cairo_restore(cr);
+            cairo_restore(cr);
+            continue;
+        }
+        cairo_translate(cr, 0, ty);
+        if (std::fabs(grow - 1) > 0.002f) {
+            cairo_translate(cr, cx, cy);
+            cairo_scale(cr, grow, grow);
+            cairo_translate(cr, -cx, -cy);
+        }
+        float x = cx - tw / 2, y = cy - th / 2;
+        // backlight: the selection, its neighbours a little, the hovered one
+        float light = sel ? 1.0f : std::max(0.35f * clamp01(1.2f - a * 0.45f), 0.8f * hv);
+        light *= fade * (flying ? clamp01((k - 0.6f) / 0.4f) : 1.0f);
+        if (glow_img && light > 0.02f) {
+            cairo_set_source_surface(cr, glow_img, std::round(x - kGlowPad), std::round(y - kGlowPad));
+            cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_FAST);
+            cairo_paint_with_alpha(cr, std::min(1.0f, light));
+        }
+        cairo_surface_t* cut = wp.thumb.empty() ? nullptr : tile_cut(wp.thumb, kind, tw, th);
+        if (cut) {
+            cairo_set_source_surface(cr, cut, x, y);
+            cairo_pattern_set_filter(cairo_get_source(cr), flying || std::fabs(grow - 1) > 0.002f ? CAIRO_FILTER_BILINEAR : CAIRO_FILTER_FAST);
+            if (fade >= 0.999f) cairo_paint(cr);
+            else cairo_paint_with_alpha(cr, fade);
+        } else {
+            tile_path(cr, kind, x, y, tw, th);
+            set(cr, p.surface_hi.with_alpha(0.7f * fade));  // still being made
+            cairo_fill(cr);
+        }
+        // the far ones dimmed, like the carousel's
+        float darken = sel ? 0.0f : std::min(0.5f, 0.1f + 0.06f * a) * (1.0f - hv);
+        if (darken > 0.01f) {
+            tile_path(cr, kind, x, y, tw, th);
+            cairo_set_source_rgba(cr, 0, 0, 0, darken * fade);
+            cairo_fill(cr);
+        }
+        // the rim: the accent on the selection, light seams on the rest
+        tile_path(cr, kind, x, y, tw, th);
+        Color rim = sel ? glow : mix(Color{1, 1, 1, 1}, glow, hv);
+        cairo_set_source_rgba(cr, rim.r, rim.g, rim.b, (sel ? 0.95f : (kind == 1 ? 0.3f : 0.12f) + 0.6f * hv) * fade);
+        cairo_set_line_width(cr, sel ? 2.5 : 1.2);
+        cairo_stroke(cr);
+        if (wp.video && sel) {  // a small play mark, no words
+            float px = cx, py = y + th - 22;
+            cairo_move_to(cr, px - 6, py - 8);
+            cairo_line_to(cr, px + 8, py);
+            cairo_line_to(cr, px - 6, py + 8);
+            cairo_close_path(cr);
+            cairo_set_source_rgba(cr, 1, 1, 1, 0.9 * fade);
+            cairo_fill(cr);
+        }
+        cairo_restore(cr);
+        if (input) {
+            Rect hit = kind == 1 ? Rect{cx - tw * 0.38f, y, tw * 0.76f, th} : Rect{x, y, tw, th};
+            ui_.add(id, hit).click([this, i] {
+                if (i == sel_) slices_close(true);
+                else slices_move(i - sel_);
+            });
+        }
+    }
 }
 
 // The selection at screen size, for the insertion.
@@ -406,6 +629,7 @@ void WallPicker::set_remote(bool on) {
             if (walls_[visible_[i]].path == current_) sel_ = static_cast<int>(i);
     }
     pos_.reset(static_cast<float>(std::max(0, sel_)));
+    colpos_.reset(static_cast<float>(std::max(0, sel_) / kTileRows));
     filter_t0_ = now_mono();
     request();
 }
@@ -423,6 +647,7 @@ void WallPicker::wh_fetch(bool more) {
         visible_.clear();
         sel_ = 0;
         pos_.reset(0);
+        colpos_.reset(0);
         if (wh_sort_ == 2) wh_seed_.clear();
     }
     wh_loading_ = true;
@@ -555,6 +780,7 @@ void WallPicker::slices_move(int delta) {
     sel_ = next;
     moved_ = true;
     pos_.set(static_cast<float>(sel_));
+    colpos_.set(static_cast<float>(sel_ / kTileRows));
     if (remote_) {
         grid_reveal(sel_);
         if (sel_ > n - grid_cols_ * 2) wh_fetch(true);
@@ -573,6 +799,7 @@ void WallPicker::set_filter(int kind, int hue) {
     }
     refilter();
     pos_.reset(static_cast<float>(std::max(0, sel_)));
+    colpos_.reset(static_cast<float>(std::max(0, sel_) / kTileRows));
     filter_t0_ = now_mono();
     request();
 }
@@ -589,6 +816,7 @@ void WallPicker::slices_close(bool apply_it) {
     ins_t0_ = now_mono();
     ins_index_ = sel_;
     pos_.reset(static_cast<float>(sel_));
+    colpos_.reset(static_cast<float>(sel_ / kTileRows));
     if (walls_[visible_[sel_]].remote) wh_apply(visible_[sel_]);  // downloaded while it grows
     else apply(visible_[sel_], true);  // set now: by the time the slice fills the screen, it is there
     request();
@@ -623,22 +851,25 @@ void WallPicker::key_slices(xkb_keysym_t sym, const std::string& utf8) {
             if (remote_) set_remote(false);
             else slices_close(false);
             return;
-        case XKB_KEY_Left: slices_move(-1); return;
-        case XKB_KEY_Right: slices_move(1); return;
+        // in the honeycomb and the cards, sideways is a column, up/down a row
+        case XKB_KEY_Left:
+        case XKB_KEY_h:
+        case XKB_KEY_a: slices_move(remote_ || style_ == 0 ? -1 : -kTileRows); return;
+        case XKB_KEY_Right:
+        case XKB_KEY_l:
+        case XKB_KEY_d: slices_move(remote_ || style_ == 0 ? 1 : kTileRows); return;
         case XKB_KEY_Up:
             if (remote_) slices_move(-grid_cols_);
+            else if (style_ != 0) slices_move(-1);
             return;
         case XKB_KEY_Down:
             if (remote_) slices_move(grid_cols_);
+            else if (style_ != 0) slices_move(1);
             return;
-        case XKB_KEY_h:
-        case XKB_KEY_a: slices_move(-1); return;
-        case XKB_KEY_l:
-        case XKB_KEY_d: slices_move(1); return;
         case XKB_KEY_w:
         case XKB_KEY_W: set_remote(true); return;
-        case XKB_KEY_Page_Up: slices_move(-5); return;
-        case XKB_KEY_Page_Down: slices_move(5); return;
+        case XKB_KEY_Page_Up: slices_move(style_ == 0 ? -5 : -5 * kTileRows); return;
+        case XKB_KEY_Page_Down: slices_move(style_ == 0 ? 5 : 5 * kTileRows); return;
         case XKB_KEY_Home: slices_move(-100000); return;
         case XKB_KEY_End: slices_move(100000); return;
         case XKB_KEY_Tab:
@@ -657,7 +888,7 @@ void WallPicker::key_slices(xkb_keysym_t sym, const std::string& utf8) {
 }
 
 void WallPicker::canvas_button(Button b, bool pressed, float, float) {
-    if (!slices_ || !pressed) return;
+    if (!pressed) return;
     if (b == Button::Right || b == Button::Left) slices_close(false);  // a click off the slices
 }
 
@@ -932,6 +1163,7 @@ void WallPicker::draw_slices(cairo_t* cr, float W, float H, float dt) {
         return;
     }
     pos_.update(dt);
+    colpos_.update(dt);
     int n = static_cast<int>(visible_.size());
     float t_open = static_cast<float>(now - open_t0_);
     float t_leave = leaving_ ? static_cast<float>(now - leave_t0_) : 0.0f;
@@ -1000,6 +1232,8 @@ void WallPicker::draw_slices(cairo_t* cr, float W, float H, float dt) {
     bool input = !inserting_ && !leaving_ && t_open > 0.3f;
     if (remote_) {
         if (!leaving_) draw_wh_grid(cr, W, H, ie);
+    } else if (n > 0 && style_ != 0) {
+        draw_tiles(cr, W, H, t_open, t_leave, ie, input);
     } else if (n > 0) {
         auto size_at = [&](float d, float& w, float& h) {
             float e = ease_io(std::min(1.0f, std::fabs(d)));

@@ -9,6 +9,9 @@
 
 namespace island {
 
+// Honeycomb and cards: the pictures stand in this many rows.
+constexpr int kTileRows = 3;
+
 struct Wallpaper {
     std::string path, name, thumb;  // remote: path is the full image's URL, thumb its preview URL
     bool video = false;
@@ -30,10 +33,7 @@ public:
     void show_wallhaven() { set_remote(true); }
     void prewarm();
     void backdrop_shown(const std::string& path);
-    void dismiss() {
-        if (slices_) slices_close(false);
-        else close();
-    }
+    void dismiss() { slices_close(false); }
     std::function<void(const std::string& msg)> on_toast;
     std::function<void(const std::string& path)> on_apply;  // the island's own backdrop
 
@@ -44,7 +44,7 @@ protected:
     void opened() override;
     void closed() override;
     bool animating() const override;
-    bool instant_open() const override { return slices_; }  // it animates itself out of the island
+    bool instant_open() const override { return true; }  // it animates itself out of the island
     void canvas_button(Button b, bool pressed, float x, float y) override;
     const char* name() const override { return "niri-island-wallpapers"; }
 
@@ -57,25 +57,16 @@ private:
     int hue_ = -1;          // -1 any, 0..11 hue buckets, 12 greys
     std::string search_;
     int sel_ = -1;
-    Spring scroll_{0, 300, 34};
-    float content_h_ = 0;
-    int cols_ = 1;
-    int style_ = 0;  // 0 slices, 1 honeycomb, 2 cards
-    // Honeycomb/cards: each tile scaled and cut to its shape once, then only
-    // copied (scaling ~30 thumbnails every frame cost up to 45 ms).
-    std::unordered_map<std::string, cairo_surface_t*> tiles_;
-    std::string tiles_key_;
-    cairo_surface_t* grid_veil_ = nullptr;  // the darkened backdrop with its vignette
-    std::string grid_veil_key_;
-    cairo_surface_t* tile_image(const std::string& thumb, float tw, float th, bool hex);
-    void free_tiles();
-    float grid_y0_ = 0, row_step_ = 0, radius_ = 100, top_clip_ = 0, bottom_clip_ = 0, max_scroll_ = 0;
-    double opened_at_ = 0;
     std::string current_;
-    bool entering_ = false;
-
+    // How the pictures look; everything else (out of the island, the
+    // filters, the backlight, the endless horizontal row) is shared.
+    int style_ = 0;  // 0 slices, 1 honeycomb (skwd-wall), 2 cards (wallhaven)
+    Spring colpos_{0, 460, 34};  // honeycomb/cards: the column in the middle (float)
+    // their pictures cut to shape, and their backlight (made by workers)
+    cairo_surface_t* tile_cut(const std::string& thumb, int kind, float tw, float th);
+    cairo_surface_t* tile_glow(int kind, float tw, float th, Color col);
+    void draw_tiles(cairo_t* cr, float W, float H, float t_open, float t_leave, float ie, bool input);
     // ── slices (the default style) ──
-    bool slices_ = true;
     Spring pos_{0, 460, 34};          // carousel position (float index)
     bool moved_ = false;
     double open_t0_ = 0, leave_t0_ = 0, filter_t0_ = 0;
