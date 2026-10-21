@@ -167,7 +167,7 @@ void App::draw_glance(cairo_t* cr, float w, float h) {
 
     float dx = 196;
     divider(cr, dx - 14, 16, dx - 14, 76, p.border);
-    if (clock_active()) draw_clock_strip(cr, {12, 92, w - 24, 46});
+    draw_summary_strips(cr, w, 92, 54);
 
     const auto& wd = weather_.data();
     if (wd.valid) {
@@ -201,7 +201,7 @@ void App::draw_music(cairo_t* cr, float w, float h) {
     const auto& m = mpris_.info();
     w::Ctx c{cr, ui_};
     Color acc = media_accent();
-    if (clock_active()) draw_clock_strip(cr, {12, 164, w - 24, 46});
+    draw_summary_strips(cr, w, 164, 54);
     (void)h;
 
     // A wash of the art's colour behind everything.

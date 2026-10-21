@@ -617,6 +617,48 @@ void App::draw_stopwatch(cairo_t* cr, float w, float h) {
 
 // The running clock, as a strip at the bottom of the hover summaries: the
 // timer when there is one, otherwise the stopwatch.
+void App::draw_summary_strips(cairo_t* cr, float w, float y, float step) {
+    if (recorder_.active()) {  // first: it is the one that must be easy to stop
+        draw_rec_strip(cr, {12, y, w - 24, 46});
+        y += step;
+    }
+    if (clock_active()) draw_clock_strip(cr, {12, y, w - 24, 46});
+}
+
+void App::draw_rec_strip(cairo_t* cr, const Rect& r) {
+    const auto& p = T();
+    w::Ctx c{cr, ui_};
+    auto st = recorder_.state();
+    bool paused = st == Recorder::State::Paused;
+    fill(cr, r, r.h / 2, p.bad.with_alpha(0.12f));
+    float cx = r.x + r.h / 2, cy = r.cy();
+    float pulse = st == Recorder::State::Recording ? 0.55f + 0.45f * std::fabs(std::sin(anim_time_ * 2.2f)) : 1.0f;
+    Color tint = paused ? p.warn : p.bad;
+    if (paused) glyph(cr, cx, cy, "󰏤", 14, tint);
+    else fill(cr, {cx - 7, cy - 7, 14, 14}, 7, tint.fade(pulse));
+    std::string t = st == Recorder::State::Countdown ? std::to_string(recorder_.countdown())
+                                                     : fmt_duration(static_cast<int64_t>(recorder_.elapsed()));
+    text(cr, r.x + r.h + 4, r.y + 5, t, {mono(16, "Bold"), tint});
+    const char* state = st == Recorder::State::Countdown ? "Grabación · empieza ya"
+                      : st == Recorder::State::Saving    ? "Grabación · guardando…"
+                      : paused                           ? "Grabación · en pausa"
+                                                         : "Grabando la pantalla";
+    text(cr, r.x + r.h + 4, r.y + 25, state, {ui(10.5f), p.text_dim, Align::Left, r.w - r.h - 130});
+    if (st == Recorder::State::Saving) return;
+    // pause/resume, microphone, stop (and save)
+    float bx = r.right() - 3 * 34 - 6;
+    w::icon_button(c, ID("rstrip.pp"), {bx, r.cy() - 16, 32, 32}, paused ? "󰐊" : "󰏤", 14, !paused)
+        .click([this] { recorder_.toggle_pause(); });
+    bool mic_muted = audio_.state().source.muted;
+    w::icon_button(c, ID("rstrip.mic"), {bx + 34, r.cy() - 16, 32, 32}, mic_muted ? "󰍭" : "󰍬", 14)
+        .click([this] { audio_.toggle_mic_mute(); });
+    w::icon_button(c, ID("rstrip.stop"), {bx + 68, r.cy() - 16, 32, 32}, "󰓛", 14, false, p.bad).click([this] {
+        recorder_.stop();
+    });
+    // the rest of the strip: all the recording's controls
+    ui_.add(ID("rstrip.open"), {r.x, r.y, bx - r.x, r.h}).click([this] { open(View::Record); });
+}
+
 void App::draw_clock_strip(cairo_t* cr, const Rect& r) {
     const auto& p = T();
     w::Ctx c{cr, ui_};

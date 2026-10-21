@@ -441,6 +441,10 @@ private:
     void draw_timer_setup(cairo_t* cr, float w, float h);
     void draw_stopwatch(cairo_t* cr, float w, float h);
     void draw_clock_strip(cairo_t* cr, const Rect& r);   // active timer/stopwatch in the summaries
+    void draw_rec_strip(cairo_t* cr, const Rect& r);     // a recording, with its controls
+    int summary_strips() const { return (clock_active() ? 1 : 0) + (recorder_.active() ? 1 : 0); }
+    // Below the glance or the player, from `y`: the strips that are running.
+    void draw_summary_strips(cairo_t* cr, float w, float y, float step);
     bool clock_active() const { return timer_.running() || stopwatch_.running(); }
     void timer_mode(int mode, const Rect& from);
 

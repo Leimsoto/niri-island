@@ -453,9 +453,7 @@ View App::decide() const {
     if (!nav_.empty()) return nav_.back();
     if (notifs_.current()) return View::Notification;
     if (osd_.until > now_mono()) return View::Osd;
-    // While recording, the look at the island is its controls: the player
-    // or the glance would cover the stop button.
-    if (summary_) return recorder_.active() ? View::Record : mpris_.info().active ? View::Music : View::Glance;
+    if (summary_) return mpris_.info().active ? View::Music : View::Glance;
     return View::Rest;
 }
 
@@ -598,8 +596,9 @@ void App::sizes_for(View v, float& w, float& h) {
             w += 2 * one_island_side();
             break;
         }
-        case View::Glance: w = 372; h = clock_active() ? 152 : 92; break;
-        case View::Music: w = 392; h = clock_active() ? 220 : 164; break;
+        // the timer and the recording join the summaries as strips
+        case View::Glance: w = 372; h = 92 + 60.0f * summary_strips(); break;
+        case View::Music: w = 392; h = 164 + 56.0f * summary_strips(); break;
         case View::Osd:
             w = osd_.kind == OsdInfo::Battery || osd_.kind == OsdInfo::Volume || osd_.kind == OsdInfo::Brightness ? 340 : 320;
             h = osd_.kind == OsdInfo::Battery ? 138 : osd_.kind == OsdInfo::Volume ? 100 : osd_.kind == OsdInfo::Brightness ? 72 : 60;
