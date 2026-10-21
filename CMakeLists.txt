@@ -75,3 +75,11 @@ add_executable(niri-island-greeter src/greeter/main.cpp)
 target_link_libraries(niri-island-greeter PRIVATE island-core)
 
 install(TARGETS niri-island niri-island-greeter RUNTIME DESTINATION bin)
+
+# Tests: cmake --build build && ctest --test-dir build --output-on-failure
+enable_testing()
+file(GLOB TEST_SRCS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)
+add_executable(niri-island-tests ${TEST_SRCS})
+target_include_directories(niri-island-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+target_link_libraries(niri-island-tests PRIVATE island-core)
+add_test(NAME unit COMMAND niri-island-tests)

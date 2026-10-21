@@ -205,7 +205,7 @@ int Tray::p_version(sd_bus*, const char*, const char*, const char*, sd_bus_messa
 
 // A name a person would recognise: apps often leave Title empty and give an
 // Id like "discord_status_icon_1" or "nm-applet-tray".
-static std::string display_name(const TrayItem& it) {
+std::string tray_display_name(const TrayItem& it) {
     if (!it.title.empty()) return it.title;
     std::string s = it.id;
     for (bool again = true; again;) {
@@ -217,7 +217,7 @@ static std::string display_name(const TrayItem& it) {
         for (const char* tail : {"_status_icon", "-status-icon", "statusicon", "_tray", "-tray", "_indicator", "-indicator",
                                  "_applet", "-applet", "StatusNotifierItem", "-sni", "_sni"}) {
             size_t n = strlen(tail);
-            if (s.size() > n && strcasecmp(s.c_str() + s.size() - n, tail) == 0) {
+            if (s.size() >= n && strcasecmp(s.c_str() + s.size() - n, tail) == 0) {
                 s.resize(s.size() - n);
                 again = true;
             }
@@ -245,7 +245,7 @@ void Tray::add(const std::string& service, const std::string& path) {
             if (sd_bus_creds_get_comm(creds, &comm) >= 0 && comm) it.proc = comm;
             sd_bus_creds_unref(creds);
         }
-        it.name = display_name(it);
+        it.name = tray_display_name(it);
         items_.push_back(it);
         emit("StatusNotifierItemRegistered", key);
         sd_bus_emit_properties_changed(bus_, kWatcherPath, kWatcher, "RegisteredStatusNotifierItems", nullptr);
@@ -339,7 +339,7 @@ void Tray::refresh(const std::string& key) {
                 }
                 sd_bus_message_exit_container(reply);
             }
-            it->name = display_name(*it);
+            it->name = tray_display_name(*it);
             if (c->self->on_change) c->self->on_change();
             return 0;
         },

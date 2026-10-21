@@ -30,6 +30,10 @@ struct TrayItem {
     std::shared_ptr<cairo_surface_t> pixmap;  // when the app sends pixels, not a name
 };
 
+// What to call an item: its title, else its id without the bits apps add
+// ("discord_status_icon_1" → "Discord"), else its process name.
+std::string tray_display_name(const TrayItem& it);
+
 // The system tray: the island is the StatusNotifierWatcher (and its host),
 // so apps like Discord, Steam or nm-applet can put their icon in it.
 class Tray {
