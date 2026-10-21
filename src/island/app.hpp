@@ -110,7 +110,7 @@ private:
     HostedOverlay settings_{wl_, "niri-island-settings"};
     // The capture bubble: rises from the bottom edge (Mod+S), screenshot or
     // recording, each with its own options.
-    HostedOverlay capbar_{wl_, "niri-island-capture"};
+    HostedOverlay capbar_{wl_, "niri-island-capbar"};
     Spring capbar_t_{0, 420, 34};    // 0 hidden … 1 out
     Spring capbar_h_{0, 420, 36};    // its height, between the two modes
     int capbar_mode_ = 0;            // 0 screenshot, 1 recording

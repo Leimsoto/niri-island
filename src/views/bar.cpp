@@ -470,6 +470,7 @@ static void write_niri_rules() {
             "layer-rule {\n"
             "    match namespace=\"^niri-island$\"\n"
             "    match namespace=\"^niri-island-bar-\"\n"
+            "    match namespace=\"^niri-island-capbar$\"\n"
             "    background-effect {\n"
             "        xray " + std::string(config().blur_xray ? "true" : "false") + "\n"
             "    }\n"
