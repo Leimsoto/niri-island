@@ -57,6 +57,11 @@ private:
     bool paused_ = false;
     void send_mpv(const std::string& cmd);
     void render(Out& o);
+    // Once on every screen, the full picture (a 4K PNG is 33 MB decoded) is
+    // swapped for a copy just big enough for the screens: the same pixels
+    // end up on screen. A bigger screen plugged in reloads the file.
+    bool fitted_ = false;
+    void fit_to_screens();
     void save_state() const;
     void make_palette(const std::string& path, bool video);
 };

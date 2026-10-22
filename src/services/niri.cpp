@@ -244,6 +244,18 @@ bool Niri::screen_covered(float w, float h) const {
     return false;
 }
 
+bool Niri::fullscreen(float w, float h) const {
+    if (overview_ || w <= 0 || h <= 0) return false;
+    for (auto& [id, ws] : workspaces_) {
+        if (!ws.active || !ws.active_window) continue;
+        auto it = windows_.find(ws.active_window);
+        if (it == windows_.end()) continue;
+        const Window& win = it->second;
+        if (!win.floating && win.tile_w >= w - 1 && win.tile_h >= h - 1) return true;
+    }
+    return false;
+}
+
 const Window* Niri::focused_window() const {
     for (auto& [id, w] : windows_)
         if (w.focused) return &w;

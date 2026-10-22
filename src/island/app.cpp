@@ -793,6 +793,7 @@ std::string App::bar_signature() const {
              b.charging, b.plugged, notifs_.dnd_mode(), !notifs_.history().empty(), config_gen_);
     s += buf;
     for (auto& m : config().modules) s += m.id + m.side + (m.on ? "1" : "0");
+    if (fullscreen_hide()) s += "|fs";
     if (perf_on()) {
         const auto& st = sysmon_.stats();
         snprintf(buf, sizeof(buf), "|%d,%d,%d,%d,%d,%d", static_cast<int>(st.cpu), static_cast<int>(st.ram),
@@ -1240,6 +1241,20 @@ void App::render() {
         return;
     }
     dirty_ = false;
+    if (fullscreen_hide()) {
+        // Out of the way of a full-screen window: an empty frame, no input,
+        // no blur, no spectrum. It comes back when the window leaves.
+        if (!last_input_.empty()) {
+            island_->set_input_rects({});
+            last_input_.clear();
+        }
+        island_->set_blur({});
+        spec_live_ = false;
+        if (spec_sub_) spec_sub_->hide();
+        island_->end_frame(bbox.unite(last_bbox_));
+        last_bbox_ = bbox;
+        return;
+    }
 
     float bh = bar_h();
     float radius = shape_radius(ir.h);

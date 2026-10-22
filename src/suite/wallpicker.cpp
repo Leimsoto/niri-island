@@ -1,12 +1,14 @@
 #include "suite/wallpicker.hpp"
 
 #include <dirent.h>
+#include <malloc.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <random>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <unordered_set>
 #include <unordered_map>
 
 #include "core/config.hpp"
@@ -74,11 +76,60 @@ void rgb_to_hsv(Color c, float& h, float& s, float& v) {
 }
 
 // Builds (or reuses) a thumbnail and measures its colour. Worker thread.
+// Has an alpha channel and really uses it (most PNG wallpapers carry one, opaque).
+bool truly_transparent(GdkPixbuf* pb) {
+    if (!gdk_pixbuf_get_has_alpha(pb) || gdk_pixbuf_get_n_channels(pb) != 4) return false;
+    int w = gdk_pixbuf_get_width(pb), h = gdk_pixbuf_get_height(pb), stride = gdk_pixbuf_get_rowstride(pb);
+    const guchar* px = gdk_pixbuf_read_pixels(pb);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            if (px[y * stride + x * 4 + 3] < 250) return true;
+    return false;
+}
+
+// The same picture without its (unused) alpha channel, for JPEG.
+GdkPixbuf* opaque_copy(GdkPixbuf* pb) {
+    if (!gdk_pixbuf_get_has_alpha(pb)) return GDK_PIXBUF(g_object_ref(pb));
+    int w = gdk_pixbuf_get_width(pb), h = gdk_pixbuf_get_height(pb);
+    GdkPixbuf* out = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, w, h);
+    const guchar* src = gdk_pixbuf_read_pixels(pb);
+    guchar* dst = gdk_pixbuf_get_pixels(out);
+    int ss = gdk_pixbuf_get_rowstride(pb), ds = gdk_pixbuf_get_rowstride(out);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            for (int k = 0; k < 3; ++k) dst[y * ds + x * 3 + k] = src[y * ss + x * 4 + k];
+    return out;
+}
+
+// Small and good: JPEG at quality 86 unless the picture is really see-through.
+bool save_thumb(GdkPixbuf* pb, const std::string& jpg, const std::string& png, std::string& out) {
+    if (truly_transparent(pb)) {
+        out = png;
+        return gdk_pixbuf_save(pb, png.c_str(), "png", nullptr, nullptr);
+    }
+    GdkPixbuf* rgb = opaque_copy(pb);
+    out = jpg;
+    gboolean ok = gdk_pixbuf_save(rgb, jpg.c_str(), "jpeg", nullptr, "quality", "86", nullptr);
+    g_object_unref(rgb);
+    return ok;
+}
+
 bool make_thumb(Wallpaper& w, const std::string& dir) {
     char name[40];
     snprintf(name, sizeof(name), "%016llx", static_cast<unsigned long long>(hash_str(w.path + std::to_string(w.mtime))));
     std::string jpg = dir + "/" + name + ".jpg", png = dir + "/" + name + ".png";
     std::string out = file_exists(jpg) ? jpg : file_exists(png) ? png : "";
+    if (out == png) {
+        // an older PNG thumbnail of an opaque picture: once, to JPEG (a quarter the size)
+        if (GdkPixbuf* pb = gdk_pixbuf_new_from_file(png.c_str(), nullptr)) {
+            std::string now;
+            if (!truly_transparent(pb) && save_thumb(pb, jpg, png, now)) {
+                unlink(png.c_str());
+                out = jpg;
+            }
+            g_object_unref(pb);
+        }
+    }
     if (out.empty()) {
         if (w.video) {
             if (!proc::has("ffmpeg")) return false;
@@ -97,10 +148,7 @@ bool make_thumb(Wallpaper& w, const std::string& dir) {
                 if (err) g_error_free(err);
                 return false;
             }
-            bool alpha = gdk_pixbuf_get_has_alpha(pb);
-            out = alpha ? png : jpg;
-            gboolean ok = alpha ? gdk_pixbuf_save(pb, out.c_str(), "png", nullptr, nullptr)
-                                : gdk_pixbuf_save(pb, out.c_str(), "jpeg", nullptr, "quality", "86", nullptr);
+            bool ok = save_thumb(pb, jpg, png, out);
             g_object_unref(pb);
             if (!ok) return false;
         }
@@ -118,6 +166,26 @@ bool make_thumb(Wallpaper& w, const std::string& dir) {
 }
 
 }  // namespace
+
+// Thumbnails of pictures no longer there (deleted, edited) go.
+void WallPicker::prune_thumbs(const std::string& dir) {
+    auto keep = std::make_shared<std::unordered_set<std::string>>();
+    for (auto& w : walls_)
+        if (!w.thumb.empty()) keep->insert(w.thumb);
+    for (auto& w : local_walls_)
+        if (!w.thumb.empty()) keep->insert(w.thumb);
+    if (keep->empty()) return;  // nothing scanned: better not to guess
+    Loop::get().async([dir, keep] {
+        DIR* d = opendir(dir.c_str());
+        if (!d) return;
+        while (dirent* e = readdir(d)) {
+            std::string f = e->d_name;
+            if (f == "." || f == "..") continue;
+            if (!keep->count(dir + "/" + f)) unlink((dir + "/" + f).c_str());
+        }
+        closedir(d);
+    });
+}
 
 std::string WallPicker::current_wallpaper() const {
     std::string text;
@@ -143,6 +211,16 @@ void WallPicker::closed() {
         big_fit_ = nullptr;
     }
     big_path_.clear();
+    // Not opened again for a while: let the pictures and lights go (they
+    // are made again, by workers, the next time).
+    Loop::get().cancel(release_timer_);
+    release_timer_ = Loop::get().after(120.0, [this] {
+        release_timer_ = 0;
+        if (!exists()) {
+            free_caches();
+            malloc_trim(0);
+        }
+    });
 }
 
 void WallPicker::opened() {
@@ -233,11 +311,12 @@ void WallPicker::scan() {
 
             // Thumbnails still missing, in small batches so the grid fills in.
             auto todo = std::make_shared<std::vector<Wallpaper>>();
-            for (auto& w : walls_)
-                if (w.thumb.empty() || w.hue < 0) todo->push_back(w);
+            for (auto& w : walls_)  // (older PNG thumbnails go through it once, to JPEG)
+                if (w.thumb.empty() || w.hue < 0 || ends_with(w.thumb, ".png")) todo->push_back(w);
             thumbs_left_ = static_cast<int>(todo->size());
             if (todo->empty()) {
                 scanning_ = false;
+                prune_thumbs(thumbs);
                 return;
             }
             auto run_batch = std::make_shared<std::function<void(size_t)>>();
@@ -248,7 +327,7 @@ void WallPicker::scan() {
                     [batch, thumbs] {
                         for (auto& w : *batch) make_thumb(w, thumbs);
                     },
-                    [this, batch, from, todo, index_path, run_batch] {
+                    [this, batch, from, todo, index_path, run_batch, thumbs] {
                         for (auto& b : *batch)
                             for (auto& w : walls_)
                                 if (w.path == b.path) {
@@ -272,6 +351,7 @@ void WallPicker::scan() {
                                              {"val", w.val}};
                         write_file_atomic(index_path, j.dump());
                         scanning_ = false;
+                        prune_thumbs(thumbs);
                         refilter();
                         request();
                     });

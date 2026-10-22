@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <csignal>
 #include <dirent.h>
+#include <malloc.h>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <sys/stat.h>
@@ -134,6 +135,11 @@ void Backdrop::outputs_changed() {
                                    return x.output && std::find(now.begin(), now.end(), x.output) == now.end();
                                }),
                 outs_.end());
+    if (!is_video(path_) && img_ && fitted_) {
+        // the copy was made for the screens there were: a new one may be bigger
+        set(path_);
+        return;
+    }
     if (!is_video(path_) && img_) {
         // the one made before any screen was known is replaced by real ones
         if (!now.empty())
@@ -217,6 +223,7 @@ void Backdrop::set(const std::string& path) {
                           }
                           if (img_) cairo_surface_destroy(img_);
                           img_ = *img;
+                          fitted_ = false;
                           ensure_surface();
                           mark_dirty();
                           // Under our surface by now: the video can stop.
@@ -230,6 +237,35 @@ void Backdrop::set(const std::string& path) {
 void Backdrop::pump() {
     for (auto& o : outs_)
         if (o.dirty && o.surf && o.surf->configured() && !o.surf->frame_pending()) render(o);
+    if (!fitted_ && img_ && !outs_.empty()) {
+        bool all = true;
+        for (auto& o : outs_) all &= !o.dirty && o.surf && o.surf->configured();
+        if (all) fit_to_screens();
+    }
+}
+
+void Backdrop::fit_to_screens() {
+    fitted_ = true;
+    int need_w = 0, need_h = 0;  // in device pixels, the largest screen
+    for (auto& o : outs_) {
+        need_w = std::max(need_w, o.surf->width() * o.surf->scale());
+        need_h = std::max(need_h, o.surf->height() * o.surf->scale());
+    }
+    int iw = cairo_image_surface_get_width(img_), ih = cairo_image_surface_get_height(img_);
+    if (need_w <= 0 || need_h <= 0 || iw <= 0 || ih <= 0) return;
+    double s = std::max(static_cast<double>(need_w) / iw, static_cast<double>(need_h) / ih);  // cover
+    if (s > 0.85) return;  // not much bigger than the screens: keep it as it is
+    int fw = static_cast<int>(std::ceil(iw * s)), fh = static_cast<int>(std::ceil(ih * s));
+    cairo_surface_t* fit = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, fw, fh);
+    cairo_t* c = cairo_create(fit);
+    cairo_scale(c, s, s);
+    cairo_set_source_surface(c, img_, 0, 0);
+    cairo_pattern_set_filter(cairo_get_source(c), CAIRO_FILTER_GOOD);
+    cairo_paint(c);
+    cairo_destroy(c);
+    cairo_surface_destroy(img_);
+    img_ = fit;
+    malloc_trim(0);  // the full picture's pages back to the system
 }
 
 void Backdrop::render(Out& o) {

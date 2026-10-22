@@ -1,4 +1,5 @@
 #include <clocale>
+#include <malloc.h>
 #include <csignal>
 #include <cstring>
 #include <iostream>
@@ -11,6 +12,12 @@
 #include "island/app.hpp"
 
 int main(int argc, char* argv[]) {
+    // Pictures are big, short-lived blocks decoded on worker threads. Left to
+    // its defaults glibc keeps freed ones in per-thread arenas (tens of MB
+    // that never go back). Big blocks get their own mapping, returned when
+    // freed, and fewer arenas.
+    mallopt(M_MMAP_THRESHOLD, 256 * 1024);
+    mallopt(M_ARENA_MAX, 2);
     // Dates and month names in the user's language; numbers stay "C" so
     // parsing and font strings never meet a decimal comma.
     setlocale(LC_ALL, "");

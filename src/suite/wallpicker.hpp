@@ -61,6 +61,8 @@ private:
     // How the pictures look; everything else (out of the island, the
     // filters, the backlight, the endless horizontal row) is shared.
     int style_ = 0;  // 0 slices, 1 honeycomb (skwd-wall), 2 cards (wallhaven)
+    uint64_t release_timer_ = 0;  // frees the caches a while after closing
+    void prune_thumbs(const std::string& dir);
     Spring colpos_{0, 460, 34};  // honeycomb/cards: the column in the middle (float)
     // their pictures cut to shape, and their backlight (made by workers)
     cairo_surface_t* tile_cut(const std::string& thumb, int kind, float tw, float th);

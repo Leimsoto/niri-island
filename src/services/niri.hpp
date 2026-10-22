@@ -42,6 +42,8 @@ public:
     // A window (the one in focus of a workspace on screen) covers most of a
     // w×h output: fullscreen or maximized. For pausing video wallpapers.
     bool screen_covered(float w, float h) const;
+    // A window on screen is full screen (its tile is the whole w×h output).
+    bool fullscreen(float w, float h) const;
     bool connected() const { return fd_ >= 0; }
 
     void focus_workspace(uint64_t id);

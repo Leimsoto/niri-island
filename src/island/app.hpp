@@ -523,6 +523,9 @@ private:
     // out of what is drawn — the weather's place, Wi-Fi names, notifications,
     // tasks, the name on the lock screen. Nothing stored changes.
     bool demo_ = false;
+    // A window is full screen (a video, a game): nothing of the island shows —
+    // keys still work — unless a panel was opened on purpose.
+    bool fullscreen_hide() const { return nav_.empty() && niri_.fullscreen(screen_w_, screen_h_); }
     void start_recording();
     void with_output(std::function<void(const std::string&)> fn);
     void notify_file(const std::string& title, const std::string& path, cairo_surface_t* thumb, const std::string& body);

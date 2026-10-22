@@ -524,6 +524,7 @@ void App::draw_side(cairo_t* cr, bool left) {
 
 void App::paint_edge(cairo_t* cr, Ui& u, float w, float h, bool left, std::vector<Rect>& input) {
     (void)h;
+    if (fullscreen_hide()) return;  // nothing over a full-screen window
     auto caps = side_caps(left);
     float gap = 12;
     float inset = EdgeBar::edge_inset();

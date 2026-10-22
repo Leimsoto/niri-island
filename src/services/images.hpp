@@ -49,8 +49,10 @@ private:
         Color color{};
         bool failed = false;
         double used = 0;
+        size_t bytes = 0;
     };
     std::unordered_map<std::string, Entry> entries_;
+    size_t bytes_ = 0;  // decoded pixels held, kept under a budget
     std::unordered_set<std::string> loading_;
     void trim();
 };

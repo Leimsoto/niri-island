@@ -10,6 +10,9 @@
 #include <cmath>
 #include <thread>
 #include <unistd.h>
+#include <ctime>
+#include <sys/stat.h>
+#include <dirent.h>
 
 #include "core/config.hpp"
 #include "core/loop.hpp"
@@ -196,9 +199,16 @@ void WallPicker::make_async(const std::string& key, std::function<cairo_surface_
                           pending_.erase(key);
                           --inflight_;
                           if (!*out) return;
-                          if (into == &slice_cache_ && into->size() > 140) {
-                              for (auto& [k, v] : *into) cairo_surface_destroy(v);
-                              into->clear();
+                          // a budget in bytes for the cut pictures (big slices are ~1.3 MB each)
+                          if (into == &slice_cache_) {
+                              size_t bytes = 0;
+                              for (auto& [k, v] : *into)
+                                  if (v) bytes += static_cast<size_t>(cairo_image_surface_get_stride(v)) * cairo_image_surface_get_height(v);
+                              if (bytes > (64u << 20)) {
+                                  for (auto& [k, v] : *into)
+                                      if (v) cairo_surface_destroy(v);
+                                  into->clear();
+                              }
                           }
                           auto it = into->find(key);
                           if (it != into->end() && it->second) cairo_surface_destroy(it->second);
@@ -529,6 +539,20 @@ void WallPicker::request_big() {
 // Before the first opening: the list, the lights, and the slices round the current one.
 void WallPicker::prewarm() {
     current_ = current_wallpaper();
+    // wallhaven previews seen while browsing pile up: those older than a week go
+    std::string whcache = cache_dir() + "/wallhaven";
+    Loop::get().async([whcache] {
+        DIR* d = opendir(whcache.c_str());
+        if (!d) return;
+        time_t limit = time(nullptr) - 7 * 24 * 3600;
+        while (dirent* e = readdir(d)) {
+            std::string f = whcache + "/" + e->d_name;
+            struct stat st {};
+            if (e->d_name[0] != '.' && stat(f.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_mtime < limit)
+                unlink(f.c_str());
+        }
+        closedir(d);
+    });
     // wallhaven's hosts resolved ahead (a slow resolver costs seconds per host)
     std::thread([] {
         std::string b;

@@ -378,6 +378,7 @@ void ImageCache::clear() {
     for (auto& [k, e] : entries_)
         if (e.surface) cairo_surface_destroy(e.surface);
     entries_.clear();
+    bytes_ = 0;
 }
 
 cairo_surface_t* ImageCache::request(const std::string& src, int max_px) {
@@ -409,6 +410,8 @@ cairo_surface_t* ImageCache::request(const std::string& src, int max_px) {
             e.color = out->c;
             e.failed = out->s == nullptr;
             e.used = now_mono();
+            if (e.surface) e.bytes = static_cast<size_t>(cairo_image_surface_get_stride(e.surface)) * cairo_image_surface_get_height(e.surface);
+            bytes_ += e.bytes;
             entries_[key] = e;
             trim();
             if (on_ready) on_ready();
@@ -423,14 +426,21 @@ Color ImageCache::color_of(const std::string& src, int max_px, Color fallback) {
     return it->second.color;
 }
 
+// A budget in bytes, not a count: 160 picker thumbnails at 520 px were
+// ~160 MB. Over it, the least recently used go until well under.
 void ImageCache::trim() {
-    if (entries_.size() < 160) return;
+    constexpr size_t kBudget = 48u << 20, kAfter = 36u << 20;
+    if (bytes_ <= kBudget && entries_.size() < 600) return;
     std::vector<std::pair<double, std::string>> byage;
     for (auto& [k, e] : entries_) byage.emplace_back(e.used, k);
     std::sort(byage.begin(), byage.end());
-    for (size_t i = 0; i < byage.size() / 3; ++i) {
-        auto it = entries_.find(byage[i].second);
+    double now = now_mono();
+    for (auto& [used, k] : byage) {
+        if (bytes_ <= kAfter && entries_.size() < 450) break;
+        if (now - used < 0.5) break;  // drawn this very frame: keep
+        auto it = entries_.find(k);
         if (it->second.surface) cairo_surface_destroy(it->second.surface);
+        bytes_ -= std::min(bytes_, it->second.bytes);
         entries_.erase(it);
     }
 }

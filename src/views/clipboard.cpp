@@ -1,8 +1,10 @@
 // Clipboard history (cliphist): a grid of what was copied, with real image
 // thumbnails, colour swatches and links, a search and per-item actions.
 
+#include <dirent.h>
 #include <glib.h>
 #include <sys/stat.h>
+#include <unordered_set>
 
 #include "core/config.hpp"
 #include "core/proc.hpp"
@@ -87,6 +89,18 @@ void App::load_clipboard() {
                 }
                 items->push_back(std::move(it));
             }
+            // Copies of images no longer in the history (deleted, wiped) go.
+            std::unordered_set<std::string> keep;
+            for (auto& it : *items)
+                if (!it.thumb.empty()) keep.insert(it.id + ".img");
+            if (!items->empty())
+                if (DIR* d = opendir(clip_cache_dir().c_str())) {
+                    while (dirent* e = readdir(d)) {
+                        std::string f = e->d_name;
+                        if (ends_with(f, ".img") && !keep.count(f)) unlink((clip_cache_dir() + "/" + f).c_str());
+                    }
+                    closedir(d);
+                }
         },
         [this, items] {
             clip_panel_loading_ = false;
