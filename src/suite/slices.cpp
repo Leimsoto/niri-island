@@ -935,10 +935,14 @@ void WallPicker::draw_filter_bar(cairo_t* cr, float W, float H, float t_in) {
     const int ncol = 13;
     float bh = 42, dot = 20, dgap = 8, btn = 34;
     float search_w = remote_ ? 210 : 0;
-    float mature_w = remote_ ? 34 + 8 : 0;
-    int nmid = remote_ ? 4 : 3;
-    float bw = 12 + btn + 12 + 1 + 12 + nmid * btn + (nmid - 1) * 4 + mature_w + 12 + 1 + 12 + (remote_ ? search_w + 12 + 1 + 12 : 0) +
-               ncol * dot + (ncol - 1) * dgap + 14;
+    const float sep_w = 20;  // see sep() below
+    // What sits in the middle: the kinds (local), the orders and the mature
+    // shield (wallhaven), nothing for Wallpaper Engine.
+    bool kinds = !remote_ && kind_ != 3;
+    float mid_w = kinds ? 3 * btn + 2 * 4 : remote_ ? 4 * (btn + 4) + 4 + 34 : 0;
+    // the same steps as the drawing below, so the capsule fits what it holds
+    float bw = 12 + btn + (has_engine() ? 4 + btn : 0) + sep_w + (mid_w > 0 ? mid_w + sep_w : 0) +
+               (remote_ ? search_w + sep_w : 0) + ncol * dot + (ncol - 1) * dgap + 16;
     float by = 64;
     float iy = island_y();
     Rect bar{std::round(W / 2 - bw / 2), std::round(lerp(iy - bh / 2, by, k)), bw, bh};
@@ -969,13 +973,13 @@ void WallPicker::draw_filter_bar(cairo_t* cr, float W, float H, float t_in) {
         x += btn;
     }
     sep(x);
-    if (!remote_ && kind_ != 3) {
+    if (kinds) {
         const char* gl[3] = {"󰸉", "󰋩", "󰕧"};  // all, still, video
         for (int i = 0; i < 3; ++i) {
             w::icon_button(c, ID("sl.kind", i), {x, bar.y + 4, btn, btn}, gl[i], 15, kind_ == i).click([this, i] { set_filter(i, hue_); });
             x += btn + 4;
         }
-    } else {
+    } else if (remote_) {
         const char* gl[4] = {"󰓎", "󰥔", "󰒝", "󰈈"};  // top, latest, random, most viewed
         for (int i = 0; i < 4; ++i) {
             w::icon_button(c, ID("sl.sort", i), {x, bar.y + 4, btn, btn}, gl[i], 15, wh_sort_ == i).click([this, i] {
@@ -1003,8 +1007,10 @@ void WallPicker::draw_filter_bar(cairo_t* cr, float W, float H, float t_in) {
         });
         x += 34 + 4;
     }
-    x -= 4;
-    sep(x);
+    if (mid_w > 0) {
+        x -= 4;
+        sep(x);
+    }
     if (remote_) {
         // the search: type anywhere
         Rect sr{x, bar.y + 6, search_w, bh - 12};
