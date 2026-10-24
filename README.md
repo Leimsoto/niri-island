@@ -76,16 +76,21 @@ temporizador y cronómetro con vueltas, **notificaciones** (historial y No moles
 
 ## Suite
 
-- **Fondos de pantalla propios**: la isla pinta el fondo (imágenes; vídeos con `mpvpaper`), lo recuerda y genera la
+- **Fondos de pantalla propios**: la isla pinta el fondo (imágenes; vídeos con su motor), lo recuerda y genera la
   paleta. Selector con tres estilos (Ajustes → Fondos): **carrusel** de slices retroiluminados que sale de la isla,
   **panal** de hexágonos como el de skwd-wall y **tarjetas** como la web de wallhaven; filtros por tipo y color, y
   aplicación instantánea. Modo **wallhaven**: cuadrícula desplazable, búsqueda, orden, color, contenido
-  +18 opcional (marcado en rojo) y descarga a `~/Imágenes/wallpapers/wallhaven`. Los fondos de vídeo **se pausan**
+  +18 opcional (marcado en rojo) y descarga a `~/Imágenes/wallpapers/wallhaven`. Un clic en una tarjeta abre un
+  **panel** con la imagen completa, añadir, guardar y **probar en el escritorio** (✓ se queda, ✕ vuelve al anterior). Los fondos de vídeo **se pausan**
   mientras una ventana ocupa la pantalla (completa o maximizada), como en skwd-wall; se desactiva en Ajustes → Fondos.
-- **Wallpaper Engine** vía [waywallen](https://github.com/waywallen/waywallen): los elementos del Workshop que Steam
-  tenga descargados salen en el selector (filtro propio) con su vista previa; al aplicar uno la isla arranca el
-  demonio sin interfaz, se aparta y genera la paleta desde la vista previa. Al volver a una imagen o vídeo normal,
-  waywallen se cierra. Se pausa igual que los vídeos; sonido y accesos al Workshop en Ajustes → Fondos.
+- **Wallpaper Engine**, sin Wallpaper Engine abierto ni demonios aparte. Fuente **Steam** (󰓓) en el selector: tus
+  descargas, o el **Workshop** (búsqueda, orden, +18 opcional, vistas previas animadas) con suscribirse y descargar
+  con progreso y desuscribirse (borra también los archivos), por el cliente de Steam. Mismo panel que wallhaven.
+  Las escenas y los vídeos los dibuja **niri-island-engine** (`engine/`, basado en
+  [skwd-paper](https://github.com/liixini/skwd-paper)) con Vulkan: un vídeo 1080p60 gasta ~10 % de un núcleo y 0 en
+  pausa. Los fondos **web** usan el renderizador CEF de [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine)
+  hablándole directamente (sus fotogramas dma-buf van a nuestra propia superficie). La isla borra las descargas de
+  las que te desuscribes (Steam las deja en disco).
 - **Capturas** (Mod+S): la pantalla se congela al instante tal cual está, islas y paneles incluidos, y una burbuja
   que sale del borde inferior pregunta qué hacer; editor con región, formas, flechas, texto, pixelado, contador y
   deshacer. Mientras dura, el teclado es solo de la captura. **Grabación** con pausa,
@@ -108,14 +113,17 @@ sudo cp /etc/pam.d/swaylock /etc/pam.d/niri-island   # servicio PAM del bloqueo 
 ```
 
 Opcionales en tiempo de ejecución: `nmcli`, `cava`, `cliphist` + `wl-clipboard` + `wtype` (portapapeles),
-`matugen` (paleta), `mpvpaper` (fondos de vídeo), `wf-recorder` + `ffmpeg` (grabación), `grim`, `swayidle`
+`matugen` (paleta), `mpvpaper` (vídeos, sin el motor), `wf-recorder` + `ffmpeg` (grabación), `grim`, `swayidle`
 (protector e inactividad), `brightnessctl`, `power-profiles-daemon`.
 
-Para Wallpaper Engine: el Flatpak `org.waywallen.waywallen` con el plugin
-[open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine) (las escenas necesitan además
-Wallpaper Engine instalado en Steam) y `waywallen-layer-shell` de
-[waywallen-display](https://github.com/waywallen/waywallen-display), que es quien lo muestra en niri (desde Flatpak
-waywallen no puede usar layer-shell).
+Para Wallpaper Engine: `cargo` al compilar (motor y ayudante de Steam en `engine/`; `-DNIRI_ISLAND_ENGINE=OFF` lo
+omite y los vídeos vuelven a `mpvpaper`), `libvulkan-dev`, `libgbm-dev`, `libegl-dev`, `libavcodec-dev` y familia
+(ffmpeg), Wallpaper Engine instalado en Steam (las escenas usan sus recursos) y Steam abierto para el Workshop.
+El soporte web se instala desde Ajustes → Fondos (descarga el renderizador, ~340 MB). Todo se instala con:
+
+```bash
+cmake --install build --prefix ~/.local
+```
 
 ## Integración con niri
 

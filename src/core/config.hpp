@@ -70,7 +70,7 @@ struct Config {
     std::string cmd_wallpaper_picker = "internal";   // "internal" = niri-island's own picker
     std::string cmd_wallpaper_apply = "internal";     // or a command with {path}
     bool wallpaper_pause_covered = true;
-    // Wallpaper Engine (through waywallen): its Workshop items in the picker.
+    // Wallpaper Engine: its Workshop items in the picker (our engine draws them).
     bool wallpaper_engine = true;
     bool wallpaper_engine_audio = false;
     bool wallpaper_engine_clean = true;   // delete the downloads Steam keeps after unsubscribing

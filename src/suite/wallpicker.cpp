@@ -16,7 +16,7 @@
 #include "core/proc.hpp"
 #include "services/engine.hpp"
 #include "services/steam.hpp"
-#include "services/waywallen.hpp"
+#include "services/workshop.hpp"
 #include "services/images.hpp"
 #include "ui/paint.hpp"
 #include "ui/theme.hpp"
@@ -268,7 +268,7 @@ void WallPicker::opened() {
     // Start the selection on the wallpaper in use.
     for (size_t i = 0; i < visible_.size(); ++i)
         if (walls_[visible_[i]].path == current_) sel_ = static_cast<int>(i);
-    if (waywallen::is_item(current_)) set_steam(true);  // open where the current one is
+    if (workshop::is_item(current_)) set_steam(true);  // open where the current one is
     pos_.reset(static_cast<float>(std::max(0, sel_)));
     colpos_.reset(static_cast<float>(std::max(0, sel_) / kTileRows));
 }
@@ -283,10 +283,9 @@ void WallPicker::scan() {
     Loop::get().async(
         [found, index_path] {
             for (auto& d : config().wallpaper_dirs) walk(expand_home(d), *found);
-            if (config().wallpaper_engine && config().wallpaper_engine_clean) waywallen::clean_workshop();
-            if (config().wallpaper_engine && waywallen::running()) waywallen::sync_hidden();
+            if (config().wallpaper_engine && config().wallpaper_engine_clean) workshop::clean_workshop();
             if (config().wallpaper_engine)  // downloaded Workshop items
-                for (auto& it : waywallen::items()) {
+                for (auto& it : workshop::items()) {
                     if (it.preview.empty()) continue;
                     struct stat st {};
                     stat((it.dir + "/project.json").c_str(), &st);
@@ -449,7 +448,7 @@ void WallPicker::apply(int index, bool stay) {
     if (index < 0 || index >= static_cast<int>(walls_.size())) return;
     const Wallpaper& w = walls_[index];
     std::string cmd = config().cmd_wallpaper_apply;
-    // (Wallpaper Engine items always go through the backdrop: it runs waywallen)
+    // (Wallpaper Engine items always go through the backdrop: it runs the engine)
     if ((w.engine || cmd.empty() || cmd == "internal" || cmd.find("skwd") != std::string::npos) && on_apply) {
         on_apply(w.path);
     } else {

@@ -8,7 +8,8 @@
 #include "core/config.hpp"
 #include "core/proc.hpp"
 #include "island/app.hpp"
-#include "services/waywallen.hpp"
+#include "services/workshop.hpp"
+#include "suite/webwall.hpp"
 #include "ui/paint.hpp"
 #include "ui/theme.hpp"
 
@@ -865,8 +866,8 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
                cfg.wallpaper_pause_covered = v;
                save();
            });
-    // Wallpaper Engine through waywallen
-    toggle(5, "Wallpaper Engine", "Wallpaper Engine", "Los fondos del Workshop que tengas descargados aparecen en el selector (los dibuja waywallen)",
+    // Wallpaper Engine
+    toggle(5, "Wallpaper Engine", "Wallpaper Engine", "Los fondos del Workshop que tengas descargados aparecen en el selector",
            [&] { return cfg.wallpaper_engine; },
            [&, save](bool v) {
                cfg.wallpaper_engine = v;
@@ -885,9 +886,15 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
                cfg.wallpaper_engine_clean = v;
                save();
            });
-    buttons(5, "Wallpaper Engine", "Más fondos", "Suscríbete en el Workshop; Steam los descarga y aparecen aquí",
+    buttons(5, "Wallpaper Engine", "Más fondos", "El Workshop también está en el selector; los fondos web necesitan su soporte",
             {{"Abrir Workshop", [] { proc::spawn({"xdg-open", "steam://url/SteamWorkshopPage/431960"}); }},
-             {"Abrir waywallen", [] { Loop::get().async([] { waywallen::open_ui(); }); }}});
+             {WebWall::available() ? "Reinstalar soporte web" : "Instalar soporte web", [this] {
+                  show_toast("Descargando el soporte web…");
+                  auto err = std::make_shared<std::string>();
+                  auto ok = std::make_shared<bool>(false);
+                  Loop::get().async([err, ok] { *ok = WebWall::install_renderer(err.get()); },
+                                    [this, err, ok] { show_toast(*ok ? "Soporte web listo" : *err); });
+              }}});
     preview(5, "Selector", "Estilo del selector", "", {"Carrusel", "Panal", "Tarjetas"},
             [&] {
                 const std::string& st = cfg.wallpaper_picker_style;
@@ -1213,5 +1220,5 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
     cairo_restore(cr);
 }
 
-}  // namespace island#include "services/waywallen.hpp"
+}  // namespace island#include "services/workshop.hpp"
 

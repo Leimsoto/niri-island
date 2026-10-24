@@ -25,7 +25,7 @@
 #include "core/proc.hpp"
 #include "services/images.hpp"
 #include "services/steam.hpp"
-#include "services/waywallen.hpp"
+#include "services/workshop.hpp"
 #include "suite/wallpicker.hpp"
 #include "ui/paint.hpp"
 #include "ui/theme.hpp"
@@ -294,7 +294,7 @@ void WallPicker::ws_event(const json& ev) {
         ws_page_ = std::atoi(tag.c_str() + colon + 1);
         const auto& items = ev.contains("items") && ev["items"].is_array() ? ev["items"] : json::array();
         ws_more_ = items.size() >= 30;
-        std::vector<std::string> dirs = waywallen::workshop_dirs();
+        std::vector<std::string> dirs = workshop::workshop_dirs();
         for (const auto& it : items) {
             if (!it.is_object()) continue;
             Wallpaper w;

@@ -31,6 +31,10 @@ public:
     static std::string renderer();
     static std::string bridge_dir();
     static bool available() { return !renderer().empty() && !bridge_dir().empty(); }
+    // Fetches the renderer from open-wallpaper-engine's latest release (its
+    // lib/weweb, ~340 MB unpacked) into ~/.local/share/niri-island/weweb.
+    // Blocking: from a worker.
+    static bool install_renderer(std::string* error);
 
     bool start(const std::string& dir, bool muted);  // false: cannot run it
     void stop();

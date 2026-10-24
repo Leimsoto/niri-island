@@ -17,7 +17,10 @@ extern "C" {
 #include <waywallen-bridge/protocol_bits.h>
 }
 
+#include <nlohmann/json.hpp>
+
 #include "core/loop.hpp"
+#include "services/images.hpp"
 #include "core/util.hpp"
 #include "linux-dmabuf-v1-client-protocol.h"
 #include "viewporter-client-protocol.h"
@@ -73,6 +76,42 @@ std::string WebWall::bridge_dir() {
     for (std::string dir : {exe, exe + "/../lib/niri-island", home_dir() + "/.local/lib/niri-island"})
         if (file_exists(dir + "/libwaywallen-bridge.so")) return dir;
     return "";
+}
+
+bool WebWall::install_renderer(std::string* error) {
+    auto fail = [&](const char* why) {
+        if (error) *error = why;
+        return false;
+    };
+    if (!proc::has("unzip")) return fail("Falta unzip");
+    std::string body;
+    if (!http_get("https://api.github.com/repos/waywallen/open-wallpaper-engine/releases/latest", body, 20))
+        return fail("GitHub no responde");
+    auto j = nlohmann::json::parse(body, nullptr, false);
+    std::string url;
+    if (j.is_object() && j.contains("assets") && j["assets"].is_array())
+        for (auto& a : j["assets"]) {
+            std::string name = a.value("name", "");
+            if (name.find("linux-x86_64") != std::string::npos && name.size() > 4 && name.substr(name.size() - 4) == ".zip")
+                url = a.value("browser_download_url", "");
+        }
+    if (url.empty()) return fail("No hay una versión para este equipo");
+    std::string base = home_dir() + "/.local/share/niri-island", zip = cache_dir() + "/open-wallpaper-engine.zip";
+    std::string tmp = base + "/weweb.new";
+    make_dirs(base);
+    if (!http_download(url, zip, 900)) return fail("No se pudo descargar");
+    proc::run({"rm", "-rf", tmp});
+    bool ok = proc::run({"unzip", "-o", "-q", zip, "lib/weweb/*", "-d", tmp}, 300000).ok() &&
+              file_exists(tmp + "/lib/weweb/waywallen-weweb-renderer");
+    unlink(zip.c_str());
+    if (!ok) {
+        proc::run({"rm", "-rf", tmp});
+        return fail("El paquete no traía el renderizador");
+    }
+    proc::run({"rm", "-rf", base + "/weweb"});
+    ok = rename((tmp + "/lib/weweb").c_str(), (base + "/weweb").c_str()) == 0;
+    proc::run({"rm", "-rf", tmp});
+    return ok || fail("No se pudo instalar");
 }
 
 // ── lifetime ──────────────────────────────────────────────────────────────

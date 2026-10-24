@@ -17,7 +17,7 @@
 #include "core/loop.hpp"
 #include "services/images.hpp"
 #include "services/engine.hpp"
-#include "services/waywallen.hpp"
+#include "services/workshop.hpp"
 #include "ui/paint.hpp"
 
 namespace island {
@@ -193,7 +193,7 @@ void Backdrop::set_paused(bool paused) {
 }
 
 void Backdrop::set_audio(bool on) {
-    if (drawer_ == Drawer::Engine && waywallen::is_item(path_)) Loop::get().async([on] { engine::set_muted(!on); });
+    if (drawer_ == Drawer::Engine && workshop::is_item(path_)) Loop::get().async([on] { engine::set_muted(!on); });
     if (drawer_ == Drawer::Web && web_) web_->set_muted(!on);
 }
 
@@ -221,9 +221,9 @@ void Backdrop::handed_over(Drawer to, uint64_t gen, const std::string& path, dou
 
 std::string Backdrop::still() const {
     if (is_video(path_)) return cache_dir() + "/wallpaper-frame.jpg";
-    if (waywallen::is_item(path_)) {
-        waywallen::Item it;
-        return waywallen::read_item(path_, it) ? it.preview : "";
+    if (workshop::is_item(path_)) {
+        workshop::Item it;
+        return workshop::read_item(path_, it) ? it.preview : "";
     }
     return path_;
 }
@@ -234,9 +234,9 @@ void Backdrop::set(const std::string& path) {
     save_state();
     uint64_t gen = ++gen_;
     paused_ = false;
-    bool item = waywallen::is_item(path);
-    waywallen::Item project;
-    if (item) waywallen::read_item(path, project);
+    bool item = workshop::is_item(path);
+    workshop::Item project;
+    if (item) workshop::read_item(path, project);
 
     // Wallpaper Engine scenes and videos, and plain videos: our engine.
     if ((item && engine::renders(project.type)) || (!item && is_video(path) && engine::installed())) {
