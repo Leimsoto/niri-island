@@ -14,6 +14,7 @@
 #include "ext-idle-notify-v1-client-protocol.h"
 #include "ext-session-lock-v1-client-protocol.h"
 #include "viewporter-client-protocol.h"
+#include "linux-dmabuf-v1-client-protocol.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 
 namespace island {
@@ -217,6 +218,8 @@ public:
     std::vector<uint32_t> output_names_;  // their registry names, to notice one unplugged
     wp_cursor_shape_device_v1* cursor_dev_ = nullptr;
     wp_viewporter* viewporter_ = nullptr;
+    zwp_linux_dmabuf_v1* dmabuf_ = nullptr;  // GPU buffers (web wallpapers' frames)
+    std::vector<std::pair<uint32_t, uint64_t>> dmabuf_formats_;  // (fourcc, modifier) it takes
 
     xkb_context* xkb_ctx_ = nullptr;
     xkb_keymap* xkb_keymap_ = nullptr;

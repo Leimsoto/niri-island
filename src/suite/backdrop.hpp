@@ -7,12 +7,13 @@
 
 #include "core/proc.hpp"
 #include "core/wayland.hpp"
+#include "suite/webwall.hpp"
 
 namespace island {
 
 // The wallpaper itself: a background-layer surface showing the image (cropped
 // to fill); niri-island-engine for videos and Wallpaper Engine scenes and
-// videos (a Workshop item's folder); waywallen for web ones; mpvpaper for
+// videos (a Workshop item's folder); WebWall for web ones; mpvpaper for
 // videos when the engine is not built. It remembers the last one, and makes the
 // colour palette the island themes itself with (matugen, or the image's
 // dominant colour when matugen is missing).
@@ -61,9 +62,10 @@ private:
     void stop_video();
     bool paused_ = false;
     // who draws what is on screen; who else may still be running
-    enum class Drawer { Own, Mpv, Engine, Waywallen };
+    enum class Drawer { Own, Mpv, Engine, Web };
     Drawer drawer_ = Drawer::Own;
-    bool engine_on_ = false, ww_on_ = false;
+    bool engine_on_ = false;
+    std::unique_ptr<WebWall> web_;
     void retire(Drawer keep);
     void handed_over(Drawer to, uint64_t gen, const std::string& path, double settle);
     void send_mpv(const std::string& cmd);

@@ -75,9 +75,9 @@ Backdrop::~Backdrop() {
 }
 
 void Backdrop::init() {
-    // A previous run may have left them drawing: whatever comes next retires
-    // them (both checks are cheap no-ops when nothing runs).
-    engine_on_ = ww_on_ = true;
+    // A previous run may have left the engine drawing: whatever comes next
+    // retires it (a cheap no-op when nothing runs).
+    engine_on_ = true;
     std::string text, path;
     if (read_file(state_path(), text)) {
         json j = json::parse(text, nullptr, false);
@@ -189,12 +189,12 @@ void Backdrop::set_paused(bool paused) {
     paused_ = paused;
     if (video_.pid > 0) send_mpv(std::string(R"({"command":["set_property","pause",)") + (paused ? "true" : "false") + "]}");
     if (engine_on_) Loop::get().async([paused] { engine::set_paused(paused); });
-    if (ww_on_) Loop::get().async([paused] { waywallen::set_paused(paused); });
+    if (web_ && web_->running()) web_->set_paused(paused);
 }
 
 void Backdrop::set_audio(bool on) {
     if (drawer_ == Drawer::Engine && waywallen::is_item(path_)) Loop::get().async([on] { engine::set_muted(!on); });
-    if (drawer_ == Drawer::Waywallen) Loop::get().async([on] { waywallen::set_muted(!on); });
+    if (drawer_ == Drawer::Web && web_) web_->set_muted(!on);
 }
 
 // Whoever drew before, except `keep`, stops (our surface is on top by now,
@@ -205,10 +205,7 @@ void Backdrop::retire(Drawer keep) {
         engine_on_ = false;
         Loop::get().async([] { engine::stop(); });
     }
-    if (keep != Drawer::Waywallen && ww_on_) {
-        ww_on_ = false;
-        Loop::get().async([] { waywallen::stop_and_quit(); });
-    }
+    if (keep != Drawer::Web && web_ && web_->running()) web_->stop();
 }
 
 // Someone else draws `path` now: our surface and the previous drawer go.
@@ -263,40 +260,25 @@ void Backdrop::set(const std::string& path) {
         else if (!item) make_palette(path, true);
         return;
     }
-    if (item) {
-        // Web wallpapers (for now): waywallen, on its own background surface.
-        bool audio = config().wallpaper_engine_audio;
-        auto err = std::make_shared<std::string>();
-        Loop::get().async(
-            [path, audio, err] {
-                if (!waywallen::installed() || !waywallen::display_installed() || !waywallen::plugin_installed()) {
-                    *err = "Los fondos web necesitan waywallen";
-                    return;
-                }
-                if (!waywallen::ensure_running()) {
-                    *err = "waywallen no arrancó";
-                    return;
-                }
-                if (!waywallen::apply_dir(path, err.get())) {
-                    if (err->empty()) *err = "waywallen no pudo aplicar el fondo";
-                    return;
-                }
-                waywallen::set_muted(!audio);
-                waywallen::sync_hidden();
-            },
-            [this, gen, path, err] {
-                if (!err->empty()) {
-                    if (gen == gen_ && on_error) on_error(*err);
-                    return;
-                }
-                ww_on_ = true;
-                if (gen != gen_) {
-                    if (drawer_ != Drawer::Waywallen) retire(drawer_);
-                    return;
-                }
-                handed_over(Drawer::Waywallen, gen, path, 1.2);  // its renderer takes a moment
-            });
+    if (item && project.type == "web") {
+        // Web: waywallen's CEF renderer, its frames on our own surfaces.
+        if (!WebWall::available()) {
+            if (on_error) on_error("Para los fondos web falta su renderizador");
+            return;
+        }
+        if (!web_) web_ = std::make_unique<WebWall>(wl_);
+        web_->on_shown = [this, gen, path] {
+            if (gen == gen_) handed_over(Drawer::Web, gen, path, 0.1);
+        };
+        web_->on_error = [this, gen](const std::string& m) {
+            if (gen == gen_ && on_error) on_error(m);
+        };
+        if (!web_->start(path, !config().wallpaper_engine_audio) && on_error) on_error("El fondo web no pudo empezar");
         if (!project.preview.empty()) make_palette(project.preview, false);
+        return;
+    }
+    if (item) {
+        if (on_error) on_error("Este tipo de fondo de Wallpaper Engine no se puede mostrar");
         return;
     }
     if (is_video(path)) {

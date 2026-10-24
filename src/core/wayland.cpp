@@ -598,6 +598,13 @@ static void seat_caps(void* data, wl_seat* seat, uint32_t caps) {
 static void seat_name(void*, wl_seat*, const char*) {}
 static const wl_seat_listener seat_listener = {.capabilities = seat_caps, .name = seat_name};
 
+// linux-dmabuf v3: the formats and modifiers the compositor imports, sent once on bind.
+static void dmabuf_format(void*, zwp_linux_dmabuf_v1*, uint32_t) {}
+static void dmabuf_modifier(void* data, zwp_linux_dmabuf_v1*, uint32_t format, uint32_t hi, uint32_t lo) {
+    static_cast<Wayland*>(data)->dmabuf_formats_.push_back({format, (static_cast<uint64_t>(hi) << 32) | lo});
+}
+static const zwp_linux_dmabuf_v1_listener dmabuf_listener = {.format = dmabuf_format, .modifier = dmabuf_modifier};
+
 static void reg_global(void* data, wl_registry* reg, uint32_t id, const char* iface, uint32_t ver) {
     auto* self = static_cast<Wayland*>(data);
     if (strcmp(iface, ext_idle_notifier_v1_interface.name) == 0) {
@@ -631,6 +638,9 @@ static void reg_global(void* data, wl_registry* reg, uint32_t id, const char* if
             wl_registry_bind(reg, id, &ext_background_effect_manager_v1_interface, 1));
     } else if (strcmp(iface, wp_viewporter_interface.name) == 0) {
         self->viewporter_ = static_cast<wp_viewporter*>(wl_registry_bind(reg, id, &wp_viewporter_interface, 1));
+    } else if (strcmp(iface, zwp_linux_dmabuf_v1_interface.name) == 0 && ver >= 3) {
+        self->dmabuf_ = static_cast<zwp_linux_dmabuf_v1*>(wl_registry_bind(reg, id, &zwp_linux_dmabuf_v1_interface, 3));
+        zwp_linux_dmabuf_v1_add_listener(self->dmabuf_, &dmabuf_listener, self);
     }
 }
 static void reg_remove(void* data, wl_registry*, uint32_t id) {

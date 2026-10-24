@@ -569,6 +569,7 @@ static void write_niri_rules() {
         "    match namespace=\"^mpvpaper$\"\n"
         "    match namespace=\"^waywallen-wallpaper$\"\n"
         "    match namespace=\"^niri-island-engine$\"\n"
+        "    match namespace=\"^niri-island-web$\"\n"
         "    place-within-backdrop true\n"
         "}\n";
     if (config().compositor_blur) {
