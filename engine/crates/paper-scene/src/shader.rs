@@ -18,6 +18,7 @@ pub const PRELUDE: &str = r"#version 450
 #define frac(x) fract(x)
 #define lerp(a, b, t) mix(a, b, t)
 #define saturate(x) clamp(x, 0.0, 1.0)
+#define rsqrt(x) inversesqrt(x)
 #define atan2(y, x) atan(y, x)
 #define fmod(x, y) ((x) - (y) * trunc((x) / (y)))
 #define log10(x) (log2(x) * 0.301029995663981)

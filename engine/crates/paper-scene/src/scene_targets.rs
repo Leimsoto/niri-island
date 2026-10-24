@@ -120,8 +120,12 @@ pub fn plan_scene_targets(
             match binding {
                 EffectBind::Previous => {}
                 EffectBind::Named(target) => {
+                    // A bind may name an asset texture (materials/util/black):
+                    // not a target, the material's own input stays. Only a
+                    // missing `_rt_` target is an error.
                     if resolve_fbo_index(node.local_targets.iter().map(String::as_str), target)
                         .is_none()
+                        && target.starts_with("_rt_")
                     {
                         return Err(SceneTargetPlanError::MissingLocalTarget {
                             consumer,

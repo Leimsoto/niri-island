@@ -181,7 +181,7 @@ std::string App::command(const std::string& line) {
         return "ok";
     }
     if (c == "debug-picker-click" && a.size() >= 3) {
-        wallpicker_.inject_click(std::stof(a[1]), std::stof(a[2]));
+        wallpicker_.inject_click(std::stof(a[1]), std::stof(a[2]), a.size() > 3 && a[3] == "right" ? Button::Right : Button::Left);
         return "ok";
     }
     if (c == "debug-picker-key" && a.size() >= 2) {

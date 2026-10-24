@@ -30,6 +30,7 @@ struct Wallpaper {
     uint64_t ws_size = 0, ws_subs = 0;
     bool subscribed = false, installed = false;
     float progress = -1;
+    bool unsupported = false;  // a scene our engine cannot draw yet (its preview stands in)
     bool moving() const { return video || engine; }
     // what to show it with: the file itself, or a still of it
     const std::string& image() const { return moving() ? thumb : path; }
@@ -164,7 +165,16 @@ private:
     void ws_unsubscribe(int index);
     void ws_thumbs(int gen);
     void ws_type_key(xkb_keysym_t sym, const std::string& utf8, bool& used);
-    bool grid_mode() const { return remote_ || steam_; }
+    // wallhaven and the Workshop show as a grid; Steam's downloads, like the
+    // folders, in the chosen style (the panel comes with a right click)
+    bool grid_mode() const { return remote_ || (steam_ && ws_browse_); }
+    void side_panel(int vis) {
+        if (!steam_) return;
+        sel_ = vis;
+        pos_.set(static_cast<float>(vis));
+        colpos_.set(static_cast<float>(vis / kTileRows));
+        open_panel(vis);
+    }
 
     // ── the side panel: one click on a card in the grid ──
     bool panel_ = false;

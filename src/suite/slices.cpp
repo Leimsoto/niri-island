@@ -504,7 +504,7 @@ void WallPicker::draw_tiles(cairo_t* cr, float W, float H, float t_open, float t
             ui_.add(id, hit).click([this, i] {
                 if (i == sel_) slices_close(true);
                 else slices_move(i - sel_);
-            });
+            }).right([this, i] { side_panel(i); });
         }
     }
 }
@@ -816,8 +816,8 @@ void WallPicker::slices_move(int delta) {
             if (remote_) wh_fetch(true);
             else ws_fetch(true);
         }
-        if (panel_) open_panel(sel_);  // the panel follows the selection
     }
+    if (panel_ && (grid_mode() || steam_)) open_panel(sel_);  // the panel follows the selection
     request();
 }
 
@@ -1423,7 +1423,7 @@ void WallPicker::draw_slices(cairo_t* cr, float W, float H, float dt) {
     Geo g = geo_for(W, H);
     Color glow = p.accent;
     bool input = !inserting_ && !leaving_ && t_open > 0.3f;
-    if (grid_mode()) {
+    if (grid_mode() || (steam_ && n == 0)) {
         if (!leaving_) draw_wh_grid(cr, W, H, ie);
     } else if (n > 0 && style_ != 0) {
         draw_tiles(cr, W, H, t_open, t_leave, ie, input);
@@ -1591,7 +1591,7 @@ void WallPicker::draw_slices(cairo_t* cr, float W, float H, float dt) {
                 ui_.add(id, {x, y, w + sk, h}).click([this, i] {
                     if (i == sel_) slices_close(true);
                     else slices_move(i - sel_);
-                });
+                }).right([this, i] { side_panel(i); });
             }
         }
     }
@@ -1599,7 +1599,7 @@ void WallPicker::draw_slices(cairo_t* cr, float W, float H, float dt) {
     // the filters, out of the island too
     float bar_in = leaving_ ? 1.0f - clamp01(t_leave / 0.25f) : clamp01((t_open - 0.1f) / 0.45f);
     if (!inserting_) draw_filter_bar(cr, W, H, bar_in);
-    if (grid_mode() && !inserting_) draw_panel(cr, W, H, leaving_ ? 1.0f - clamp01(t_leave / 0.25f) : 1.0f);
+    if ((grid_mode() || steam_) && !inserting_) draw_panel(cr, W, H, leaving_ ? 1.0f - clamp01(t_leave / 0.25f) : 1.0f);
     if (grouped) {
         cairo_pop_group_to_source(cr);
         cairo_paint_with_alpha(cr, tf);

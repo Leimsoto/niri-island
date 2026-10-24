@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 const HEAP_LIMIT: usize = 32 * 1024 * 1024;
 const FRAME_BUDGET: Duration = Duration::from_millis(100);
+const MODULE_INIT_BUDGET: Duration = Duration::from_millis(1500);
+const INIT_BUDGET: Duration = Duration::from_secs(6);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SoundOp {
@@ -139,15 +141,16 @@ impl SceneScripts {
             timers_pending: false,
         };
         host.setup(scene, props)?;
-        let initialization_deadline = Instant::now() + Duration::from_secs(2);
+        // Scripts may build a whole scene in init (geometry, tables): Wallpaper
+        // Engine gives them time once, at load. Frames keep their 100 ms.
+        let initialization_deadline = Instant::now() + INIT_BUDGET;
         for (index, binding) in bindings.iter().enumerate() {
             if Instant::now() >= initialization_deadline {
                 host.diagnostics
                     .push("remaining scripts skipped: initialization budget exhausted".into());
                 break;
             }
-            host.deadline
-                .set(initialization_deadline.min(Instant::now() + Duration::from_millis(100)));
+            host.deadline.set(initialization_deadline.min(Instant::now() + MODULE_INIT_BUDGET));
             if let Err(error) = host.compile(index, binding) {
                 host.diagnostics.push(format!("{}: {error:#}", binding.path));
                 host.disable_module(index);

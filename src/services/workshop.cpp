@@ -6,7 +6,13 @@
 #include <functional>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <cstring>
+#include <fcntl.h>
+#include <mutex>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <unistd.h>
+#include <unordered_map>
 
 #include "core/util.hpp"
 
@@ -58,6 +64,35 @@ bool read_item(const std::string& dir, Item& out) {
     if (!out.preview.empty() && !file_exists(out.preview)) out.preview.clear();
     if (out.title.empty()) out.title = dir.substr(dir.rfind('/') + 1);
     return true;
+}
+
+bool unsupported(const std::string& dir) {
+    static std::mutex mu;
+    static std::unordered_map<std::string, std::pair<time_t, bool>> cache;
+    std::string pkg = dir + "/scene.pkg";
+    struct stat st {};
+    if (stat(pkg.c_str(), &st) != 0) return false;
+    {
+        std::lock_guard<std::mutex> lock(mu);
+        auto it = cache.find(pkg);
+        if (it != cache.end() && it->second.first == st.st_mtime) return it->second.second;
+    }
+    bool found = false;
+    int fd = open(pkg.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) {
+        if (st.st_size > 0) {
+            void* p = mmap(nullptr, static_cast<size_t>(st.st_size), PROT_READ, MAP_PRIVATE, fd, 0);
+            if (p != MAP_FAILED) {
+                static const char needle[] = "createModelData";
+                found = memmem(p, static_cast<size_t>(st.st_size), needle, sizeof(needle) - 1) != nullptr;
+                munmap(p, static_cast<size_t>(st.st_size));
+            }
+        }
+        close(fd);
+    }
+    std::lock_guard<std::mutex> lock(mu);
+    cache[pkg] = {st.st_mtime, found};
+    return found;
 }
 
 bool is_item(const std::string& path) {

@@ -117,10 +117,24 @@ bool save_thumb(GdkPixbuf* pb, const std::string& jpg, const std::string& png, s
     return ok;
 }
 
+// A capture that came out (all but) black: the engine drew nothing useful.
+bool nearly_black(const std::string& png) {
+    GdkPixbuf* pb = gdk_pixbuf_new_from_file_at_scale(png.c_str(), 64, 64, TRUE, nullptr);
+    if (!pb) return true;
+    const guchar* px = gdk_pixbuf_get_pixels(pb);
+    int n = gdk_pixbuf_get_n_channels(pb), rs = gdk_pixbuf_get_rowstride(pb);
+    int brightest = 0;
+    for (int y = 0; y < gdk_pixbuf_get_height(pb); ++y)
+        for (int x = 0; x < gdk_pixbuf_get_width(pb); ++x)
+            for (int c = 0; c < 3; ++c) brightest = std::max(brightest, static_cast<int>(px[y * rs + x * n + c]));
+    g_object_unref(pb);
+    return brightest < 24;
+}
+
 bool make_thumb(Wallpaper& w, const std::string& dir) {
     char name[40];
     // (Wallpaper Engine items: rendered by the engine, a new name for the old GIF-made ones)
-    std::string key = w.path + std::to_string(w.mtime) + (w.engine ? "#engine" : "");
+    std::string key = w.path + std::to_string(w.mtime) + (w.engine ? (w.unsupported ? "#preview" : "#engine") : "");
     snprintf(name, sizeof(name), "%016llx", static_cast<unsigned long long>(hash_str(key)));
     std::string jpg = dir + "/" + name + ".jpg", png = dir + "/" + name + ".png";
     std::string out = file_exists(jpg) ? jpg : file_exists(png) ? png : "";
@@ -150,9 +164,9 @@ bool make_thumb(Wallpaper& w, const std::string& dir) {
             // A Wallpaper Engine item: the engine renders a sharp still (its
             // preview is a GIF of 192 px or so, which stays the fallback).
             std::string src = w.engine ? w.preview : w.path, still;
-            if (w.engine) {
+            if (w.engine && !w.unsupported) {
                 still = dir + "/" + name + ".still.png";
-                if (engine::capture(w.path, still)) src = still;
+                if (engine::capture(w.path, still) && !nearly_black(still)) src = still;
             }
             GError* err = nullptr;
             GdkPixbuf* pb = gdk_pixbuf_new_from_file_at_scale(src.c_str(), 520, 520, TRUE, &err);
@@ -296,6 +310,7 @@ void WallPicker::scan() {
                     w.engine = true;
                     w.ws_type = it.type;
                     w.ws_id = it.dir.substr(it.dir.rfind('/') + 1);
+                    w.unsupported = it.type == "scene" && workshop::unsupported(it.dir);
                     w.mtime = static_cast<int64_t>(st.st_mtime);
                     found->push_back(std::move(w));
                 }
@@ -312,6 +327,7 @@ void WallPicker::scan() {
                     for (auto& w : *found) {
                         auto it = j.find(w.path);
                         if (it == j.end() || !it->is_object() || it->value("mtime", (int64_t)0) != w.mtime) continue;
+                        if (w.unsupported) continue;  // (its thumbnail comes from the preview, not a capture)
                         w.thumb = it->value("thumb", "");
                         w.hue = it->value("hue", -1.0f);
                         w.sat = it->value("sat", 0.0f);
@@ -337,23 +353,23 @@ void WallPicker::scan() {
             if (remote_ || steam_) {  // browsing wallhaven or Steam: the local list waits
                 local_walls_ = std::move(*found);
                 if (steam_ && !ws_browse_) ws_downloads();  // (its downloads come from it)
-                scanning_ = false;
-                request();
-                return;
-            }
-            walls_ = std::move(*found);
-            refilter();
-            for (size_t i = 0; i < visible_.size(); ++i)
-                if (walls_[visible_[i]].path == current_ && (sel_ < 0 || !moved_)) sel_ = static_cast<int>(i);
-            if (!moved_) {
-                pos_.reset(static_cast<float>(std::max(0, sel_)));
-                colpos_.reset(static_cast<float>(std::max(0, sel_) / kTileRows));
+            } else {
+                walls_ = std::move(*found);
+                refilter();
+                for (size_t i = 0; i < visible_.size(); ++i)
+                    if (walls_[visible_[i]].path == current_ && (sel_ < 0 || !moved_)) sel_ = static_cast<int>(i);
+                if (!moved_) {
+                    pos_.reset(static_cast<float>(std::max(0, sel_)));
+                    colpos_.reset(static_cast<float>(std::max(0, sel_) / kTileRows));
+                }
             }
             request();
 
-            // Thumbnails still missing, in small batches so the grid fills in.
+            // Thumbnails still missing, in small batches so the grid fills in
+            // (of the folders' list, wherever it is: browsing keeps it aside).
+            auto local = [this]() -> std::vector<Wallpaper>& { return remote_ || steam_ ? local_walls_ : walls_; };
             auto todo = std::make_shared<std::vector<Wallpaper>>();
-            for (auto& w : walls_)  // (older PNG thumbnails go through it once, to JPEG)
+            for (auto& w : local())  // (older PNG thumbnails go through it once, to JPEG)
                 if (w.thumb.empty() || w.hue < 0 || ends_with(w.thumb, ".png")) todo->push_back(w);
             thumbs_left_ = static_cast<int>(todo->size());
             if (todo->empty()) {
@@ -362,22 +378,24 @@ void WallPicker::scan() {
                 return;
             }
             auto run_batch = std::make_shared<std::function<void(size_t)>>();
-            *run_batch = [this, todo, thumbs, index_path, run_batch](size_t from) {
+            *run_batch = [this, todo, thumbs, index_path, run_batch, local](size_t from) {
                 auto batch = std::make_shared<std::vector<Wallpaper>>(
                     todo->begin() + from, todo->begin() + std::min(todo->size(), from + 6));
                 Loop::get().async(
                     [batch, thumbs] {
                         for (auto& w : *batch) make_thumb(w, thumbs);
                     },
-                    [this, batch, from, todo, index_path, run_batch, thumbs] {
-                        for (auto& b : *batch)
-                            for (auto& w : walls_)
-                                if (w.path == b.path) {
-                                    w.thumb = b.thumb;
-                                    w.hue = b.hue;
-                                    w.sat = b.sat;
-                                    w.val = b.val;
-                                }
+                    [this, batch, from, todo, index_path, run_batch, thumbs, local] {
+                        // (Steam's downloads are copies: they take it too)
+                        for (auto* list : {&walls_, &local_walls_})
+                            for (auto& b : *batch)
+                                for (auto& w : *list)
+                                    if (w.path == b.path) {
+                                        w.thumb = b.thumb;
+                                        w.hue = b.hue;
+                                        w.sat = b.sat;
+                                        w.val = b.val;
+                                    }
                         thumbs_left_ = std::max(0, thumbs_left_ - static_cast<int>(batch->size()));
                         request();
                         size_t next = from + batch->size();
@@ -387,14 +405,14 @@ void WallPicker::scan() {
                         }
                         // Done: remember everything for next time.
                         json j = json::object();
-                        for (auto& w : walls_)
-                            if (!w.thumb.empty())
+                        for (auto& w : local())
+                            if (!w.thumb.empty() && !w.remote)
                                 j[w.path] = {{"mtime", w.mtime}, {"thumb", w.thumb}, {"hue", w.hue}, {"sat", w.sat},
                                              {"val", w.val}};
                         write_file_atomic(index_path, j.dump());
                         scanning_ = false;
                         prune_thumbs(thumbs);
-                        refilter();
+                        if (!remote_ && !(steam_ && ws_browse_)) refilter();
                         request();
                     });
             };

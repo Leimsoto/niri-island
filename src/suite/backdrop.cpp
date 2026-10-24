@@ -238,8 +238,15 @@ void Backdrop::set(const std::string& path) {
     workshop::Item project;
     if (item) workshop::read_item(path, project);
 
+    // A scene the engine cannot draw yet (it would stay black): its preview, still.
+    std::string still_src = path;
+    if (item && project.type == "scene" && workshop::unsupported(path) && !project.preview.empty()) {
+        still_src = project.preview;
+        if (on_error) on_error("Este fondo usa funciones que el motor aún no tiene: se queda su imagen");
+        item = false;
+    }
     // Wallpaper Engine scenes and videos, and plain videos: our engine.
-    if ((item && engine::renders(project.type)) || (!item && is_video(path) && engine::installed())) {
+    else if ((item && engine::renders(project.type)) || (!item && is_video(path) && engine::installed())) {
         bool muted = !item || !config().wallpaper_engine_audio;
         auto err = std::make_shared<std::string>();
         engine::Kind kind = item ? engine::Kind::Engine : engine::Kind::Video;
@@ -296,7 +303,7 @@ void Backdrop::set(const std::string& path) {
         return;
     }
     auto img = std::make_shared<cairo_surface_t*>(nullptr);
-    Loop::get().async([path, img] { *img = load_image_full(path); },
+    Loop::get().async([still_src, img] { *img = load_image_full(still_src); },
                       [this, img, gen, path] {
                           if (gen != gen_) {
                               if (*img) cairo_surface_destroy(*img);
@@ -317,7 +324,7 @@ void Backdrop::set(const std::string& path) {
                               if (gen == gen_) retire(Drawer::Own);
                           });
                       });
-    make_palette(path, false);
+    make_palette(still_src, false);
 }
 
 void Backdrop::pump() {
