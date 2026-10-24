@@ -232,7 +232,7 @@ fn click_requires_press_and_release_over_the_same_layer() {
 
 #[test]
 fn heap_exhaustion_stops_script_without_crashing_host() {
-    let mut scene = json!({"objects":[{"id":1,"alpha":{"value":1,"script":"export function update(){const a=new ArrayBuffer(64*1024*1024);return a.byteLength;}"}}]});
+    let mut scene = json!({"objects":[{"id":1,"alpha":{"value":1,"script":"export function update(){const a=new ArrayBuffer(256*1024*1024);return a.byteLength;}"}}]});
     let host = SceneScripts::load(&mut scene, &Properties::new(), &serde_json::Value::Null)
         .unwrap()
         .unwrap();
@@ -697,4 +697,37 @@ export function update() {
         assert_eq!(origin, vec![5.0 + frame as f32, 5.0, 6.0]);
         assert!((angles[2] - (105.0 + frame as f32 * 15.0).to_radians()).abs() < 0.00001);
     }
+}
+
+#[test]
+fn scripts_build_models_and_layers_that_sort_in_front_of_scene_layers() {
+    let mut scene = json!({"objects":[
+        {"id":1,"name":"Back","image":"x"},
+        {"id":2,"name":"Front","image":"x","alpha":{"value":1,"script":"
+            const verts = new Float32Array([0,0,0, 1,0,0, 0,1,0]);
+            let data;
+            export function init(){
+                engine.registerAsset('materials/mesh.json');
+                data = thisScene.createModelData({shapes:[{vertexBuffer: verts, indexBuffer: new Uint32Array([0,1,2]),
+                    vertexFormat:[IModelData.POSITION], material: engine.registerAsset('materials/mesh.json')}]});
+                const layer = thisScene.createLayer({name:'Model', model:data});
+                thisScene.sortLayer(layer, thisScene.getLayerIndex(thisScene.getLayer('Front')));
+                const hidden = thisScene.createLayer({name:'Hidden', model:data});
+                hidden.visible = false;
+            }
+            export function update(v){ verts[0] = 5; data.applyData({vertexBuffer: verts}); return v; }"}}
+    ]});
+    let mut host = SceneScripts::load(&mut scene, &Properties::new(), &serde_json::Value::Null).unwrap().unwrap();
+    host.tick(1.0, 0.016, [0.5; 2]).unwrap();
+    let store = host.meshes();
+    assert!(store.assets.contains("materials/mesh.json"));
+    assert_eq!(store.models.len(), 1);
+    let shape = &store.models.values().next().unwrap()[0];
+    assert_eq!(shape.material, "materials/mesh.json");
+    assert_eq!(shape.indices, vec![0, 1, 2]);
+    assert_eq!(shape.vertices[0], 5.0, "applyData reached the store");
+    let ordered = store.ordered();
+    assert_eq!(ordered.len(), 1, "the hidden layer is not drawn");
+    assert_eq!(ordered[0].name, "Model");
+    assert_eq!(ordered[0].before, Some(1), "in front of the Front layer (index 1)");
 }

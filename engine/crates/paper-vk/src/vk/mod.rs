@@ -1,6 +1,7 @@
 mod draw;
 mod effect;
 mod export;
+mod mesh;
 #[cfg(feature = "shared-device")]
 mod nv12;
 mod pipelines;
@@ -12,7 +13,7 @@ mod upload;
 #[cfg(feature = "shared-device")]
 pub use draw::Src;
 #[cfg(feature = "shared-device")]
-pub use effect::{DynBuffer, EffectPipeline, QuadBuffer, d3d_clip_enabled};
+pub use effect::{DynBuffer, EffectPipeline, MeshLayout, QuadBuffer, d3d_clip_enabled};
 #[cfg(feature = "shared-device")]
 pub use export::{ExportImage, ExternalSemaphore, Nv12Export, ReadbackBuf, RenderTarget};
 pub use export::{FrameImages, FrameViews};

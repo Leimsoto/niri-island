@@ -88,6 +88,9 @@ fn capture_scene(
         for frame in 0..60 {
             group.compose(frame as f32 / 30.0, 1.0 / 30.0)?;
         }
+        if let Ok(dir) = std::env::var("SKWD_DUMP_SHARED_TARGETS") {
+            group.dump_shared_targets(Path::new(&dir));
+        }
         let (width, height, rgba) = group.read_canvas()?;
         let image = image::RgbaImage::from_raw(width, height, rgba)
             .ok_or_else(|| anyhow!("thumbnail frame size mismatch"))?;

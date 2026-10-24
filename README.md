@@ -88,7 +88,8 @@ temporizador y cronómetro con vueltas, **notificaciones** (historial y No moles
   con progreso y desuscribirse (borra también los archivos), por el cliente de Steam. Mismo panel que wallhaven.
   Las escenas y los vídeos los dibuja **niri-island-engine** (`engine/`, basado en
   [skwd-paper](https://github.com/liixini/skwd-paper)) con Vulkan: un vídeo 1080p60 gasta ~10 % de un núcleo y 0 en
-  pausa. Los fondos **web** usan el renderizador CEF de [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine)
+  pausa. Sus scripts corren en **V8**, como en Wallpaper Engine, incluidos los que construyen su propia escena 3D
+  (`createModelData`: mallas dinámicas con profundidad, targets compartidos entre capas). Los fondos **web** usan el renderizador CEF de [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine)
   hablándole directamente (sus fotogramas dma-buf van a nuestra propia superficie). La isla borra las descargas de
   las que te desuscribes (Steam las deja en disco).
 - **Capturas** (Mod+S): la pantalla se congela al instante tal cual está, islas y paneles incluidos, y una burbuja

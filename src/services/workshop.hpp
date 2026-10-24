@@ -20,9 +20,6 @@ struct Item {
 };
 bool read_item(const std::string& dir, Item& out);
 bool is_item(const std::string& path);  // a folder holding a project.json
-// A scene whose script builds its own 3D models (createModelData), which our
-// engine does not do yet: it would stay black. Cached by the package's mtime.
-bool unsupported(const std::string& dir);
 // Every downloaded item still subscribed to (and anything newer than Steam's
 // list), your own projects, and the bundled ones Wallpaper Engine shows.
 std::vector<Item> items();

@@ -65,6 +65,9 @@ pub struct ParticleDraw<'a> {
     pub indices: vk::Buffer,
     pub index_count: u32,
     pub grab: Option<&'a SceneTarget>,
+    /// A script's model (drawn with depth; its missing attributes read this
+    /// zero buffer) rather than particles.
+    pub mesh: Option<vk::Buffer>,
 }
 
 #[repr(C)]
@@ -1116,6 +1119,17 @@ impl Renderer {
         } else {
             None
         };
+        let append_pass = if particles.iter().any(|batch| batch.mesh.is_some()) {
+            match self.scene_pass_append_for(target.format) {
+                Ok(pass) => Some(pass),
+                Err(err) => {
+                    tracing::warn!("skwd-wall-vk: scene append pass unavailable: {err:#}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         unsafe {
             let clear_value = [vk::ClearValue { color: vk::ClearColorValue { float32: clear } }];
             self.device.cmd_begin_render_pass(
@@ -1149,14 +1163,9 @@ impl Renderer {
             );
             let mut bound_blend = None;
             for (index, quad) in quads.iter().enumerate() {
-                while next_particle < particles.len() && particles[next_particle].after <= index {
-                    let batch = &particles[next_particle];
-                    if let (Some(grab), Some(load_pass)) = (batch.grab, load_pass) {
-                        self.grab_scene(target, grab, load_pass);
-                    }
-                    self.draw_particles(batch, target.extent);
+                if next_particle < particles.len() && particles[next_particle].after <= index {
+                    self.flush_draws(target, particles, &mut next_particle, Some(index), load_pass, append_pass);
                     bound_blend = None;
-                    next_particle += 1;
                 }
                 let Some(texture) = textures.get(quad.texture) else {
                     continue;
@@ -1205,13 +1214,71 @@ impl Renderer {
                 );
                 self.device.cmd_draw(self.cmd, 4, 1, 0, 0);
             }
-            for batch in &particles[next_particle..] {
-                if let (Some(grab), Some(load_pass)) = (batch.grab, load_pass) {
-                    self.grab_scene(target, grab, load_pass);
-                }
-                self.draw_particles(batch, target.extent);
-            }
+            self.flush_draws(target, particles, &mut next_particle, None, load_pass, append_pass);
             self.device.cmd_end_render_pass(self.cmd);
+        }
+    }
+
+    /// Particles and models due before quad `limit` (all of them: none).
+    /// A run of models leaves the scene pass for one with depth, then comes
+    /// back in the append pass.
+    fn flush_draws(
+        &mut self,
+        target: &SceneTarget,
+        particles: &[ParticleDraw<'_>],
+        next: &mut usize,
+        limit: Option<usize>,
+        load_pass: Option<vk::RenderPass>,
+        append_pass: Option<vk::RenderPass>,
+    ) {
+        let due = |batch: &ParticleDraw<'_>| limit.is_none_or(|limit| batch.after <= limit);
+        while *next < particles.len() && due(&particles[*next]) {
+            let batch = &particles[*next];
+            if batch.mesh.is_some() {
+                let mut run = Vec::new();
+                while *next < particles.len() && particles[*next].mesh.is_some() && due(&particles[*next]) {
+                    run.push(&particles[*next]);
+                    *next += 1;
+                }
+                let Some(append) = append_pass else { continue };
+                unsafe {
+                    self.device.cmd_end_render_pass(self.cmd);
+                    if let Err(err) = self.record_meshes(target, &run) {
+                        tracing::warn!("skwd-wall-vk: script models skipped: {err:#}");
+                    }
+                    self.device.cmd_begin_render_pass(
+                        self.cmd,
+                        &vk::RenderPassBeginInfo::default()
+                            .render_pass(append)
+                            .framebuffer(target.framebuffer)
+                            .render_area(vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: target.extent }),
+                        vk::SubpassContents::INLINE,
+                    );
+                    self.device.cmd_set_viewport(
+                        self.cmd,
+                        0,
+                        &[vk::Viewport {
+                            x: 0.0,
+                            y: 0.0,
+                            width: target.extent.width as f32,
+                            height: target.extent.height as f32,
+                            min_depth: 0.0,
+                            max_depth: 1.0,
+                        }],
+                    );
+                    self.device.cmd_set_scissor(
+                        self.cmd,
+                        0,
+                        &[vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: target.extent }],
+                    );
+                }
+                continue;
+            }
+            if let (Some(grab), Some(load_pass)) = (batch.grab, load_pass) {
+                self.grab_scene(target, grab, load_pass);
+            }
+            self.draw_particles(batch, target.extent);
+            *next += 1;
         }
     }
 
@@ -1268,7 +1335,9 @@ mod tests;
 impl Renderer {
     pub fn read_scene_target(&mut self, target: &SceneTarget) -> Result<(u32, u32, Vec<u8>)> {
         let (width, height) = (target.extent.width, target.extent.height);
-        let size = u64::from(width) * u64::from(height) * 4;
+        // (half-float targets come back as 8-bit RGBA too)
+        let half = target.format == vk::Format::R16G16B16A16_SFLOAT;
+        let size = u64::from(width) * u64::from(height) * if half { 8 } else { 4 };
         // Keep the readback allocation under the same drop-owned lifecycle as
         // presentation readbacks. Every command-recording, submission, and
         // wait failure below can return early; the buffer must not depend on
@@ -1341,7 +1410,24 @@ impl Renderer {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
             let mut out = vec![0u8; size as usize];
             std::ptr::copy_nonoverlapping(readback.ptr, out.as_mut_ptr(), size as usize);
+            if half {
+                out = out.chunks_exact(2).map(|h| half_to_u8(u16::from_le_bytes([h[0], h[1]]))).collect();
+            }
             Ok((width, height, out))
         }
     }
 }
+
+// An IEEE half float, clamped to 0..1, as a byte.
+fn half_to_u8(bits: u16) -> u8 {
+    let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exponent = i32::from((bits >> 10) & 0x1f);
+    let mantissa = f32::from(bits & 0x3ff);
+    let value = match exponent {
+        0 => sign * mantissa / 1024.0 * 2f32.powi(-14),
+        31 => if mantissa == 0.0 { sign * f32::INFINITY } else { 0.0 },
+        _ => sign * (1.0 + mantissa / 1024.0) * 2f32.powi(exponent - 15),
+    };
+    (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+}
+

@@ -13,7 +13,7 @@ anyhow = { workspace = true }
 bitflags = { version = "2", features = ["std"] }
 image = { workspace = true }
 libc = "0.2"
-rquickjs = "0.12"
+v8 = "152.2.0"
 sha2 = "0.10"
 tracing = { workspace = true }
 shaderc = { version = "0.9", default-features = false }

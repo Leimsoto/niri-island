@@ -37,6 +37,8 @@ pub struct Renderer {
     pub(super) format_passes: Vec<(vk::Format, vk::RenderPass)>,
     pub(super) format_passes_load: Vec<(vk::Format, vk::RenderPass)>,
     pub(super) format_passes_append: Vec<(vk::Format, vk::RenderPass)>,
+    pub(super) mesh_passes: Vec<(vk::Format, bool, vk::RenderPass)>,
+    pub(super) mesh_depths: Vec<super::mesh::MeshDepth>,
     pub(super) scene_pool: vk::DescriptorPool,
     pub(super) fx_pool: vk::DescriptorPool,
     pub(super) pipeline_layout_layer: vk::PipelineLayout,
@@ -476,6 +478,8 @@ impl Renderer {
                 format_passes: Vec::new(),
                 format_passes_load: Vec::new(),
                 format_passes_append: Vec::new(),
+                mesh_passes: Vec::new(),
+                mesh_depths: Vec::new(),
                 scene_pool: vk::DescriptorPool::null(),
                 fx_pool: vk::DescriptorPool::null(),
                 pipeline_layout_layer: vk::PipelineLayout::null(),
@@ -527,6 +531,7 @@ impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe {
             let _ = self.device.device_wait_idle();
+            self.destroy_mesh_resources();
             for (_, (lv, cv)) in self.plane_views.drain() {
                 self.device.destroy_image_view(lv, None);
                 self.device.destroy_image_view(cv, None);

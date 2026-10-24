@@ -1,15 +1,19 @@
+use super::js::{Arg, Js};
 use super::source;
 use anyhow::{Result, anyhow};
-use rquickjs::{Context, Ctx, Function, Module, Runtime};
 use serde_json::Value;
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-const HEAP_LIMIT: usize = 32 * 1024 * 1024;
+// (scripts that build their own geometry keep it in typed arrays: room for them)
+const HEAP_LIMIT: usize = 128 * 1024 * 1024;
+const BUFFER_LIMIT: usize = 128 * 1024 * 1024;
 const FRAME_BUDGET: Duration = Duration::from_millis(100);
-const MODULE_INIT_BUDGET: Duration = Duration::from_millis(1500);
-const INIT_BUDGET: Duration = Duration::from_secs(6);
+// Scripts may build a whole scene in init (geometry, tables): Wallpaper Engine
+// gives them time once, at load. Frames keep their 100 ms.
+const MODULE_INIT_BUDGET: Duration = Duration::from_secs(4);
+const INIT_BUDGET: Duration = Duration::from_secs(8);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SoundOp {
@@ -69,9 +73,7 @@ pub struct SceneScripts {
     storage: Option<super::Storage>,
     commands: Vec<ScriptCommand>,
     general: Vec<(String, Value)>,
-    context: Context,
-    runtime: Runtime,
-    deadline: Rc<Cell<Instant>>,
+    js: RefCell<Js>,
     pub scene: Value,
     pub properties: crate::model::Properties,
     updates: Vec<usize>,
@@ -80,12 +82,129 @@ pub struct SceneScripts {
     disabled: bool,
     audio_registered: bool,
     timers_pending: bool,
+    meshes: Rc<RefCell<super::MeshStore>>,
 }
 
-fn js_error(ctx: &Ctx<'_>, error: &rquickjs::Error) -> anyhow::Error {
-    let detail = ctx.catch();
-    anyhow!("{error}: {detail:?}")
+// ── native functions (their state lives in the isolate's slots) ──
+
+type Store = Rc<RefCell<super::MeshStore>>;
+
+fn arg_u32(scope: &mut v8::PinScope<'_, '_>, args: &v8::FunctionCallbackArguments, i: i32) -> u32 {
+    args.get(i).uint32_value(scope).unwrap_or(0)
 }
+
+fn arg_string(scope: &mut v8::PinScope<'_, '_>, args: &v8::FunctionCallbackArguments, i: i32) -> String {
+    args.get(i).to_rust_string_lossy(scope)
+}
+
+// A typed array's bytes, copied out (Float32Array: f32; indices: u32/u16; or a plain array).
+fn view_bytes(value: v8::Local<'_, v8::Value>) -> Option<Vec<u8>> {
+    let view = v8::Local::<v8::ArrayBufferView>::try_from(value).ok()?;
+    let mut bytes = vec![0u8; view.byte_length()];
+    view.copy_contents(&mut bytes);
+    Some(bytes)
+}
+
+fn floats_of(value: v8::Local<'_, v8::Value>) -> Option<Vec<f32>> {
+    if !value.is_float32_array() {
+        return None;
+    }
+    Some(view_bytes(value)?.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+}
+
+fn indices_of(scope: &mut v8::PinScope<'_, '_>, value: v8::Local<'_, v8::Value>) -> Vec<u32> {
+    if value.is_uint32_array() {
+        return view_bytes(value)
+            .map(|b| b.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+            .unwrap_or_default();
+    }
+    if value.is_uint16_array() {
+        return view_bytes(value)
+            .map(|b| b.chunks_exact(2).map(|c| u32::from(u16::from_le_bytes([c[0], c[1]]))).collect())
+            .unwrap_or_default();
+    }
+    if let Ok(array) = v8::Local::<v8::Array>::try_from(value) {
+        return (0..array.length())
+            .filter_map(|i| array.get_index(scope, i))
+            .map(|v| v.number_value(scope).unwrap_or(0.0).max(0.0) as u32)
+            .collect();
+    }
+    Vec::new()
+}
+
+fn native_log(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, _rv: v8::ReturnValue<v8::Value>) {
+    let message = arg_string(scope, &args, 0);
+    tracing::debug!("SceneScript: {}", message.chars().take(1024).collect::<String>());
+}
+
+fn native_mesh_shape(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, mut rv: v8::ReturnValue<v8::Value>) {
+    let model = arg_u32(scope, &args, 0);
+    let shape = arg_u32(scope, &args, 1) as usize;
+    let material = arg_string(scope, &args, 2);
+    let mut format = Vec::new();
+    if let Ok(list) = v8::Local::<v8::Array>::try_from(args.get(3)) {
+        for i in 0..list.length() {
+            if let Some(item) = list.get_index(scope, i) {
+                format.extend(super::VertexElement::parse(&item.to_rust_string_lossy(scope)));
+            }
+        }
+    }
+    let ok = match floats_of(args.get(4)) {
+        Some(vertices) => {
+            let indices = indices_of(scope, args.get(5));
+            scope.get_slot::<Store>().is_some_and(|store| {
+                store.borrow_mut().set_shape(model, shape, material, format, &vertices, indices)
+            })
+        }
+        None => false,
+    };
+    rv.set_bool(ok);
+}
+
+fn native_mesh_vertices(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, mut rv: v8::ReturnValue<v8::Value>) {
+    let model = arg_u32(scope, &args, 0);
+    let shape = arg_u32(scope, &args, 1) as usize;
+    let ok = floats_of(args.get(2)).is_some_and(|vertices| {
+        scope.get_slot::<Store>().is_some_and(|store| store.borrow_mut().set_vertices(model, shape, &vertices))
+    });
+    rv.set_bool(ok);
+}
+
+fn native_register_asset(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, _rv: v8::ReturnValue<v8::Value>) {
+    let file = arg_string(scope, &args, 0);
+    if let Some(store) = scope.get_slot::<Store>() {
+        let mut store = store.borrow_mut();
+        if store.assets.len() < 4096 {
+            store.assets.insert(file);
+        }
+    }
+}
+
+fn native_mesh_layer(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, _rv: v8::ReturnValue<v8::Value>) {
+    let (id, model, name) = (arg_u32(scope, &args, 0), arg_u32(scope, &args, 1), arg_string(scope, &args, 2));
+    if let Some(store) = scope.get_slot::<Store>() {
+        store.borrow_mut().add_layer(id, model, name);
+    }
+}
+
+fn native_mesh_layer_visible(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, _rv: v8::ReturnValue<v8::Value>) {
+    let id = arg_u32(scope, &args, 0);
+    let visible = args.get(1).boolean_value(scope);
+    if let Some(store) = scope.get_slot::<Store>() {
+        store.borrow_mut().set_visible(id, visible);
+    }
+}
+
+fn native_mesh_layer_sort(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, _rv: v8::ReturnValue<v8::Value>) {
+    let id = arg_u32(scope, &args, 0);
+    let before = args.get(1).int32_value(scope).and_then(|i| usize::try_from(i).ok());
+    if let Some(store) = scope.get_slot::<Store>() {
+        store.borrow_mut().sort(id, before);
+    }
+}
+
+const WE_MATH: &str = "export const mix=(a,b,t)=>a+(b-a)*t; export const clamp=(x,a,b)=>Math.min(b,Math.max(a,x)); export const smoothstep=(a,b,x)=>{const t=clamp((x-a)/(b-a),0,1);return t*t*(3-2*t)}; export const random=(a=0,b=1)=>mix(a,b,Math.random()); export const radians=x=>x*Math.PI/180; export const degrees=x=>x*180/Math.PI; export const deg2rad=radians; export const rad2deg=degrees; export const smoothStep=smoothstep;";
+const WE_VECTOR: &str = "export const lerp=(a,b,t)=>a.add(b.subtract(a).multiply(t));";
 
 impl SceneScripts {
     pub fn load(
@@ -115,22 +234,16 @@ impl SceneScripts {
         {
             return Err(anyhow!("SceneScript source exceeds the scene budget"));
         }
-        let runtime = Runtime::new().map_err(|e| anyhow!("SceneScript runtime: {e}"))?;
-        runtime.set_memory_limit(HEAP_LIMIT);
-        runtime.set_max_stack_size(512 * 1024);
-        let deadline = Rc::new(Cell::new(Instant::now() + Duration::from_secs(2)));
-        let interrupt = deadline.clone();
-        runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() >= interrupt.get())));
-        let context = Context::full(&runtime).map_err(|e| anyhow!("SceneScript context: {e}"))?;
+        let mut js = Js::new(HEAP_LIMIT, BUFFER_LIMIT)?;
+        let meshes: Store = Rc::new(RefCell::new(super::MeshStore::default()));
+        js.set_slot(meshes.clone());
         let mut host = Self {
             property_bindings,
             properties_changed: false,
             storage,
             commands: Vec::new(),
             general: Vec::new(),
-            context,
-            runtime,
-            deadline,
+            js: RefCell::new(js),
             scene: Value::Null,
             properties: props.clone(),
             updates: Vec::new(),
@@ -139,10 +252,10 @@ impl SceneScripts {
             disabled: false,
             audio_registered: false,
             timers_pending: false,
+            meshes,
         };
+        host.deadline(Duration::from_secs(2));
         host.setup(scene, props)?;
-        // Scripts may build a whole scene in init (geometry, tables): Wallpaper
-        // Engine gives them time once, at load. Frames keep their 100 ms.
         let initialization_deadline = Instant::now() + INIT_BUDGET;
         for (index, binding) in bindings.iter().enumerate() {
             if Instant::now() >= initialization_deadline {
@@ -150,7 +263,7 @@ impl SceneScripts {
                     .push("remaining scripts skipped: initialization budget exhausted".into());
                 break;
             }
-            host.deadline.set(initialization_deadline.min(Instant::now() + MODULE_INIT_BUDGET));
+            host.js.borrow().set_deadline(initialization_deadline.min(Instant::now() + MODULE_INIT_BUDGET));
             if let Err(error) = host.compile(index, binding) {
                 host.diagnostics.push(format!("{}: {error:#}", binding.path));
                 host.disable_module(index);
@@ -166,56 +279,61 @@ impl SceneScripts {
         tracing::info!(
             bindings = host.bindings,
             heap_bytes = host.heap_bytes(),
+            models = host.meshes.borrow().models.len(),
+            model_layers = host.meshes.borrow().layers.len(),
             "SceneScript runtime created"
         );
         *scene = host.scene.clone();
         Ok(Some(host))
     }
 
+    fn deadline(&self, budget: Duration) {
+        self.js.borrow().set_deadline(Instant::now() + budget);
+    }
+
+    fn call(&self, name: &str, args: &[Arg<'_>]) -> Result<()> {
+        self.js.borrow_mut().call(name, args)
+    }
+
     fn setup(&self, scene: &Value, props: &crate::model::Properties) -> Result<()> {
         let mut resolved = scene.clone();
         source::resolve_wrappers(&mut resolved, props);
-        self.context.with(|ctx| {
-            let result = (|| -> rquickjs::Result<()> {
-                ctx.globals().set("__log", Function::new(ctx.clone(), |message: String| { tracing::debug!("SceneScript: {}", message.chars().take(1024).collect::<String>()); })?)?;
-                ctx.eval::<(), _>(include_str!("bootstrap.js"))?;
-                ctx.eval::<(), _>(include_str!("storage.js"))?;
-                if let Some(storage) = &self.storage {
-                    ctx.globals().get::<_, Function>("__storageLoad")?.call::<_, ()>((storage.data.to_string(),))?;
-                }
-                let setup: Function = ctx.globals().get("__setup")?;
-                let values = self.property_bindings.user_properties(props);
-                setup.call::<_, ()>((resolved.to_string(), values.to_string()))?;
-                for (name, source) in [
-                    ("WEColor", include_str!("color.js")),
-                    ("WEMath", "export const mix=(a,b,t)=>a+(b-a)*t; export const clamp=(x,a,b)=>Math.min(b,Math.max(a,x)); export const smoothstep=(a,b,x)=>{const t=clamp((x-a)/(b-a),0,1);return t*t*(3-2*t)}; export const random=(a=0,b=1)=>mix(a,b,Math.random()); export const radians=x=>x*Math.PI/180; export const degrees=x=>x*180/Math.PI; export const deg2rad=radians; export const rad2deg=degrees; export const smoothStep=smoothstep;"),
-                    ("WEVector", "export const lerp=(a,b,t)=>a.add(b.subtract(a).multiply(t));"),
-                ] { let (_, p) = Module::declare(ctx.clone(), name, source)?.eval()?; p.finish::<()>()?; }
-                Ok(())
-            })();
-            result.map_err(|e| js_error(&ctx,&e))
-        })
+        let mut js = self.js.borrow_mut();
+        js.set_function("__log", native_log)?;
+        js.set_function("__meshShape", native_mesh_shape)?;
+        js.set_function("__meshVertices", native_mesh_vertices)?;
+        js.set_function("__meshLayer", native_mesh_layer)?;
+        js.set_function("__registerAsset", native_register_asset)?;
+        js.set_function("__meshLayerVisible", native_mesh_layer_visible)?;
+        js.set_function("__meshLayerSort", native_mesh_layer_sort)?;
+        js.eval(include_str!("bootstrap.js"))?;
+        js.eval(include_str!("storage.js"))?;
+        if let Some(storage) = &self.storage {
+            js.call("__storageLoad", &[Arg::Str(&storage.data.to_string())])?;
+        }
+        let values = self.property_bindings.user_properties(props);
+        js.call("__setup", &[Arg::Str(&resolved.to_string()), Arg::Str(&values.to_string())])?;
+        js.declare_module("WEColor", include_str!("color.js"))?;
+        js.declare_module("WEMath", WE_MATH)?;
+        js.declare_module("WEVector", WE_VECTOR)?;
+        Ok(())
     }
 
     fn compile(&mut self, index: usize, binding: &source::Binding) -> Result<()> {
         let mut properties = binding.properties.clone();
         source::resolve_wrappers(&mut properties, &self.properties);
-        let has_update = self.context.with(|ctx| {
-            let result = (|| -> rquickjs::Result<bool> {
-                let layer = binding.layer.map_or("undefined".to_owned(), |i| format!("__layers[{i}]"));
-                let source = format!("const thisLayer = {layer}; const thisObject = __owner({})[0]; const createScriptProperties = () => __createScriptProperties({properties}, {index});\n{}", serde_json::to_string(&binding.path).unwrap(), binding.source);
-                let (module, promise) = Module::declare(ctx.clone(), format!("scene-{index}.js"), source)?.eval()?;
-                promise.finish::<()>()?;
-                let namespace = module.namespace()?;
-                let has_update = namespace.get::<_, rquickjs::Value>("update")?.is_function();
-                let register: Function = ctx.globals().get("__register")?;
-                register.call::<_, ()>((index, namespace, binding.path.as_str()))?;
-                let invoke: Function = ctx.globals().get("__invoke")?;
-                invoke.call::<_, ()>((index, "init"))?;
-                Ok(has_update)
-            })();
-            result.map_err(|e| js_error(&ctx,&e))
-        })?;
+        let layer = binding.layer.map_or("undefined".to_owned(), |i| format!("__layers[{i}]"));
+        let source = format!(
+            "const thisLayer = {layer}; const thisObject = __owner({})[0]; const createScriptProperties = () => __createScriptProperties({properties}, {index});\n{}",
+            serde_json::to_string(&binding.path).unwrap(),
+            binding.source
+        );
+        let has_update = {
+            let mut js = self.js.borrow_mut();
+            let has_update = js.run_module(&format!("scene-{index}.js"), &source, "__register", index, &binding.path)?;
+            js.call("__invoke", &[Arg::Num(index as f64), Arg::Str("init")])?;
+            has_update
+        };
         if has_update {
             self.updates.push(index);
         }
@@ -223,14 +341,8 @@ impl SceneScripts {
     }
 
     fn apply_user_properties(&mut self) {
-        self.deadline.set(Instant::now() + Duration::from_millis(100));
-        let result = self.context.with(|ctx| {
-            ctx.globals()
-                .get::<_, Function>("__applyUserProperties")
-                .and_then(|f| f.call::<_, ()>(()))
-                .map_err(|e| js_error(&ctx, &e))
-        });
-        if let Err(error) = result {
+        self.deadline(Duration::from_millis(100));
+        if let Err(error) = self.call("__applyUserProperties", &[]) {
             self.diagnostics.push(format!("applyUserProperties: {error:#}"));
         }
     }
@@ -252,13 +364,8 @@ impl SceneScripts {
         let Some(update) = self.property_bindings.update(&self.properties, &desired) else {
             return Ok(false);
         };
-        self.deadline.set(Instant::now() + Duration::from_millis(100));
-        self.context.with(|ctx| {
-            ctx.globals()
-                .get::<_, Function>("__updateUserProperties")
-                .and_then(|function| function.call::<_, ()>((update.to_string(),)))
-                .map_err(|error| js_error(&ctx, &error))
-        })?;
+        self.deadline(Duration::from_millis(100));
+        self.call("__updateUserProperties", &[Arg::Str(&update.to_string())])?;
         self.properties = desired;
         self.properties_changed = true;
         Ok(true)
@@ -268,40 +375,41 @@ impl SceneScripts {
         if layers.is_empty() {
             return;
         }
-        self.deadline.set(Instant::now() + FRAME_BUDGET);
-        let callbacks = self.context.with(|ctx| {
-            ctx.eval::<bool, _>(
-                "__modules.some(m => m && !m.disabled && typeof m.ns.applyUserProperties === 'function')",
-            )
-            .unwrap_or(true)
-        });
+        self.deadline(FRAME_BUDGET);
+        let callbacks = self
+            .js
+            .borrow_mut()
+            .eval_bool("__modules.some(m => m && !m.disabled && typeof m.ns.applyUserProperties === 'function')")
+            .unwrap_or(true);
         self.property_bindings.restrict_hidden_layers(&self.scene, layers, callbacks);
     }
 
     pub fn set_keyframes(&mut self, bindings: &crate::keyframe::Bindings) -> Result<()> {
-        self.deadline.set(Instant::now() + FRAME_BUDGET);
+        self.deadline(FRAME_BUDGET);
         let paths = serde_json::to_string(&bindings.paths())?;
-        self.context
-            .with(|ctx| ctx.globals().get::<_, Function>("__setKeyframes")?.call::<_, ()>((paths,)))
-            .map_err(|error| anyhow!("keyframe bindings: {error}"))
+        self.call("__setKeyframes", &[Arg::Str(&paths)]).map_err(|error| anyhow!("keyframe bindings: {error}"))
     }
 
     pub fn sync_keyframes(&mut self, bindings: &crate::keyframe::Bindings) -> Result<()> {
         if bindings.is_empty() {
             return Ok(());
         }
-        self.deadline.set(Instant::now() + FRAME_BUDGET);
-        self.context
-            .with(|ctx| {
-                let update: Function = ctx.globals().get("__keyframe")?;
-                for (index, values, count) in bindings.values() {
-                    update.call::<_, ()>((
-                        index, values[0], values[1], values[2], values[3], count,
-                    ))?;
-                }
-                Ok::<_, rquickjs::Error>(())
-            })
-            .map_err(|error| anyhow!("keyframe values: {error}"))
+        self.deadline(FRAME_BUDGET);
+        for (index, values, count) in bindings.values() {
+            self.call(
+                "__keyframe",
+                &[
+                    Arg::Num(index as f64),
+                    Arg::Num(f64::from(values[0])),
+                    Arg::Num(f64::from(values[1])),
+                    Arg::Num(f64::from(values[2])),
+                    Arg::Num(f64::from(values[3])),
+                    Arg::Num(count as f64),
+                ],
+            )
+            .map_err(|error| anyhow!("keyframe values: {error}"))?;
+        }
+        Ok(())
     }
 
     pub fn set_sprites(&mut self, sprites: &[(usize, usize, f32)]) {
@@ -309,14 +417,8 @@ impl SceneScripts {
             return;
         }
         let json = serde_json::to_string(sprites).unwrap_or_else(|_| "[]".into());
-        self.deadline.set(Instant::now() + FRAME_BUDGET);
-        let result = self.context.with(|ctx| {
-            ctx.globals()
-                .get::<_, Function>("__setSprites")
-                .and_then(|f| f.call::<_, ()>((json,)))
-                .map_err(|e| js_error(&ctx, &e))
-        });
-        if let Err(error) = result {
+        self.deadline(FRAME_BUDGET);
+        if let Err(error) = self.call("__setSprites", &[Arg::Str(&json)]) {
             self.stop(format!("sprite table stopped: {error:#}"));
         }
     }
@@ -333,13 +435,8 @@ impl SceneScripts {
         if self.disabled {
             return;
         }
-        self.deadline.set(Instant::now() + FRAME_BUDGET);
-        let result = self.context.with(|ctx| {
-            ctx.globals()
-                .get::<_, Function>("__destroyAll")
-                .and_then(|f| f.call::<_, ()>(()))
-                .map_err(|e| js_error(&ctx, &e))
-        });
+        self.deadline(FRAME_BUDGET);
+        let result = self.call("__destroyAll", &[]);
         match result.and_then(|()| self.drain()) {
             Ok(_) => {}
             Err(error) => self.diagnostics.push(format!("destroy: {error:#}")),
@@ -354,40 +451,24 @@ impl SceneScripts {
         if self.disabled {
             return Ok(());
         }
-        self.deadline.set(Instant::now() + FRAME_BUDGET);
-        let result = self.context.with(|ctx| {
-            ctx.globals()
-                .get::<_, Function>("__audioUpdate")
-                .and_then(|f| f.call::<_, ()>((count, left.to_vec(), right.to_vec())))
-                .map_err(|e| js_error(&ctx, &e))
-        });
-        if let Err(error) = result {
+        self.deadline(FRAME_BUDGET);
+        if let Err(error) = self.call("__audioUpdate", &[Arg::Num(count as f64), Arg::F32s(left), Arg::F32s(right)]) {
             self.stop(format!("audio stopped: {error:#}"));
         }
         Ok(())
     }
 
     pub fn needs_media(&self) -> bool {
-        self.context.with(|ctx| {
-            ctx.globals()
-                .get::<_, Function>("__needsMedia")
-                .and_then(|f| f.call::<_, bool>(()))
-                .unwrap_or(false)
-        })
+        self.deadline(FRAME_BUDGET);
+        self.js.borrow_mut().call_bool("__needsMedia", &[]).unwrap_or(false)
     }
 
     pub fn media(&mut self, events: &Value) -> Result<()> {
         if self.disabled {
             return Ok(());
         }
-        self.deadline.set(Instant::now() + FRAME_BUDGET);
-        let result = self.context.with(|ctx| {
-            ctx.globals()
-                .get::<_, Function>("__media")
-                .and_then(|f| f.call::<_, ()>((events.to_string(),)))
-                .map_err(|e| js_error(&ctx, &e))
-        });
-        if let Err(error) = result {
+        self.deadline(FRAME_BUDGET);
+        if let Err(error) = self.call("__media", &[Arg::Str(&events.to_string())]) {
             self.stop(format!("media event stopped: {error:#}"));
         }
         Ok(())
@@ -402,14 +483,14 @@ impl SceneScripts {
         if self.disabled {
             return Ok(());
         }
-        self.deadline.set(Instant::now() + FRAME_BUDGET);
-        let result = self.context.with(|ctx| {
-            ctx.globals()
-                .get::<_, Function>("__pointer")
-                .and_then(|f| f.call::<_, ()>((position[0], position[1], buttons.to_vec(), hits)))
-                .map_err(|e| js_error(&ctx, &e))
-        });
-        if let Err(error) = result {
+        self.deadline(FRAME_BUDGET);
+        let args = [
+            Arg::Num(f64::from(position[0])),
+            Arg::Num(f64::from(position[1])),
+            Arg::Bools(&buttons),
+            Arg::Strs(&hits),
+        ];
+        if let Err(error) = self.call("__pointer", &args) {
             self.stop(format!("cursor event stopped: {error:#}"));
         }
         Ok(())
@@ -419,8 +500,13 @@ impl SceneScripts {
         !self.disabled && (!self.updates.is_empty() || self.timers_pending)
     }
 
+    /// The models and layers the scripts built (`createModelData`).
+    pub fn meshes(&self) -> std::cell::Ref<'_, super::MeshStore> {
+        self.meshes.borrow()
+    }
+
     pub fn heap_bytes(&self) -> usize {
-        self.runtime.memory_usage().memory_used_size.max(0) as usize
+        self.js.borrow_mut().heap_bytes()
     }
 
     pub fn tick(&mut self, time: f32, dt: f32, pointer: [f32; 2]) -> Result<bool> {
@@ -428,37 +514,33 @@ impl SceneScripts {
             return Ok(false);
         }
         let started = Instant::now();
-        self.deadline.set(started + FRAME_BUDGET);
+        self.deadline(FRAME_BUDGET);
         let expected = self.updates.len();
         let mut invoked = 0;
         let mut failed = Vec::new();
-        let result = self.context.clone().with(|ctx| {
-            let result = (|| -> rquickjs::Result<()> {
-                let frame: Function = ctx.globals().get("__frame")?;
-                frame.call::<_, ()>((time, dt, pointer[0], pointer[1]))?;
-                let invoke: Function = ctx.globals().get("__invoke")?;
-                for &index in &self.updates {
-                    if Instant::now() >= self.deadline.get() {
-                        break;
-                    }
-                    invoked += 1;
-                    if let Err(error) = invoke.call::<_, ()>((index, "update")) {
-                        let error = js_error(&ctx, &error);
-                        self.diagnostics.push(format!("script {index} stopped: {error:#}"));
-                        tracing::warn!("SceneScript {index} stopped: {error:#}");
-                        failed.push(index);
-                    }
+        let result = (|| -> Result<()> {
+            self.call(
+                "__frame",
+                &[Arg::Num(f64::from(time)), Arg::Num(f64::from(dt)), Arg::Num(f64::from(pointer[0])), Arg::Num(f64::from(pointer[1]))],
+            )?;
+            for &index in &self.updates {
+                if Instant::now() >= self.js.borrow().deadline() {
+                    break;
                 }
-                self.updates.retain(|index| !failed.contains(index));
-                if Instant::now() >= self.deadline.get() {
-                    return Ok(());
+                invoked += 1;
+                if let Err(error) = self.call("__invoke", &[Arg::Num(index as f64), Arg::Str("update")]) {
+                    self.diagnostics.push(format!("script {index} stopped: {error:#}"));
+                    tracing::warn!("SceneScript {index} stopped: {error:#}");
+                    failed.push(index);
                 }
-                let timers: Function = ctx.globals().get("__tickTimers")?;
-                timers.call::<_, ()>(())
-            })();
-            result.map_err(|e| js_error(&ctx, &e))
-        });
-        tracing::trace!(target: "paper_scene::script::frame", invoked, expected, elapsed_us = started.elapsed().as_micros(), "SceneScript updates");
+            }
+            self.updates.retain(|index| !failed.contains(index));
+            if Instant::now() >= self.js.borrow().deadline() {
+                return Ok(());
+            }
+            self.call("__tickTimers", &[])
+        })();
+        tracing::debug!(target: "paper_scene::script::frame", invoked, expected, elapsed_us = started.elapsed().as_micros(), "SceneScript updates");
         for index in failed {
             self.disable_module(index);
         }
@@ -485,36 +567,22 @@ impl SceneScripts {
     }
 
     fn disable_module(&self, index: usize) {
-        let deadline = self.deadline.get();
-        self.deadline.set(Instant::now() + FRAME_BUDGET);
-        self.context.with(|ctx| {
-            let _ = ctx
-                .globals()
-                .get::<_, Function>("__disable")
-                .and_then(|f| f.call::<_, ()>((index,)));
-        });
-        self.deadline.set(deadline);
+        let deadline = self.js.borrow().deadline();
+        self.deadline(FRAME_BUDGET);
+        let _ = self.call("__disable", &[Arg::Num(index as f64)]);
+        self.js.borrow().set_deadline(deadline);
     }
 
     fn drain(&mut self) -> Result<bool> {
-        self.deadline.set(Instant::now() + FRAME_BUDGET);
-        let json: String = self.context.with(|ctx| {
-            ctx.globals()
-                .get::<_, Function>("__drain")
-                .and_then(|f| f.call(()))
-                .map_err(|e| js_error(&ctx, &e))
-        })?;
+        self.deadline(FRAME_BUDGET);
+        let json = self.js.borrow_mut().call_string("__drain", &[])?;
         if json.len() > 1024 * 1024 {
             return Err(anyhow!("SceneScript changes exceed 1 MiB per frame"));
         }
-        self.audio_registered =
-            self.context.with(|ctx| ctx.eval::<bool, _>("__audio.size > 0").unwrap_or(false));
-        self.timers_pending =
-            self.context.with(|ctx| ctx.eval::<bool, _>("__timers.size > 0").unwrap_or(false));
+        self.audio_registered = self.js.borrow_mut().eval_bool("__audio.size > 0").unwrap_or(false);
+        self.timers_pending = self.js.borrow_mut().eval_bool("__timers.size > 0").unwrap_or(false);
         if let Some(storage) = &mut self.storage {
-            let data: String = self
-                .context
-                .with(|ctx| ctx.globals().get::<_, Function>("__storageDrain")?.call(()))?;
+            let data = self.js.borrow_mut().call_string("__storageDrain", &[])?;
             if !data.is_empty() {
                 storage.save(&data)?;
             }
@@ -537,12 +605,7 @@ impl SceneScripts {
                 self.general.push((key.to_owned(), value.clone()));
             }
         }
-        let queued: String = self.context.with(|ctx| {
-            ctx.globals()
-                .get::<_, Function>("__drainCommands")
-                .and_then(|f| f.call(()))
-                .map_err(|e| js_error(&ctx, &e))
-        })?;
+        let queued = self.js.borrow_mut().call_string("__drainCommands", &[])?;
         let queued: Vec<(String, String, String, Value)> = serde_json::from_str(&queued)?;
         self.commands.extend(
             queued

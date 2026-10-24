@@ -134,7 +134,7 @@ bool nearly_black(const std::string& png) {
 bool make_thumb(Wallpaper& w, const std::string& dir) {
     char name[40];
     // (Wallpaper Engine items: rendered by the engine, a new name for the old GIF-made ones)
-    std::string key = w.path + std::to_string(w.mtime) + (w.engine ? (w.unsupported ? "#preview" : "#engine") : "");
+    std::string key = w.path + std::to_string(w.mtime) + (w.engine ? "#engine" : "");
     snprintf(name, sizeof(name), "%016llx", static_cast<unsigned long long>(hash_str(key)));
     std::string jpg = dir + "/" + name + ".jpg", png = dir + "/" + name + ".png";
     std::string out = file_exists(jpg) ? jpg : file_exists(png) ? png : "";
@@ -164,7 +164,7 @@ bool make_thumb(Wallpaper& w, const std::string& dir) {
             // A Wallpaper Engine item: the engine renders a sharp still (its
             // preview is a GIF of 192 px or so, which stays the fallback).
             std::string src = w.engine ? w.preview : w.path, still;
-            if (w.engine && !w.unsupported) {
+            if (w.engine) {
                 still = dir + "/" + name + ".still.png";
                 if (engine::capture(w.path, still) && !nearly_black(still)) src = still;
             }
@@ -310,7 +310,6 @@ void WallPicker::scan() {
                     w.engine = true;
                     w.ws_type = it.type;
                     w.ws_id = it.dir.substr(it.dir.rfind('/') + 1);
-                    w.unsupported = it.type == "scene" && workshop::unsupported(it.dir);
                     w.mtime = static_cast<int64_t>(st.st_mtime);
                     found->push_back(std::move(w));
                 }
@@ -327,7 +326,6 @@ void WallPicker::scan() {
                     for (auto& w : *found) {
                         auto it = j.find(w.path);
                         if (it == j.end() || !it->is_object() || it->value("mtime", (int64_t)0) != w.mtime) continue;
-                        if (w.unsupported) continue;  // (its thumbnail comes from the preview, not a capture)
                         w.thumb = it->value("thumb", "");
                         w.hue = it->value("hue", -1.0f);
                         w.sat = it->value("sat", 0.0f);

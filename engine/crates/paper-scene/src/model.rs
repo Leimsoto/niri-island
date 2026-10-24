@@ -14,6 +14,12 @@ const USER_TEXTURES_FIELD: &str = "usertextures";
 
 pub struct SceneModel {
     pub scripts: Option<crate::script::SceneScripts>,
+    /// Materials the scripts' own models draw with, by path (built at load:
+    /// the package is gone once the renderer runs).
+    pub mesh_materials: std::collections::BTreeMap<String, crate::effects::MeshMaterial>,
+    /// Scene object index → its drawing order (a script's model sorted in
+    /// front of object k draws before that order).
+    pub object_order: std::collections::BTreeMap<usize, usize>,
     pub keyframes: crate::keyframe::Bindings,
     pub animated_scene: Option<(Value, Properties)>,
     pub canvas: (f32, f32),
@@ -1228,6 +1234,10 @@ fn load_with_project(
         )
         .collect();
     unified_order.sort_by_key(|entry| entry.0);
+    let mut object_order = std::collections::BTreeMap::new();
+    for (scene_order, (object, _, _)) in unified_order.iter().enumerate() {
+        object_order.entry(*object).or_insert(scene_order);
+    }
     for (scene_order, (_, particle, index)) in unified_order.into_iter().enumerate() {
         if particle {
             particles[index].scene_order = scene_order;
@@ -1260,7 +1270,27 @@ fn load_with_project(
             }
         }
     }
+    // Materials for the models scripts build: what they registered, the
+    // scene's precache list, and what their shapes already name.
+    let mut mesh_materials = std::collections::BTreeMap::new();
+    if let Some(host) = &scripts {
+        let mut wanted: std::collections::BTreeSet<String> = host.meshes().assets.clone();
+        wanted.extend(host.meshes().models.values().flatten().map(|shape| shape.material.clone()));
+        if let Some(list) = scene.get("general").and_then(|g| g.get("precache")).and_then(Value::as_array) {
+            wanted.extend(list.iter().filter_map(Value::as_str).map(str::to_owned));
+        }
+        for path in wanted.into_iter().filter(|p| p.starts_with("materials/") && p.ends_with(".json")).take(1024) {
+            match crate::effects::mesh_material(pkg, assets, &path) {
+                Some(material) => {
+                    mesh_materials.insert(path, material);
+                }
+                None => skipped.push(format!("{path}: model material unavailable")),
+            }
+        }
+    }
     Ok(SceneModel {
+        mesh_materials,
+        object_order,
         animated_scene: (scripts.is_none()
             && (!keyframes.is_empty()
                 || layers.iter().any(|layer| {

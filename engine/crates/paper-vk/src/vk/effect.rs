@@ -103,10 +103,24 @@ pub struct DynBuffer {
     pub size: usize,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// How a script's model feeds its shader: the vertex stride, and each
+/// attribute the shader declares at (location, format, offset, binding);
+/// binding 1 is a zero buffer for attributes the model does not carry.
+#[derive(Clone, PartialEq)]
+pub struct MeshLayout {
+    pub stride: u32,
+    pub attributes: Vec<(u32, vk::Format, u32, u32)>,
+    pub blend: paper_scene::particles::ParticleBlend,
+    pub depth_test: bool,
+    pub depth_write: bool,
+    pub cull_back: bool,
+}
+
+#[derive(Clone, PartialEq)]
 pub enum PipelineKind {
     Effect,
     Particles(paper_scene::particles::ParticleBlend),
+    Mesh(MeshLayout),
 }
 
 fn particle_blend_state(
@@ -245,6 +259,20 @@ impl Renderer {
             PipelineKind::Particles(blend),
             render_pass,
         )
+    }
+
+    /// A script's model's pipeline, for scene targets of `format`.
+    pub fn create_mesh_pipeline(
+        &mut self,
+        vertex: &Translated,
+        fragment: &Translated,
+        hlsl: Option<&HlslPair>,
+        label: &str,
+        layout: MeshLayout,
+        format: vk::Format,
+    ) -> Result<EffectPipeline> {
+        let render_pass = self.mesh_pass_for(format, true)?;
+        self.create_pipeline_kind(vertex, fragment, hlsl, label, PipelineKind::Mesh(layout), render_pass)
     }
 
     pub fn create_dyn_buffer(&self, size: usize, usage: vk::BufferUsageFlags) -> Result<DynBuffer> {
@@ -419,16 +447,26 @@ impl Renderer {
                     .module(frag_module)
                     .name(c"main"),
             ];
-            let stride = match kind {
+            let stride = match &kind {
                 PipelineKind::Effect => 20,
                 PipelineKind::Particles(_) => {
                     4 * paper_scene::particles::SPRITE_FLOATS_PER_VERTEX as u32
                 }
+                PipelineKind::Mesh(layout) => layout.stride,
             };
-            let bind_desc = [vk::VertexInputBindingDescription::default()
+            let mut bind_desc = vec![vk::VertexInputBindingDescription::default()
                 .binding(0)
                 .stride(stride)
                 .input_rate(vk::VertexInputRate::VERTEX)];
+            if matches!(kind, PipelineKind::Mesh(_)) {
+                // the zero buffer: every vertex reads the same zeros
+                bind_desc.push(
+                    vk::VertexInputBindingDescription::default()
+                        .binding(1)
+                        .stride(0)
+                        .input_rate(vk::VertexInputRate::VERTEX),
+                );
+            }
             let attr = |location: u32, format: vk::Format, offset: u32| {
                 vk::VertexInputAttributeDescription::default()
                     .location(location)
@@ -436,7 +474,7 @@ impl Renderer {
                     .format(format)
                     .offset(offset)
             };
-            let attrs: Vec<vk::VertexInputAttributeDescription> = match kind {
+            let attrs: Vec<vk::VertexInputAttributeDescription> = match &kind {
                 PipelineKind::Effect => vec![
                     attr(0, vk::Format::R32G32B32_SFLOAT, 0),
                     attr(1, vk::Format::R32G32_SFLOAT, 12),
@@ -448,31 +486,56 @@ impl Renderer {
                     attr(3, vk::Format::R32G32B32A32_SFLOAT, 44),
                     attr(4, vk::Format::R32G32_SFLOAT, 60),
                 ],
+                PipelineKind::Mesh(layout) => layout
+                    .attributes
+                    .iter()
+                    .map(|&(location, format, offset, binding)| {
+                        vk::VertexInputAttributeDescription::default()
+                            .location(location)
+                            .binding(binding)
+                            .format(format)
+                            .offset(offset)
+                    })
+                    .collect(),
             };
             let vi = vk::PipelineVertexInputStateCreateInfo::default()
                 .vertex_binding_descriptions(&bind_desc)
                 .vertex_attribute_descriptions(&attrs);
-            let ia = vk::PipelineInputAssemblyStateCreateInfo::default().topology(match kind {
+            let ia = vk::PipelineInputAssemblyStateCreateInfo::default().topology(match &kind {
                 PipelineKind::Effect => vk::PrimitiveTopology::TRIANGLE_STRIP,
-                PipelineKind::Particles(_) => vk::PrimitiveTopology::TRIANGLE_LIST,
+                PipelineKind::Particles(_) | PipelineKind::Mesh(_) => vk::PrimitiveTopology::TRIANGLE_LIST,
             });
             let viewport = [vk::Viewport::default()];
             let scissor = [vk::Rect2D::default()];
             let vp = vk::PipelineViewportStateCreateInfo::default()
                 .viewports(&viewport)
                 .scissors(&scissor);
+            let cull = match &kind {
+                PipelineKind::Mesh(layout) if layout.cull_back => vk::CullModeFlags::BACK,
+                _ => vk::CullModeFlags::NONE,
+            };
             let rs = vk::PipelineRasterizationStateCreateInfo::default()
                 .polygon_mode(vk::PolygonMode::FILL)
-                .cull_mode(vk::CullModeFlags::NONE)
+                .cull_mode(cull)
+                .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
                 .line_width(1.0);
             let ms = vk::PipelineMultisampleStateCreateInfo::default()
                 .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-            let att = [match kind {
+            let att = [match &kind {
                 PipelineKind::Effect => vk::PipelineColorBlendAttachmentState::default()
                     .color_write_mask(vk::ColorComponentFlags::RGBA),
-                PipelineKind::Particles(blend) => particle_blend_state(blend),
+                PipelineKind::Particles(blend) => particle_blend_state(*blend),
+                PipelineKind::Mesh(layout) => particle_blend_state(layout.blend),
             }];
             let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&att);
+            // (models only: reversed depth, the larger value wins)
+            let depth = match &kind {
+                PipelineKind::Mesh(layout) => vk::PipelineDepthStencilStateCreateInfo::default()
+                    .depth_test_enable(layout.depth_test)
+                    .depth_write_enable(layout.depth_write)
+                    .depth_compare_op(vk::CompareOp::GREATER_OR_EQUAL),
+                _ => vk::PipelineDepthStencilStateCreateInfo::default(),
+            };
             let dyn_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
             let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dyn_states);
             let pipeline_started = std::time::Instant::now();
@@ -488,6 +551,7 @@ impl Renderer {
                         .rasterization_state(&rs)
                         .multisample_state(&ms)
                         .color_blend_state(&blend)
+                        .depth_stencil_state(&depth)
                         .dynamic_state(&dynamic)
                         .layout(layout)
                         .render_pass(render_pass)

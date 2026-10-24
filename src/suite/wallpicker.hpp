@@ -30,7 +30,6 @@ struct Wallpaper {
     uint64_t ws_size = 0, ws_subs = 0;
     bool subscribed = false, installed = false;
     float progress = -1;
-    bool unsupported = false;  // a scene our engine cannot draw yet (its preview stands in)
     bool moving() const { return video || engine; }
     // what to show it with: the file itself, or a still of it
     const std::string& image() const { return moving() ? thumb : path; }

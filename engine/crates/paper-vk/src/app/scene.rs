@@ -1,4 +1,5 @@
 mod media;
+mod meshes;
 mod mouse;
 mod properties;
 mod script;
@@ -964,6 +965,24 @@ fn sprite_grid(texture: &paper_scene::model::Texture) -> [f32; 4] {
     }
 }
 
+// Particles and the scripts' models due in a range of the scene, in order.
+#[allow(clippy::too_many_arguments)]
+fn scene_batches<'a>(
+    groups: &'a [ParticleGroup],
+    meshes: Option<&'a meshes::Meshes>,
+    image_orders: &[usize],
+    particle_quads: &[OrderedParticleQuad],
+    draws: &[OrderedParticleDraw],
+    from: usize,
+    before: Option<usize>,
+    grab: Option<&'a vk::SceneTarget>,
+) -> Vec<vk::ParticleDraw<'a>> {
+    let mut out = particle_batches(groups, image_orders, particle_quads, draws, from, before, grab);
+    out.extend(meshes::mesh_batches(meshes, image_orders, particle_quads, from, before));
+    out.sort_by_key(|batch| batch.after);
+    out
+}
+
 fn particle_batches<'a>(
     groups: &'a [ParticleGroup],
     image_orders: &[usize],
@@ -1004,6 +1023,7 @@ fn particle_batches<'a>(
                 indices: engine.indices.buffer,
                 index_count: draw.index_count,
                 grab: group.system.grab_slot.and(grab),
+                mesh: None,
             })
         })
         .collect();
@@ -1134,6 +1154,10 @@ struct Group {
     fixed_daytime: Option<f32>,
     canvas: (f32, f32),
     clear: [f32; 3],
+    /// Models the scripts build, and the named targets effects share by name
+    /// (`unique: false`), which those models read: index into fx_scratch.
+    meshes: Option<meshes::Meshes>,
+    shared_targets: HashMap<String, usize>,
 }
 
 struct Presenter {
@@ -1844,6 +1868,7 @@ impl Group {
                 paper_scene::puppet::skin(&puppet.puppet.mesh, &puppet.puppet.layers, time);
         }
         self.advance_scripts(time, dt)?;
+        self.mesh_frame(time, dt)?;
         self.advance_layer_animations(time);
         self.advance_mouse(dt);
         let debug_fx = std::env::var("SKWD_VK_FX_DEBUG").is_ok();
@@ -1857,8 +1882,9 @@ impl Group {
             let clear = [self.clear[0], self.clear[1], self.clear[2], 1.0];
             let quads =
                 ordered_scene_quads(&self.quads, &self.quad_scene_order, &particle_quads, 0, None);
-            let batches = particle_batches(
+            let batches = scene_batches(
                 &self.particles,
+                self.meshes.as_ref(),
                 &self.quad_scene_order,
                 &particle_quads,
                 &particle_draws,
@@ -1930,8 +1956,9 @@ impl Group {
                     from,
                     Some(scene_order),
                 );
-                let batches = particle_batches(
+                let batches = scene_batches(
                     &self.particles,
+                    self.meshes.as_ref(),
                     &self.quad_scene_order,
                     &particle_quads,
                     &particle_draws,
@@ -2184,8 +2211,9 @@ impl Group {
         let clear = [self.clear[0], self.clear[1], self.clear[2], 1.0];
         let quads =
             ordered_scene_quads(&self.quads, &self.quad_scene_order, &particle_quads, 0, None);
-        let batches = particle_batches(
+        let batches = scene_batches(
             &self.particles,
+            self.meshes.as_ref(),
             &self.quad_scene_order,
             &particle_quads,
             &particle_draws,
@@ -2364,7 +2392,7 @@ impl Group {
             report.planned_layers += 1;
             let layer_candidates = fx
                 .target_ids()
-                .filter(|target| scratch_candidate(&plan, &fx.sampled_targets, *target))
+                .filter(|target| scratch_candidate(&plan, &fx.sampled_targets, *target) && !fx.shared_name(*target))
                 .map(|target| {
                     let class = FxTargetClass::of(
                         fx.target_storage(target)
@@ -2485,6 +2513,9 @@ impl Group {
                 self.renderer.destroy_dyn_buffer(engine.vertices);
                 self.renderer.destroy_dyn_buffer(engine.indices);
             }
+        }
+        if let Some(meshes) = self.meshes.take() {
+            meshes.destroy(&mut self.renderer);
         }
         self.renderer.destroy_scene_target(self.target);
     }
@@ -3629,6 +3660,18 @@ fn build_group(
     for step in 0..particles.iter().map(|group| group.prewarm_steps).max().unwrap_or(0) {
         advance_particles(&mut particles, 1.0 / 30.0, None, (&[], &[]), Some(step));
     }
+    let meshes = if model.scripts.is_some() && !model.mesh_materials.is_empty() {
+        let materials = std::mem::take(&mut model.mesh_materials);
+        let object_order = std::mem::take(&mut model.object_order);
+        let count = materials.len();
+        let meshes = meshes::Meshes::new(&mut renderer, materials, object_order, |renderer, texture| {
+            texture_interner.intern_texture(renderer, &mut textures, texture).ok()
+        })?;
+        tracing::info!(materials = count, "skwd-wall-vk: script model materials ready");
+        Some(meshes)
+    } else {
+        None
+    };
     let referenced: BTreeSet<String> = fx
         .iter()
         .flat_map(|layer| &layer.binds)
@@ -3814,6 +3857,8 @@ fn build_group(
         fixed_daytime: None,
         canvas: (dimensions.logical[0], dimensions.logical[1]),
         clear: model.clear,
+        meshes,
+        shared_targets: HashMap::new(),
     };
     if group.audio.is_some() {
         seed_bands(&mut group.scene_uniforms);
@@ -3857,6 +3902,7 @@ fn build_group(
         effect_target_bytes_before,
         memory.retained_bytes + memory.transient_bytes + memory.released_transient_bytes
     );
+    group.share_named_targets();
     debug_assert_eq!(
         effect_target_bytes_before,
         effect_target_bytes_after + memory.released_transient_bytes + alias.released_bytes

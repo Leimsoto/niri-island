@@ -238,15 +238,9 @@ void Backdrop::set(const std::string& path) {
     workshop::Item project;
     if (item) workshop::read_item(path, project);
 
-    // A scene the engine cannot draw yet (it would stay black): its preview, still.
     std::string still_src = path;
-    if (item && project.type == "scene" && workshop::unsupported(path) && !project.preview.empty()) {
-        still_src = project.preview;
-        if (on_error) on_error("Este fondo usa funciones que el motor aún no tiene: se queda su imagen");
-        item = false;
-    }
     // Wallpaper Engine scenes and videos, and plain videos: our engine.
-    else if ((item && engine::renders(project.type)) || (!item && is_video(path) && engine::installed())) {
+    if ((item && engine::renders(project.type)) || (!item && is_video(path) && engine::installed())) {
         bool muted = !item || !config().wallpaper_engine_audio;
         auto err = std::make_shared<std::string>();
         engine::Kind kind = item ? engine::Kind::Engine : engine::Kind::Video;

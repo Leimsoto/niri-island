@@ -592,7 +592,6 @@ void WallPicker::draw_panel(cairo_t* cr, float W, float H, float fade) {
         if (w.ws_size) chip("󰋊", human_size(w.ws_size), p.text_dim);
         if (w.ws_subs) chip("󰋑", human_count(w.ws_subs), p.text_dim);
         if (w.installed) chip("󰄬", "", p.accent);
-        if (w.unsupported) chip("󰀦", "", Color{0.95f, 0.7f, 0.25f, 1});  // only its picture
     } else if (w.remote) {
         if (file_exists(wh_full_path(w))) chip("󰄬", "", p.accent);
     }

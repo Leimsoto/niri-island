@@ -618,6 +618,53 @@ pub fn color_blend_effect(
     Some(Effect { name: COLOR_BLEND_EFFECT.into(), passes, fbos: Vec::new(), swaps: Vec::new() })
 }
 
+/// A material a script's model draws with (`createModelData` shapes): its
+/// shader pass, plus how it blends and uses depth. Unlike an effect's, its
+/// first texture is a real input (a render target or an asset), not the
+/// layer underneath.
+pub struct MeshMaterial {
+    pub pass: EffectPass,
+    pub blend: crate::particles::ParticleBlend,
+    pub depth_test: bool,
+    pub depth_write: bool,
+    pub cull_back: bool,
+}
+
+pub fn mesh_material(pkg: &Package, assets: &Assets, material_path: &str) -> Option<MeshMaterial> {
+    let material = pkg.find_json(material_path).ok().flatten().or_else(|| {
+        assets.read(material_path).and_then(|text| crate::json::parse(text.as_bytes()).ok())
+    })?;
+    let first = material.get("passes")?.as_array()?.first()?.clone();
+    let mut pass = build_material(pkg, assets, &material, None, None, None)?.into_iter().next()?;
+    // the first texture: a target to bind, or an asset to load into slot 0
+    if let Some(name) = first.get("textures").and_then(Value::as_array).and_then(|t| t.first()).and_then(Value::as_str)
+        && !name.is_empty()
+    {
+        if name.starts_with("_rt_") {
+            pass.binds.retain(|(slot, _)| *slot != 0);
+            pass.binds.push((0, EffectBind::Named(name.to_owned())));
+        } else if let Some(texture) = texture_slot(pkg, assets, Some(name)) {
+            if pass.textures.is_empty() {
+                pass.textures.push(None);
+            }
+            pass.textures[0] = Some(texture);
+        }
+    }
+    let flag = |key: &str, default: bool| {
+        first.get(key).and_then(Value::as_str).map_or(default, |v| v.eq_ignore_ascii_case("enabled"))
+    };
+    let blending = first.get("blending").and_then(Value::as_str).unwrap_or("normal");
+    let blend = if blending.eq_ignore_ascii_case("translucent") {
+        crate::particles::ParticleBlend::Translucent
+    } else if blending.eq_ignore_ascii_case("additive") {
+        crate::particles::ParticleBlend::Additive
+    } else {
+        crate::particles::ParticleBlend::Normal
+    };
+    let cull_back = first.get("cullmode").and_then(Value::as_str).is_some_and(|v| v.eq_ignore_ascii_case("normal"));
+    Some(MeshMaterial { pass, blend, depth_test: flag("depthtest", false), depth_write: flag("depthwrite", false), cull_back })
+}
+
 pub fn particle_pass(
     pkg: &Package,
     assets: &Assets,
@@ -867,6 +914,14 @@ fn build_material(
                 )
             });
         let values = resolve_material_names(&values, &fragment.uniforms);
+        // A first texture named after a target (`_rt_FullFrameBuffer`, a
+        // shared target) replaces the layer underneath, as in Wallpaper Engine.
+        if let Some(Some(name)) = names.first()
+            && name.starts_with("_rt_")
+        {
+            self_binds.retain(|(slot, _)| *slot != 0);
+            self_binds.push((0, EffectBind::parse(name, own_id)));
+        }
         for (slot, name) in names.iter().enumerate().skip(1) {
             let Some(name) = name else {
                 continue;

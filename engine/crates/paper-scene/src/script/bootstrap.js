@@ -240,7 +240,7 @@ const engine = {
     AUDIO_RESOLUTION_16:16,AUDIO_RESOLUTION_32:32,AUDIO_RESOLUTION_64:64,
     isDesktopDevice:()=>true,isMobileDevice:()=>false,isWallpaper:()=>true,isScreensaver:()=>false,
     isPortrait:()=>engine.canvasSize.y>engine.canvasSize.x,isLandscape:()=>engine.canvasSize.y<=engine.canvasSize.x,
-    registerAsset:file=>({file:String(file)}),
+    registerAsset:file=>{ __registerAsset(String(file)); return {file:String(file)}; },
     openUserShortcut:()=>false,
     get timeOfDay(){const d=new Date();return (d.getHours()*3600+d.getMinutes()*60+d.getSeconds())/86400;},
     registerAudioBuffers: size => { if (!Number.isInteger(size) || size < 1 || size > 128) throw Error('Invalid audio buffer size'); let b = __audio.get(size); if (!b) { b = {left:new Float32Array(size),right:new Float32Array(size),average:new Float32Array(size)}; __audio.set(size,b); } return {left:b.left.subarray(),right:b.right.subarray(),average:b.average.subarray()}; },
@@ -264,13 +264,60 @@ const thisScene = {
     getLayer: key => __layers.find(l => l.name === key || String(l.id) === String(key)),
     getLayerCount: () => __layers.length,
     enumerateLayers: () => [...__layers],
-    getLayerIndex: layer => __layers.indexOf(__layerOf(layer)),
+    getLayerIndex: layer => layer && layer.__mesh ? layer.__index : __layers.indexOf(__layerOf(layer)),
     getLayerByIndex: index => __layers[index],
     getInitialLayerConfig: layer => { const i = __layers.indexOf(__layerOf(layer)); return i >= 0 ? JSON.parse(JSON.stringify(__initial[i] ?? {})) : undefined; },
     destroyLayer: layer => { const l = __layerOf(layer); if (!l) return false; l.visible = false; return true; },
-    sortLayer: () => { throw Error('SceneScript layer reordering is not implemented'); },
-    createLayer: () => { throw Error('SceneScript dynamic layer creation is not implemented'); }
+    sortLayer: (layer, index) => {
+        if (layer && layer.__mesh) { layer.__index = Number(index); __meshLayerSort(layer.__mesh, Math.floor(Number(index))); return; }
+        throw Error('SceneScript reordering of scene layers is not implemented');
+    },
+    createModelData: desc => new __ModelData(desc || {}),
+    createLayer: config => __createLayer(config || {})
 };
+// Models a script builds itself: their buffers go to the renderer as they are
+// (typed arrays, no copies through JSON), and layers that show them.
+const IModelData = {POSITION:'position', NORMAL:'normal', TANGENT:'tangent', UV:'uv', TEXCOORD:'uv', COLOR:'color'};
+Object.assign(globalThis, {IModelData});
+let __modelIds = 0, __meshLayerIds = 0;
+const __meshLayers = [];
+class __ModelData {
+    constructor(desc) {
+        this.id = ++__modelIds;
+        this.shapeCount = 0;
+        (desc.shapes || []).forEach((shape, i) => {
+            const format = (shape.vertexFormat || [IModelData.POSITION]).map(String);
+            const material = shape.material && typeof shape.material === 'object' ? shape.material.file : shape.material;
+            if (!__meshShape(this.id, i, String(material ?? ''), format, shape.vertexBuffer, shape.indexBuffer ?? []))
+                throw Error('createModelData: shape ' + i + ' was refused (buffers missing or too large)');
+            this.shapeCount++;
+        });
+    }
+    applyData(data) {
+        if (!data) return;
+        if (data.vertexBuffer) __meshVertices(this.id, 0, data.vertexBuffer);
+        if (Array.isArray(data.shapes)) data.shapes.forEach((shape, i) => { if (shape && shape.vertexBuffer) __meshVertices(this.id, i, shape.vertexBuffer); });
+    }
+}
+function __createLayer(config) {
+    const base = {name: String(config.name ?? ''), origin: new Vec3(0), scale: new Vec3(1), angles: new Vec3(0), alpha: 1, color: new Vec3(1)};
+    if (!(config.model instanceof __ModelData)) {
+        // other kinds (text, images) are not built yet: an inert layer, never shown
+        let shown = false;
+        return Object.defineProperty(base, 'visible', {get() { return shown; }, set(v) { shown = !!v; }, enumerable: true});
+    }
+    const id = ++__meshLayerIds;
+    __meshLayer(id, config.model.id, base.name);
+    let shown = config.visible !== false;
+    if (!shown) __meshLayerVisible(id, false);
+    // (accessors defined, not assigned: Object.assign would copy their value)
+    const layer = Object.assign(base, {__mesh: id, __index: __layers.length, model: config.model});
+    Object.defineProperty(layer, 'visible', {enumerable: true,
+        get() { return shown; },
+        set(v) { v = !!v; if (v !== shown) { shown = v; __meshLayerVisible(id, v); } }});
+    __meshLayers.push(layer);
+    return layer;
+}
 const __generalDefaults = {bloom:false, bloomstrength:2, bloomthreshold:0.65, bloomtint:'1 1 1', clearenabled:true, clearcolor:'0 0 0', ambientcolor:'0.3 0.3 0.3', skylightcolor:'0.3 0.3 0.3',
     fov:50, nearz:0.01, farz:10000, zoom:1, camerafade:false, camerashake:false, camerashakespeed:1, camerashakeamplitude:1, camerashakeroughness:1,
     cameraparallax:false, cameraparallaxamount:0.5, cameraparallaxdelay:0.1, cameraparallaxmouseinfluence:0.5};
