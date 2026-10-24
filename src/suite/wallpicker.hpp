@@ -1,6 +1,8 @@
 #pragma once
 
 #include <functional>
+#include <memory>
+#include <nlohmann/json_fwd.hpp>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -22,6 +24,12 @@ struct Wallpaper {
     bool mature = false;            // wallhaven sketchy / nsfw
     float hue = -1, sat = 0, val = 0;  // of the thumbnail's dominant colour
     int64_t mtime = 0;
+    // Steam Workshop: its id, kind (scene, video, web), size, subscribers;
+    // what Steam has of it; download progress (-1: none going)
+    std::string ws_id, ws_type;
+    uint64_t ws_size = 0, ws_subs = 0;
+    bool subscribed = false, installed = false;
+    float progress = -1;
     bool moving() const { return video || engine; }
     // what to show it with: the file itself, or a still of it
     const std::string& image() const { return moving() ? thumb : path; }
@@ -30,13 +38,15 @@ struct Wallpaper {
 // Every wallpaper in the folders, two ways: a carousel of skewed, backlit
 // slices (the default, like skwd-wall) or a honeycomb grid with filters.
 // Applying goes through the island's backdrop (or a configured command).
+class Steam;
+
 class WallPicker : public Overlay {
 public:
-    explicit WallPicker(Wayland& wl) : Overlay(wl) {}
+    explicit WallPicker(Wayland& wl);
     ~WallPicker() override;
     void show();
     void show_wallhaven() { set_remote(true); }
-    void show_engine(bool on = true);  // only the Wallpaper Engine items (or back to the rest)
+    void show_engine(bool on = true);  // the Steam source: Wallpaper Engine downloads, the Workshop
     void prewarm();
     void backdrop_shown(const std::string& path);
     void dismiss() { slices_close(false); }
@@ -59,7 +69,7 @@ private:
     std::vector<int> visible_;
     bool scanning_ = false;
     int thumbs_left_ = 0;
-    int kind_ = 0;          // 0 all, 1 images, 2 videos (none of them Wallpaper Engine), 3 Wallpaper Engine
+    int kind_ = 0;          // 0 all, 1 images, 2 videos (Wallpaper Engine items live in the Steam source)
     int hue_ = -1;          // -1 any, 0..11 hue buckets, 12 greys
     std::string search_;
     int sel_ = -1;
@@ -134,6 +144,53 @@ private:
         int rows = (static_cast<int>(visible_.size()) + grid_cols_ - 1) / std::max(1, grid_cols_);
         return rows * grid_row_h_;
     }
+
+    // ── Steam: Wallpaper Engine downloads, or the Workshop (a grid, like wallhaven) ──
+    bool steam_ = false;
+    bool ws_browse_ = false;  // the Workshop's results rather than the downloads
+    int ws_sort_ = 0, ws_page_ = 0, ws_gen_ = 0;  // trend, newest, votes, subscribers
+    bool ws_mature_ = false, ws_loading_ = false, ws_more_ = true;
+    std::string ws_query_, ws_error_;
+    uint64_t ws_timer_ = 0;
+    std::string ws_apply_after_;  // to apply once it is downloaded
+    std::unique_ptr<Steam> steam_proc_;
+    void set_steam(bool on);
+    void ws_downloads();          // walls_ = the downloaded items
+    void ws_set_browse(bool on);
+    void ws_fetch(bool more);
+    bool ws_helper();             // the helper, started if needed
+    void ws_event(const nlohmann::json& ev);
+    void ws_get(int index, bool apply_after);
+    void ws_unsubscribe(int index);
+    void ws_thumbs(int gen);
+    void ws_type_key(xkb_keysym_t sym, const std::string& utf8, bool& used);
+    bool grid_mode() const { return remote_ || steam_; }
+
+    // ── the side panel: one click on a card in the grid ──
+    bool panel_ = false;
+    Spring panel_t_{0, 300, 28};
+    int panel_index_ = -1;  // into walls_
+    std::vector<cairo_surface_t*> anim_;  // its animated preview (a GIF), made by a worker
+    std::vector<int> anim_ms_;
+    std::string anim_key_;
+    double anim_t0_ = 0;
+    void open_panel(int vis);
+    void close_panel();
+    void free_anim();
+    void draw_panel(cairo_t* cr, float W, float H, float fade);
+    void panel_primary(int index);  // ✓ / ▶ / ⬇: whatever finishes it
+    static constexpr float kPanelW = 360;
+
+    // ── trying one on the desktop: the picker steps aside; ✓ keeps it, ✕ goes back ──
+    bool trying_ = false;
+    Spring try_t_{0, 320, 30};
+    std::string try_prev_, try_path_;
+    int try_index_ = -1;
+    bool try_busy_ = false;  // fetching the full picture first
+    void try_on(int index);
+    void try_end(bool keep);
+    void draw_try(cairo_t* cr, float W, float H);
+    std::string wh_full_path(const Wallpaper& w) const;  // wallhaven: its full picture in the cache
 
     void scan();
     void refilter();

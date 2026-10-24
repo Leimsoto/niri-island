@@ -22,6 +22,10 @@ void stop();  // nothing shown any more; the server exits
 void set_paused(bool paused);
 void set_muted(bool muted);
 
+// A still of a Wallpaper Engine folder or a video, rendered offscreen as a
+// PNG (1280×720 at most); no server needed.
+bool capture(const std::string& source, const std::string& png);
+
 // Kinds of Wallpaper Engine project it renders (the rest: web, for now elsewhere).
 bool renders(const std::string& project_type);
 

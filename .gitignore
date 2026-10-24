@@ -1,5 +1,6 @@
-build/
 build-*/
+build/
+build-dbg/
 .cache/
-*.o
 engine/target/
+*.o

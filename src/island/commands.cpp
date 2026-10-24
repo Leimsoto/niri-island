@@ -184,6 +184,14 @@ std::string App::command(const std::string& line) {
         wallpicker_.inject_click(std::stof(a[1]), std::stof(a[2]));
         return "ok";
     }
+    if (c == "debug-picker-key" && a.size() >= 2) {
+        // a key name (Escape, Return, Tab, Left…) or text to type
+        xkb_keysym_t sym = xkb_keysym_from_name(a[1].c_str(), XKB_KEYSYM_CASE_INSENSITIVE);
+        if (sym != XKB_KEY_NoSymbol && a[1].size() > 1) wallpicker_.inject_key(sym);
+        else
+            for (char ch : rest.substr(rest.find(a[1]))) wallpicker_.inject_key(static_cast<xkb_keysym_t>(ch), std::string(1, ch));
+        return "ok";
+    }
     if (c == "debug-demo") {
         demo_ = a.size() < 2 || a[1] != "off";
         lock_.name_override = demo_ ? "Usuario" : "";

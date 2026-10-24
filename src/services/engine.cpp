@@ -5,6 +5,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <nlohmann/json.hpp>
+
 #include "core/proc.hpp"
 #include "core/util.hpp"
 
@@ -82,6 +84,14 @@ void set_paused(bool paused) {
 
 void set_muted(bool muted) {
     if (installed() && running()) run({"audio", "--mute", muted ? "true" : "false"}, 8000);
+}
+
+bool capture(const std::string& source, const std::string& png) {
+    if (!installed()) return false;
+    nlohmann::json req = {{"source", source}, {"destination", png}};
+    std::string in = req.dump() + "\n";
+    auto r = proc::run({binary(), "capture-scenes"}, 30000, &in);
+    return r.ok() && file_exists(png);
 }
 
 bool renders(const std::string& type) { return type == "scene" || type == "video"; }

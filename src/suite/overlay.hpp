@@ -40,6 +40,11 @@ public:
         }
         request();
     }
+    // A key as if typed into it (tests: never real keystrokes, they land elsewhere).
+    void inject_key(xkb_keysym_t sym, const std::string& utf8 = "") {
+        key(sym, utf8, 0);
+        request();
+    }
     void inject_scroll(float x, float y, float steps) {
         ui_.motion(x, y);
         if (!ui_.scroll(steps)) canvas_scroll(steps);

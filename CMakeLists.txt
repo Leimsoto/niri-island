@@ -75,7 +75,8 @@ target_link_libraries(niri-island PRIVATE island-core)
 
 install(TARGETS niri-island RUNTIME DESTINATION bin)
 
-# The wallpaper engine (Rust, engine/): Wallpaper Engine scenes and videos.
+# The wallpaper engine (Rust, engine/): Wallpaper Engine scenes and videos;
+# and the Steam Workshop helper.
 option(NIRI_ISLAND_ENGINE "Build niri-island-engine (needs cargo)" ON)
 find_program(CARGO cargo)
 if(NIRI_ISLAND_ENGINE AND CARGO)
@@ -83,11 +84,14 @@ if(NIRI_ISLAND_ENGINE AND CARGO)
     add_custom_target(engine ALL
         COMMAND ${CARGO} build --release --workspace --manifest-path ${CMAKE_CURRENT_SOURCE_DIR}/engine/Cargo.toml
                 --target-dir ${CMAKE_CURRENT_BINARY_DIR}/engine
+        # the Steam helper finds libsteam_api.so next to itself
+        COMMAND ${CMAKE_COMMAND} -DOUT=${ENGINE_OUT} -P ${CMAKE_CURRENT_SOURCE_DIR}/engine/copy-steam-lib.cmake
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/engine
         USES_TERMINAL
-        COMMENT "cargo: niri-island-engine")
+        COMMENT "cargo: niri-island-engine, niri-island-steam")
     install(PROGRAMS ${ENGINE_OUT}/niri-island-engine ${ENGINE_OUT}/niri-island-engine-vk ${ENGINE_OUT}/niri-island-engine-still
-            DESTINATION bin)
+            ${ENGINE_OUT}/niri-island-steam DESTINATION bin)
+    install(FILES ${ENGINE_OUT}/libsteam_api.so DESTINATION bin)
 endif()
 
 # Tests: cmake --build build && ctest --test-dir build --output-on-failure

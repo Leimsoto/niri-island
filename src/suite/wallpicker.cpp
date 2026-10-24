@@ -14,6 +14,8 @@
 #include "core/config.hpp"
 #include "core/loop.hpp"
 #include "core/proc.hpp"
+#include "services/engine.hpp"
+#include "services/steam.hpp"
 #include "services/waywallen.hpp"
 #include "services/images.hpp"
 #include "ui/paint.hpp"
@@ -117,7 +119,9 @@ bool save_thumb(GdkPixbuf* pb, const std::string& jpg, const std::string& png, s
 
 bool make_thumb(Wallpaper& w, const std::string& dir) {
     char name[40];
-    snprintf(name, sizeof(name), "%016llx", static_cast<unsigned long long>(hash_str(w.path + std::to_string(w.mtime))));
+    // (Wallpaper Engine items: rendered by the engine, a new name for the old GIF-made ones)
+    std::string key = w.path + std::to_string(w.mtime) + (w.engine ? "#engine" : "");
+    snprintf(name, sizeof(name), "%016llx", static_cast<unsigned long long>(hash_str(key)));
     std::string jpg = dir + "/" + name + ".jpg", png = dir + "/" + name + ".png";
     std::string out = file_exists(jpg) ? jpg : file_exists(png) ? png : "";
     if (out == png) {
@@ -143,8 +147,14 @@ bool make_thumb(Wallpaper& w, const std::string& dir) {
             if (!file_exists(jpg)) return false;
             out = jpg;
         } else {
-            GError* err = nullptr;  // (an item's preview: a GIF gives its first frame)
-            const std::string& src = w.engine ? w.preview : w.path;
+            // A Wallpaper Engine item: the engine renders a sharp still (its
+            // preview is a GIF of 192 px or so, which stays the fallback).
+            std::string src = w.engine ? w.preview : w.path, still;
+            if (w.engine) {
+                still = dir + "/" + name + ".still.png";
+                if (engine::capture(w.path, still)) src = still;
+            }
+            GError* err = nullptr;
             GdkPixbuf* pb = gdk_pixbuf_new_from_file_at_scale(src.c_str(), 520, 520, TRUE, &err);
             if (!pb) {
                 if (err) g_error_free(err);
@@ -152,6 +162,7 @@ bool make_thumb(Wallpaper& w, const std::string& dir) {
             }
             bool ok = save_thumb(pb, jpg, png, out);
             g_object_unref(pb);
+            if (!still.empty()) unlink(still.c_str());
             if (!ok) return false;
         }
     }
@@ -196,6 +207,7 @@ std::string WallPicker::current_wallpaper() const {
     return j.is_object() ? j.value("path", "") : "";
 }
 
+WallPicker::WallPicker(Wayland& wl) : Overlay(wl) {}
 WallPicker::~WallPicker() { free_caches(); }
 
 void WallPicker::show() {
@@ -207,6 +219,9 @@ void WallPicker::show() {
 }
 
 void WallPicker::closed() {
+    if (trying_) try_end(false);  // closed while trying: the previous one comes back
+    if (steam_proc_) steam_proc_->stop();
+    free_anim();
     // keep the slices and lights (the next opening is instant); drop the big copy
     if (big_fit_) {
         cairo_surface_destroy(big_fit_);
@@ -228,11 +243,15 @@ void WallPicker::closed() {
 void WallPicker::opened() {
     open_t0_ = now_mono();
     inserting_ = inserted_ = moved_ = leaving_ = left_ = false;
-    if (remote_) {  // always open on the local folders
-        remote_ = false;
+    if (remote_ || steam_) {  // always open on the local folders
+        remote_ = steam_ = ws_browse_ = false;
         walls_ = std::move(local_walls_);
         local_walls_.clear();
     }
+    panel_ = trying_ = try_busy_ = false;
+    panel_t_.reset(0);
+    try_t_.reset(0);
+    panel_index_ = -1;
     downloading_ = false;
     backdrop_ready_ = false;
     applied_path_.clear();
@@ -240,7 +259,6 @@ void WallPicker::opened() {
     kind_ = 0;
     hue_ = -1;
     current_ = current_wallpaper();
-    if (waywallen::is_item(current_)) kind_ = 3;  // open where the current one is
     search_.clear();
     if (walls_.empty()) scan();
     else {
@@ -250,6 +268,7 @@ void WallPicker::opened() {
     // Start the selection on the wallpaper in use.
     for (size_t i = 0; i < visible_.size(); ++i)
         if (walls_[visible_[i]].path == current_) sel_ = static_cast<int>(i);
+    if (waywallen::is_item(current_)) set_steam(true);  // open where the current one is
     pos_.reset(static_cast<float>(std::max(0, sel_)));
     colpos_.reset(static_cast<float>(std::max(0, sel_) / kTileRows));
 }
@@ -276,6 +295,8 @@ void WallPicker::scan() {
                     w.name = it.title;
                     w.preview = it.preview;
                     w.engine = true;
+                    w.ws_type = it.type;
+                    w.ws_id = it.dir.substr(it.dir.rfind('/') + 1);
                     w.mtime = static_cast<int64_t>(st.st_mtime);
                     found->push_back(std::move(w));
                 }
@@ -313,13 +334,15 @@ void WallPicker::scan() {
                     w.val = it->second->val;
                 }
             }
-            if (remote_) {  // browsing wallhaven: the local list waits
+            has_engine_ = std::any_of(found->begin(), found->end(), [](const Wallpaper& w) { return w.engine; });
+            if (remote_ || steam_) {  // browsing wallhaven or Steam: the local list waits
                 local_walls_ = std::move(*found);
+                if (steam_ && !ws_browse_) ws_downloads();  // (its downloads come from it)
                 scanning_ = false;
+                request();
                 return;
             }
             walls_ = std::move(*found);
-            has_engine_ = std::any_of(walls_.begin(), walls_.end(), [](const Wallpaper& w) { return w.engine; });
             refilter();
             for (size_t i = 0; i < visible_.size(); ++i)
                 if (walls_[visible_[i]].path == current_ && (sel_ < 0 || !moved_)) sel_ = static_cast<int>(i);
@@ -382,15 +405,24 @@ void WallPicker::scan() {
 
 void WallPicker::refilter() {
     std::string q = lower(search_);
-    std::string keep = sel_ >= 0 && sel_ < static_cast<int>(visible_.size()) ? walls_[visible_[sel_]].path : "";
+    // (visible_ may still index a list just swapped out: check before reading)
+    std::string keep = sel_ >= 0 && sel_ < static_cast<int>(visible_.size()) &&
+                               visible_[sel_] < static_cast<int>(walls_.size())
+                           ? walls_[visible_[sel_]].path
+                           : "";
     visible_.clear();
     for (size_t i = 0; i < walls_.size(); ++i) {
         const auto& w = walls_[i];
-        if (w.remote) {  // wallhaven filters on its side
+        if (w.remote || (steam_ && ws_browse_)) {  // wallhaven and the Workshop filter on their side
             visible_.push_back(static_cast<int>(i));
             continue;
         }
-        if ((kind_ == 3) != w.engine) continue;  // Wallpaper Engine apart from the rest
+        if (steam_) {  // the downloads: by name, as typed
+            if (!ws_query_.empty() && lower(w.name).find(lower(ws_query_)) == std::string::npos) continue;
+            visible_.push_back(static_cast<int>(i));
+            continue;
+        }
+        if (w.engine) continue;  // Wallpaper Engine lives in the Steam source
         if (kind_ == 1 && w.moving()) continue;
         if (kind_ == 2 && !w.video) continue;
         if (!q.empty() && lower(w.name).find(q) == std::string::npos) continue;
@@ -432,10 +464,13 @@ void WallPicker::apply(int index, bool stay) {
 }
 
 void WallPicker::canvas_scroll(float dy) {
-    if (remote_) {
+    if (grid_mode()) {
         float max = std::max(0.0f, grid_content_h() - grid_view_h_);
         grid_scroll_.set(std::clamp(grid_scroll_.target + dy * 90, 0.0f, max));
-        if (grid_scroll_.target > max - grid_row_h_ * 2) wh_fetch(true);
+        if (grid_scroll_.target > max - grid_row_h_ * 2) {
+            if (remote_) wh_fetch(true);
+            else ws_fetch(true);
+        }
         request();
         return;
     }
@@ -444,7 +479,8 @@ void WallPicker::canvas_scroll(float dy) {
 }
 
 bool WallPicker::animating() const {
-    return inserting_ || leaving_ || wh_loading_ || remote_ || !pos_.settled() || !colpos_.settled() ||
+    return inserting_ || leaving_ || wh_loading_ || ws_loading_ || grid_mode() || trying_ || !pos_.settled() ||
+           !colpos_.settled() || !panel_t_.settled() || !try_t_.settled() ||
            now_mono() - open_t0_ < 1.3 || (filter_t0_ > 0 && now_mono() - filter_t0_ < 0.4);
 }
 

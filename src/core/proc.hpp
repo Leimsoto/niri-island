@@ -29,6 +29,9 @@ struct Child {
     int pidfd = -1;
 };
 Child start(const std::vector<std::string>& argv, const std::string& log);
+// Like start(), but its stdin and stdout are pipes back to us (`in` to write
+// to it, `out` to read from it; both non-blocking, close-on-exec).
+Child start_piped(const std::vector<std::string>& argv, int& in, int& out, const std::string& log);
 // Reaps a supervised child; returns its exit status (or -1).
 int reap(Child& c);
 

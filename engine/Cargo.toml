@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/island-steam",
     "crates/paper-audio",
     "crates/paper-cli",
     "crates/paper-control",

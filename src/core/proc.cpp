@@ -189,6 +189,44 @@ Child start(const std::vector<std::string>& argv, const std::string& log) {
     return c;
 }
 
+Child start_piped(const std::vector<std::string>& argv, int& in, int& out, const std::string& log) {
+    Child c;
+    in = out = -1;
+    if (argv.empty()) return c;
+    int to[2], from[2];
+    if (pipe2(to, O_CLOEXEC) < 0) return c;
+    if (pipe2(from, O_CLOEXEC) < 0) {
+        close(to[0]);
+        close(to[1]);
+        return c;
+    }
+    auto args = make_argv(argv);
+    pid_t pid = fork();
+    if (pid < 0) {
+        for (int fd : {to[0], to[1], from[0], from[1]}) close(fd);
+        return c;
+    }
+    if (pid == 0) {
+        reset_child_signals();
+        setpgid(0, 0);
+        int lf = open(log.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+        dup2(to[0], STDIN_FILENO);
+        dup2(from[1], STDOUT_FILENO);
+        if (lf >= 0) dup2(lf, STDERR_FILENO);
+        execvp(args[0], args.data());
+        _exit(127);
+    }
+    close(to[0]);
+    close(from[1]);
+    fcntl(to[1], F_SETFL, O_NONBLOCK);
+    fcntl(from[0], F_SETFL, O_NONBLOCK);
+    in = to[1];
+    out = from[0];
+    c.pid = pid;
+    c.pidfd = static_cast<int>(syscall(SYS_pidfd_open, pid, 0));
+    return c;
+}
+
 int reap(Child& c) {
     int status = 0, code = -1;
     if (c.pid > 0 && waitpid(c.pid, &status, 0) == c.pid && WIFEXITED(status)) code = WEXITSTATUS(status);

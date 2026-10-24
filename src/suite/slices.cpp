@@ -18,6 +18,7 @@
 #include "core/loop.hpp"
 #include "core/proc.hpp"
 #include "services/images.hpp"
+#include "services/steam.hpp"
 #include "suite/wallpicker.hpp"
 #include "ui/paint.hpp"
 #include "ui/theme.hpp"
@@ -633,13 +634,10 @@ const char* kWhColors[13] = {"cc0000", "ff6600", "ffcc33", "cccc33", "77cc33", "
                              "0099cc", "0066cc", "333399", "993399", "ea4c88", "999999"};
 }  // namespace
 
-void WallPicker::show_engine(bool on) {
-    if (on && remote_) set_remote(false);
-    set_filter(on ? 3 : 0, hue_);
-}
-
 void WallPicker::set_remote(bool on) {
     if (on == remote_ || inserting_ || leaving_) return;
+    if (on && steam_) set_steam(false);
+    close_panel();
     remote_ = on;
     if (on) {
         local_walls_ = std::move(walls_);
@@ -652,6 +650,7 @@ void WallPicker::set_remote(bool on) {
         wh_loading_ = false;
         walls_ = std::move(local_walls_);
         local_walls_.clear();
+        visible_.clear();
         refilter();
         sel_ = 0;
         for (size_t i = 0; i < visible_.size(); ++i)
@@ -811,9 +810,13 @@ void WallPicker::slices_move(int delta) {
     moved_ = true;
     pos_.set(static_cast<float>(sel_));
     colpos_.set(static_cast<float>(sel_ / kTileRows));
-    if (remote_) {
+    if (grid_mode()) {
         grid_reveal(sel_);
-        if (sel_ > n - grid_cols_ * 2) wh_fetch(true);
+        if (sel_ > n - grid_cols_ * 2) {
+            if (remote_) wh_fetch(true);
+            else ws_fetch(true);
+        }
+        if (panel_) open_panel(sel_);  // the panel follows the selection
     }
     request();
 }
@@ -842,6 +845,11 @@ void WallPicker::slices_close(bool apply_it) {
         request();
         return;
     }
+    if (steam_ && walls_[visible_[sel_]].remote) {  // not downloaded: get it, applied when done
+        ws_get(visible_[sel_], true);
+        return;
+    }
+    close_panel();
     inserting_ = true;
     ins_t0_ = now_mono();
     ins_index_ = sel_;
@@ -853,6 +861,30 @@ void WallPicker::slices_close(bool apply_it) {
 }
 
 void WallPicker::key_slices(xkb_keysym_t sym, const std::string& utf8) {
+    if (trying_) {  // only yes or no
+        if (sym == XKB_KEY_Escape) try_end(false);
+        else if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) try_end(true);
+        return;
+    }
+    if (sym == XKB_KEY_Escape && panel_) {
+        close_panel();
+        return;
+    }
+    if (steam_) {
+        bool used = false;
+        ws_type_key(sym, utf8, used);
+        if (used) return;
+        if (sym == XKB_KEY_Escape) {
+            if (ws_browse_) ws_set_browse(false);
+            else set_steam(false);
+            return;
+        }
+        if (sym == XKB_KEY_Tab && ws_browse_) {
+            ws_sort_ = (ws_sort_ + 1) % 4;
+            ws_fetch(false);
+            return;
+        }
+    }
     if (remote_) {
         // typing searches wallhaven (after a short pause)
         bool edit = false;
@@ -884,16 +916,16 @@ void WallPicker::key_slices(xkb_keysym_t sym, const std::string& utf8) {
         // in the honeycomb and the cards, sideways is a column, up/down a row
         case XKB_KEY_Left:
         case XKB_KEY_h:
-        case XKB_KEY_a: slices_move(remote_ || style_ == 0 ? -1 : -kTileRows); return;
+        case XKB_KEY_a: slices_move(grid_mode() || style_ == 0 ? -1 : -kTileRows); return;
         case XKB_KEY_Right:
         case XKB_KEY_l:
-        case XKB_KEY_d: slices_move(remote_ || style_ == 0 ? 1 : kTileRows); return;
+        case XKB_KEY_d: slices_move(grid_mode() || style_ == 0 ? 1 : kTileRows); return;
         case XKB_KEY_Up:
-            if (remote_) slices_move(-grid_cols_);
+            if (grid_mode()) slices_move(-grid_cols_);
             else if (style_ != 0) slices_move(-1);
             return;
         case XKB_KEY_Down:
-            if (remote_) slices_move(grid_cols_);
+            if (grid_mode()) slices_move(grid_cols_);
             else if (style_ != 0) slices_move(1);
             return;
         case XKB_KEY_w:
@@ -906,7 +938,7 @@ void WallPicker::key_slices(xkb_keysym_t sym, const std::string& utf8) {
             if (remote_) {
                 wh_sort_ = (wh_sort_ + 1) % 4;
                 wh_fetch(false);
-            } else if (kind_ != 3) {
+            } else {
                 set_filter((kind_ + 1) % 3, hue_);
             }
             return;
@@ -933,114 +965,140 @@ void WallPicker::draw_filter_bar(cairo_t* cr, float W, float H, float t_in) {
     if (t_in <= 0.01f) return;
     float k = ease_out_back(t_in);
     const int ncol = 13;
-    float bh = 42, dot = 20, dgap = 8, btn = 34;
-    float search_w = remote_ ? 210 : 0;
-    const float sep_w = 20;  // see sep() below
-    // What sits in the middle: the kinds (local), the orders and the mature
-    // shield (wallhaven), nothing for Wallpaper Engine.
-    bool kinds = !remote_ && kind_ != 3;
-    float mid_w = kinds ? 3 * btn + 2 * 4 : remote_ ? 4 * (btn + 4) + 4 + 34 : 0;
-    // the same steps as the drawing below, so the capsule fits what it holds
-    float bw = 12 + btn + (has_engine() ? 4 + btn : 0) + sep_w + (mid_w > 0 ? mid_w + sep_w : 0) +
-               (remote_ ? search_w + sep_w : 0) + ncol * dot + (ncol - 1) * dgap + 16;
-    float by = 64;
-    float iy = island_y();
-    Rect bar{std::round(W / 2 - bw / 2), std::round(lerp(iy - bh / 2, by, k)), bw, bh};
+    const float bh = 42, dot = 20, dgap = 8, btn = 34, search_w = 200;
+    bool palette = !steam_;
+    bool search = remote_ || steam_;
+    bool steam_btn = has_engine() || Steam::installed();
+    float by = 64, iy = island_y();
+    float ca = clamp01((t_in - 0.6f) / 0.3f);
+    // One pass measures, the next draws: the same steps, so the capsule
+    // always fits what it holds.
+    Rect bar{0, std::round(lerp(iy - bh / 2, by, k)), 0, bh};
+    auto layout = [&](bool paint) -> float {
+        float x = bar.x + 12;
+        auto sep = [&] {
+            x += 6;
+            if (paint) fill(cr, {x, bar.y + 11, 1, bh - 22}, 0, p.text.with_alpha(0.15f * ca));
+            x += 14;
+        };
+        auto button = [&](uint64_t id, const char* g, bool on, std::function<void()> fn) {
+            if (paint) w::icon_button(c, id, {x, bar.y + 4, btn, btn}, g, 15, on).click(std::move(fn));
+            x += btn + 4;
+        };
+        auto shield = [&](uint64_t id, int level, bool two, std::function<void()> fn) {
+            // mature content: a red shield when let in (a dot: NSFW too)
+            if (paint) {
+                Rect mr{x, bar.y + 4, btn, btn};
+                float hv = ui_.hover(id);
+                Color red{0.92f, 0.26f, 0.26f, 1};
+                if (level > 0) fill(cr, mr, 17, red.with_alpha((0.85f + 0.15f * hv) * ca));
+                else if (hv > 0.01f) fill(cr, mr, 17, p.text.with_alpha(0.08f * hv * ca));
+                glyph(cr, mr.cx(), mr.cy(), level > 0 ? "󰒘" : "󰒙", 15, (level > 0 ? Color{1, 1, 1, 1} : p.text_dim).with_alpha(ca));
+                if (two && level == 2) fill(cr, {mr.right() - 9, mr.y + 2, 8, 8}, 4, Color{1, 1, 1, ca});
+                ui_.add(id, mr).click(std::move(fn));
+            }
+            x += btn + 4;
+        };
+        // sources: wallhaven, Steam
+        button(ID("sl.remote"), "󰇚", remote_, [this] { set_remote(!remote_); });
+        if (steam_btn) button(ID("sl.engine"), "󰓓", steam_, [this] { set_steam(!steam_); });
+        x -= 4;
+        sep();
+        if (steam_) {
+            // the downloads, or the Workshop
+            button(ID("ws.here"), "󰉍", !ws_browse_, [this] { ws_set_browse(false); });
+            button(ID("ws.shop"), "󰖟", ws_browse_, [this] { ws_set_browse(true); });
+            if (ws_browse_) {
+                x -= 4;
+                sep();
+                const char* gl[4] = {"󰈸", "󰥔", "󰔓", "󰋑"};  // trending, newest, most voted, most subscribed
+                for (int i = 0; i < 4; ++i)
+                    button(ID("ws.sort", i), gl[i], ws_sort_ == i, [this, i] {
+                        if (ws_sort_ == i) return;
+                        ws_sort_ = i;
+                        ws_fetch(false);
+                    });
+                shield(ID("ws.mature"), ws_mature_ ? 1 : 0, false, [this] {
+                    ws_mature_ = !ws_mature_;
+                    ws_fetch(false);
+                });
+            }
+        } else if (remote_) {
+            const char* gl[4] = {"󰓎", "󰥔", "󰒝", "󰈈"};  // top, latest, random, most viewed
+            for (int i = 0; i < 4; ++i)
+                button(ID("sl.sort", i), gl[i], wh_sort_ == i, [this, i] {
+                    if (wh_sort_ == i) return;
+                    wh_sort_ = i;
+                    wh_fetch(false);
+                });
+            shield(ID("sl.mature"), wh_mature_, true, [this] {
+                int states = config().wallhaven_key.empty() ? 2 : 3;
+                wh_mature_ = (wh_mature_ + 1) % states;
+                wh_fetch(false);
+            });
+        } else {
+            const char* gl[3] = {"󰸉", "󰋩", "󰕧"};  // all, still, video
+            for (int i = 0; i < 3; ++i) button(ID("sl.kind", i), gl[i], kind_ == i, [this, i] { set_filter(i, hue_); });
+        }
+        x -= 4;
+        if (search) {
+            // the search: type anywhere
+            sep();
+            if (paint) {
+                const std::string& q = steam_ ? ws_query_ : wh_query_;
+                Rect sr{x, bar.y + 6, search_w, bh - 12};
+                fill(cr, sr, sr.h / 2, p.text.with_alpha(0.07f * ca));
+                glyph(cr, sr.x + 15, sr.cy(), "󰍉", 13, p.text_dim.with_alpha(ca));
+                Size ts = measure(q, {ui(12.5f)});
+                if (!q.empty()) text(cr, sr.x + 30, sr.cy() - 8, q, {ui(12.5f), p.text.with_alpha(ca), Align::Left, sr.w - 40});
+                if (std::fmod(now_mono(), 1.1) < 0.7)
+                    fill(cr, {sr.x + 31 + std::min(q.empty() ? 0.0f : ts.w, sr.w - 40), sr.cy() - 8, 1.5f, 16}, 0,
+                         p.accent.with_alpha(ca));
+            }
+            x += search_w;
+        }
+        if (palette) {
+            sep();
+            for (int i = 0; i < ncol; ++i) {
+                if (paint) {
+                    Rect r{x, bar.cy() - dot / 2, dot, dot};
+                    uint64_t id = ID("sl.hue", i);
+                    float hv = ui_.hover(id);
+                    Color col = remote_ ? Color::hex(static_cast<uint32_t>(std::stoul(kWhColors[i], nullptr, 16)))
+                              : i == 12 ? Color{0.62f, 0.62f, 0.66f, 1}
+                                        : hsv(i * 30.0f, 0.62f, 0.92f);
+                    Rect rr = r.inset(-hv * 2);
+                    fill(cr, rr, rr.w / 2, col.with_alpha(ca));
+                    if (hue_ == i) stroke(cr, r.inset(-4), (dot + 8) / 2, p.text.with_alpha(0.9f * ca), 2);
+                    ui_.add(id, r.inset(-3)).click([this, i] { set_filter(kind_, hue_ == i ? -1 : i); });
+                }
+                x += dot + (i + 1 < ncol ? dgap : 0);
+            }
+            x += 4;
+        }
+        return x + 12 - bar.x;
+    };
+    bar.w = layout(false);
+    bar.x = std::round(W / 2 - bar.w / 2);
     cairo_save(cr);
     cairo_translate(cr, W / 2, bar.cy());
     cairo_scale(cr, lerp(0.2f, 1.0f, std::min(1.0f, k)), lerp(0.7f, 1.0f, std::min(1.0f, k)));
     cairo_translate(cr, -W / 2, -bar.cy());
     float a = clamp01(t_in * 3);
     fill(cr, bar, bh / 2, p.island.with_alpha(0.9f * a));
-    if (t_in < 0.6f) {
-        cairo_restore(cr);
-        return;
-    }
-    float ca = clamp01((t_in - 0.6f) / 0.3f);
-    auto sep = [&](float& x) {
-        x += 6;
-        fill(cr, {x, bar.y + 11, 1, bh - 22}, 0, p.text.with_alpha(0.15f * ca));
-        x += 13;
-    };
-    float x = bar.x + 12;
-    // source: wallhaven on/off
-    w::icon_button(c, ID("sl.remote"), {x, bar.y + 4, btn, btn}, "󰇚", 16, remote_).click([this] { set_remote(!remote_); });
-    x += btn;
-    // source: Wallpaper Engine (the Workshop items, on their own)
-    if (has_engine()) {
-        x += 4;
-        w::icon_button(c, ID("sl.engine"), {x, bar.y + 4, btn, btn}, "󰓓", 16, !remote_ && kind_ == 3).click([this] { show_engine(kind_ != 3 || remote_); });
-        x += btn;
-    }
-    sep(x);
-    if (kinds) {
-        const char* gl[3] = {"󰸉", "󰋩", "󰕧"};  // all, still, video
-        for (int i = 0; i < 3; ++i) {
-            w::icon_button(c, ID("sl.kind", i), {x, bar.y + 4, btn, btn}, gl[i], 15, kind_ == i).click([this, i] { set_filter(i, hue_); });
-            x += btn + 4;
-        }
-    } else if (remote_) {
-        const char* gl[4] = {"󰓎", "󰥔", "󰒝", "󰈈"};  // top, latest, random, most viewed
-        for (int i = 0; i < 4; ++i) {
-            w::icon_button(c, ID("sl.sort", i), {x, bar.y + 4, btn, btn}, gl[i], 15, wh_sort_ == i).click([this, i] {
-                if (wh_sort_ == i) return;
-                wh_sort_ = i;
-                wh_fetch(false);
-            });
-            x += btn + 4;
-        }
-        // mature content: off, + sketchy, + NSFW (only with an API key); a red shield when on
-        x += 4;
-        Rect mr{x, bar.y + 4, 34, 34};
-        uint64_t mid = ID("sl.mature");
-        float hv = ui_.hover(mid);
-        Color red{0.92f, 0.26f, 0.26f, 1};
-        bool on = wh_mature_ > 0;
-        if (on) fill(cr, mr, 17, red.with_alpha((0.85f + 0.15f * hv) * ca));
-        else if (hv > 0.01f) fill(cr, mr, 17, p.text.with_alpha(0.08f * hv * ca));
-        glyph(cr, mr.cx(), mr.cy(), on ? "󰒘" : "󰒙", 15, (on ? Color{1, 1, 1, 1} : p.text_dim).with_alpha(ca));
-        if (wh_mature_ == 2) fill(cr, {mr.right() - 9, mr.y + 2, 8, 8}, 4, Color{1, 1, 1, ca});  // NSFW too
-        ui_.add(mid, mr).click([this] {
-            int states = config().wallhaven_key.empty() ? 2 : 3;
-            wh_mature_ = (wh_mature_ + 1) % states;
-            wh_fetch(false);
-        });
-        x += 34 + 4;
-    }
-    if (mid_w > 0) {
-        x -= 4;
-        sep(x);
-    }
-    if (remote_) {
-        // the search: type anywhere
-        Rect sr{x, bar.y + 6, search_w, bh - 12};
-        fill(cr, sr, sr.h / 2, p.text.with_alpha(0.07f * ca));
-        glyph(cr, sr.x + 15, sr.cy(), "󰍉", 13, p.text_dim.with_alpha(ca));
-        bool blink = std::fmod(now_mono(), 1.1) < 0.7;
-        std::string shown = wh_query_.empty() ? "" : wh_query_;
-        if (shown.empty()) text(cr, sr.x + 30, sr.cy() - 8, "Escribe para buscar", {ui(12), p.text_faint.with_alpha(ca)});
-        else {
-            Size ts = measure(shown, {ui(12.5f)});
-            text(cr, sr.x + 30, sr.cy() - 8, shown, {ui(12.5f), p.text.with_alpha(ca), Align::Left, sr.w - 40});
-            if (blink) fill(cr, {sr.x + 31 + std::min(ts.w, sr.w - 40), sr.cy() - 8, 1.5f, 16}, 0, p.accent.with_alpha(ca));
-        }
-        x += search_w;
-        sep(x);
-    }
-    for (int i = 0; i < ncol; ++i) {
-        Rect r{x, bar.cy() - dot / 2, dot, dot};
-        uint64_t id = ID("sl.hue", i);
-        float hv = ui_.hover(id);
-        Color col = remote_ ? Color::hex(static_cast<uint32_t>(std::stoul(kWhColors[i], nullptr, 16)))
-                  : i == 12 ? Color{0.62f, 0.62f, 0.66f, 1}
-                            : hsv(i * 30.0f, 0.62f, 0.92f);
-        Rect rr = r.inset(-hv * 2);
-        fill(cr, rr, rr.w / 2, col.with_alpha(ca));
-        if (hue_ == i) stroke(cr, r.inset(-4), (dot + 8) / 2, p.text.with_alpha(0.9f * ca), 2);
-        ui_.add(id, r.inset(-3)).click([this, i] { set_filter(kind_, hue_ == i ? -1 : i); });
-        x += dot + dgap;
-    }
+    if (t_in >= 0.6f) layout(true);
     cairo_restore(cr);
+    if (t_in < 0.6f) return;
+
+    // the Workshop loading: dots under the bar
+    if (steam_ && ws_loading_) {
+        float y = bar.bottom() + 22;
+        for (int i = 0; i < 3; ++i) {
+            float ph = static_cast<float>(std::fmod(now_mono() * 2.2 + i * 0.33, 1.0));
+            float s2 = 3 + 2.5f * std::sin(ph * static_cast<float>(M_PI));
+            fill(cr, {W / 2 - 18 + i * 18 - s2, y - s2, 2 * s2, 2 * s2}, s2, p.accent.with_alpha(0.9f * ca));
+        }
+    }
 
     // wallhaven status under the bar: loading dots, or a failure
     if (remote_ && (wh_loading_ || wh_failed_ || (visible_.empty() && !wh_loading_))) {
@@ -1075,12 +1133,14 @@ void WallPicker::draw_wh_grid(cairo_t* cr, float W, float H, float ie) {
     const auto& p = T();
     double now = now_mono();
     grid_scroll_.update(1.0f / 60.0f);
-    float gw = std::min(W - 120, 1560.0f);
-    grid_cols_ = gw > 1300 ? 5 : gw > 1000 ? 4 : 3;
+    // the panel, when open, takes the right side: the grid narrows to the rest
+    float side = clamp01(panel_t_.value) * (kPanelW + 24);
+    float gw = std::min(W - 120 - side, 1560.0f);
+    grid_cols_ = gw > 1300 ? 5 : gw > 1000 ? 4 : gw > 640 ? 3 : 2;
     float gap = 18;
     float cw = std::floor((gw - gap * (grid_cols_ - 1)) / grid_cols_), ch = std::round(cw * 9 / 16);
     grid_row_h_ = ch + gap;
-    Rect area{std::round(W / 2 - gw / 2), 128, gw, H - 128 - 24};
+    Rect area{std::round((W - side) / 2 - gw / 2), 128, gw, H - 128 - 24};
     grid_top_ = area.y;
     grid_view_h_ = area.h;
     int n = static_cast<int>(visible_.size());
@@ -1134,7 +1194,32 @@ void WallPicker::draw_wh_grid(cairo_t* cr, float W, float H, float ie) {
             float sh = 0.05f + 0.04f * std::sin(static_cast<float>(now) * 4 + i * 0.7f);
             fill(cr, q, 12, p.text.with_alpha(sh * fade));
         }
-        if (wp.mature) {
+        if (steam_) {
+            // what it is (scene, video, web), and whether it is here
+            if (!wp.ws_type.empty()) {
+                Rect chip{q.x + 8, q.y + 8, 26, 22};
+                fill(cr, chip, 11, Color{0, 0, 0, 0.5f * fade});
+                const char* g = wp.ws_type == "scene" ? "󰆧" : wp.ws_type == "video" ? "󰕧" : wp.ws_type == "web" ? "󰖟" : "󰋩";
+                glyph(cr, chip.cx(), chip.cy(), g, 11, Color{1, 1, 1, 0.9f * fade});
+            }
+            if (ws_browse_ && wp.installed && wp.progress < 0) {
+                Rect okr{q.right() - 30, q.y + 8, 22, 22};
+                fill(cr, okr, 11, acc.with_alpha(0.95f * fade));
+                glyph(cr, okr.cx(), okr.cy(), "󰄬", 12, p.on_accent.with_alpha(fade));
+            }
+            if (wp.progress >= 0) {
+                // downloading: a ring in the middle
+                cairo_set_line_width(cr, 3);
+                cairo_set_source_rgba(cr, 0, 0, 0, 0.45 * fade);
+                cairo_arc(cr, q.cx(), q.cy(), 24, 0, 2 * M_PI);
+                cairo_fill(cr);
+                float pr = std::max(0.06f, wp.progress);
+                cairo_set_source_rgba(cr, acc.r, acc.g, acc.b, fade);
+                cairo_arc(cr, q.cx(), q.cy(), 17, -M_PI / 2, -M_PI / 2 + 2 * M_PI * pr);
+                cairo_stroke(cr);
+            }
+        }
+        if (wp.mature && !steam_) {
             // mature: a red rim and a small badge
             Color red{0.92f, 0.26f, 0.26f, 1};
             stroke(cr, q.inset(1), 11, red.with_alpha(0.95f * fade), 2.5f);
@@ -1152,12 +1237,13 @@ void WallPicker::draw_wh_grid(cairo_t* cr, float W, float H, float ie) {
             fill(cr, chip, 11, Color{0, 0, 0, 0.55f * fade * std::max(hv, sel ? 1.0f : 0.0f)});
             text(cr, chip.x + 9, chip.y + 3, wp.resolution, tt);
         }
+        // one click: the panel; again on it: its main action
         if (input)
             ui_.add(id, r).click([this, i] {
-                if (i == sel_) slices_close(true);
+                if (i == sel_ && panel_) panel_primary(visible_[i]);
                 else {
                     sel_ = i;
-                    request();
+                    open_panel(i);
                 }
             });
     }
@@ -1165,7 +1251,62 @@ void WallPicker::draw_wh_grid(cairo_t* cr, float W, float H, float ie) {
     cairo_restore(cr);
     w::Ctx c{cr, ui_};
     w::scrollbar(c, {area.right() + 14, area.y + 4, 3, area.h - 8}, grid_scroll_.value, content, area.h);
-    if (input && grid_scroll_.value > content - area.h - grid_row_h_ * 2) wh_fetch(true);
+    if (input && grid_scroll_.value > content - area.h - grid_row_h_ * 2) {
+        if (remote_) wh_fetch(true);
+        else ws_fetch(true);
+    }
+    // Steam with nothing to show: why, and the one thing to do about it
+    if (steam_ && n == 0 && !ws_loading_) {
+        float cy = area.y + area.h * 0.36f;
+        const char* g = "󰓓";
+        std::string msg, act;
+        const char* ag = nullptr;
+        std::function<void()> fn;
+        if (!ws_error_.empty() && ws_browse_) {
+            g = "󰓓";
+            msg = ws_error_ == "missing" ? "Falta niri-island-steam" : ws_error_ == "signin" ? "Inicia sesión en Steam" : "Steam está cerrado";
+            if (ws_error_ != "missing") {
+                act = "Abrir Steam";
+                ag = "󰓓";
+                fn = [this] {
+                    proc::spawn({"steam", "-silent"});
+                    ws_error_ = "starting";
+                    // it takes a while: try again until it answers
+                    auto tries = std::make_shared<int>(0);
+                    auto again = std::make_shared<std::function<void()>>();
+                    *again = [this, tries, again] {
+                        if (!steam_ || !ws_browse_ || !exists()) return;
+                        if (!walls_.empty() || ++*tries > 20) return;
+                        ws_fetch(false);
+                        Loop::get().after(4.0, *again);
+                    };
+                    Loop::get().after(6.0, *again);
+                    request();
+                };
+            }
+            if (ws_error_ == "starting") {
+                msg = "Abriendo Steam…";
+                act.clear();
+            }
+        } else if (!ws_browse_) {
+            g = "󰉍";
+            msg = ws_query_.empty() ? "Aún no tienes fondos de Wallpaper Engine" : "Nada con ese nombre";
+            if (ws_query_.empty()) {
+                act = "Workshop";
+                ag = "󰖟";
+                fn = [this] { ws_set_browse(true); };
+            }
+        } else {
+            msg = "Nada encontrado";
+        }
+        glyph(cr, W / 2 - side / 2, cy, g, 34, p.text_faint.with_alpha(1 - ie));
+        text(cr, W / 2 - side / 2, cy + 32, msg, {ui(13, "Medium"), p.text_dim.with_alpha(1 - ie), Align::Center});
+        if (!act.empty()) {
+            Size ts = measure(act, {ui(12.5f)});
+            float bw = ts.w + 56;
+            w::pill(c, ID("ws.empty"), {W / 2 - side / 2 - bw / 2, cy + 64, bw, 36}, act, ag, w::Style::Accent, 12.5f).click(fn);
+        }
+    }
 
     // the chosen card grows into the screen
     if (chosen >= 0 && chosen < n) {
@@ -1206,6 +1347,16 @@ void WallPicker::draw_slices(cairo_t* cr, float W, float H, float dt) {
     }
     pos_.update(dt);
     colpos_.update(dt);
+    panel_t_.update(dt);
+    try_t_.update(dt);
+    // trying one on the desktop: everything steps aside but two buttons
+    float tf = 1.0f - clamp01(try_t_.value);
+    if (tf <= 0.01f) {
+        draw_try(cr, W, H);
+        return;
+    }
+    bool grouped = tf < 0.999f;
+    if (grouped) cairo_push_group(cr);
     int n = static_cast<int>(visible_.size());
     float t_open = static_cast<float>(now - open_t0_);
     float t_leave = leaving_ ? static_cast<float>(now - leave_t0_) : 0.0f;
@@ -1272,7 +1423,7 @@ void WallPicker::draw_slices(cairo_t* cr, float W, float H, float dt) {
     Geo g = geo_for(W, H);
     Color glow = p.accent;
     bool input = !inserting_ && !leaving_ && t_open > 0.3f;
-    if (remote_) {
+    if (grid_mode()) {
         if (!leaving_) draw_wh_grid(cr, W, H, ie);
     } else if (n > 0 && style_ != 0) {
         draw_tiles(cr, W, H, t_open, t_leave, ie, input);
@@ -1448,9 +1599,15 @@ void WallPicker::draw_slices(cairo_t* cr, float W, float H, float dt) {
     // the filters, out of the island too
     float bar_in = leaving_ ? 1.0f - clamp01(t_leave / 0.25f) : clamp01((t_open - 0.1f) / 0.45f);
     if (!inserting_) draw_filter_bar(cr, W, H, bar_in);
+    if (grid_mode() && !inserting_) draw_panel(cr, W, H, leaving_ ? 1.0f - clamp01(t_leave / 0.25f) : 1.0f);
+    if (grouped) {
+        cairo_pop_group_to_source(cr);
+        cairo_paint_with_alpha(cr, tf);
+        draw_try(cr, W, H);
+    }
 
     // done: it is the screen now (and, once drawn, the backdrop under it)
-    if (inserting_ && ins >= 1.0f && !downloading_ && (backdrop_ready_ || now - ins_t0_ > (remote_ ? 8.0 : 2.5))) {
+    if (inserting_ && ins >= 1.0f && !downloading_ && (backdrop_ready_ || now - ins_t0_ > (grid_mode() ? 8.0 : 2.5))) {
         inserting_ = false;
         inserted_ = true;
         close();
