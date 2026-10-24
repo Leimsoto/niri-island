@@ -73,6 +73,7 @@ struct Config {
     // Wallpaper Engine (through waywallen): its Workshop items in the picker.
     bool wallpaper_engine = true;
     bool wallpaper_engine_audio = false;
+    bool wallpaper_engine_clean = true;   // delete the downloads Steam keeps after unsubscribing
     // The bubbles screensaver, started by the island itself when idle.
     bool screensaver = true;
     int screensaver_minutes = 5;

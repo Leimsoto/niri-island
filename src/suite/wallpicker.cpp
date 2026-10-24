@@ -264,6 +264,8 @@ void WallPicker::scan() {
     Loop::get().async(
         [found, index_path] {
             for (auto& d : config().wallpaper_dirs) walk(expand_home(d), *found);
+            if (config().wallpaper_engine && config().wallpaper_engine_clean) waywallen::clean_workshop();
+            if (config().wallpaper_engine && waywallen::running()) waywallen::sync_hidden();
             if (config().wallpaper_engine)  // downloaded Workshop items
                 for (auto& it : waywallen::items()) {
                     if (it.preview.empty()) continue;

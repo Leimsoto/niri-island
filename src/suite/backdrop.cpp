@@ -240,6 +240,7 @@ void Backdrop::set(const std::string& path) {
                     return;
                 }
                 waywallen::set_muted(!audio);
+                waywallen::sync_hidden();
             },
             [this, gen, path, err] {
                 if (gen != gen_) return;

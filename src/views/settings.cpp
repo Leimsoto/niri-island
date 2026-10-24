@@ -879,6 +879,12 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
                save();
                if (backdrop_.engine()) Loop::get().async([v] { waywallen::set_muted(!v); });
            });
+    toggle(5, "Wallpaper Engine", "Borrar los que dejas de seguir", "Steam deja en disco los fondos de los que te desuscribes; la isla los borra",
+           [&] { return cfg.wallpaper_engine_clean; },
+           [&, save](bool v) {
+               cfg.wallpaper_engine_clean = v;
+               save();
+           });
     buttons(5, "Wallpaper Engine", "Más fondos", "Suscríbete en el Workshop; Steam los descarga y aparecen aquí",
             {{"Abrir Workshop", [] { proc::spawn({"xdg-open", "steam://url/SteamWorkshopPage/431960"}); }},
              {"Abrir waywallen", [] { Loop::get().async([] { waywallen::open_ui(); }); }}});

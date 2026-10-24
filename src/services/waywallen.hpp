@@ -28,9 +28,13 @@ void open_ui();
 
 struct Entry {
     std::string id, name, type, resource, preview;
+    bool hidden = false;  // in waywallen's own library window
 };
 bool list(std::vector<Entry>& out, std::string* error = nullptr);
 bool scan(std::string* error = nullptr);
+bool set_hidden(const std::vector<std::string>& ids, bool hidden);
+// waywallen's library shows what the picker shows: the rest is hidden there.
+void sync_hidden();
 bool apply(const std::string& id, std::string* error = nullptr);
 // The wallpaper whose files are in `dir` (a Workshop item), rescanning once if it is new.
 bool apply_dir(const std::string& dir, std::string* error = nullptr);
@@ -52,5 +56,8 @@ struct Item {
 bool read_item(const std::string& dir, Item& out);
 bool is_item(const std::string& path);  // a folder holding a project.json
 std::vector<Item> items();             // every downloaded item
+// Deletes the Workshop downloads you are no longer subscribed to (Steam
+// leaves them behind). Returns how many went.
+int clean_workshop();
 
 }  // namespace island::waywallen

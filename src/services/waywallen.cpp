@@ -9,6 +9,7 @@
 #include <random>
 #include <functional>
 #include <set>
+#include <ftw.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -30,7 +31,7 @@ constexpr const char* kIface = "org.waywallen.waywallen.Daemon1";
 constexpr const char* kSource = "wallpaper_engine";  // the plugin's source name
 
 // Request fields (control.v1 Request oneof)
-enum : int { kWallpaperList = 19, kWallpaperScan = 20, kWallpaperApply = 22, kLibraryAdd = 27, kPluginInstall = 46,
+enum : int { kWallpaperList = 19, kWallpaperScan = 20, kWallpaperApply = 22, kLibraryAdd = 27, kPluginInstall = 46, kWallpaperHide = 91,
              kGlobalPauseSet = 76, kGlobalStopSet = 78 };
 
 // ── protobuf, just enough ──
@@ -349,8 +350,9 @@ void open_ui() {
 }
 
 bool list(std::vector<Entry>& out, std::string* error) {
-    std::string payload;
-    if (!request(kWallpaperList, "", payload, error)) return false;
+    std::string payload, req;
+    put_field(req, 12, 2);  // hidden_filter = INCLUDE: we hide what the picker leaves out
+    if (!request(kWallpaperList, req, payload, error)) return false;
     size_t i = 0;
     Field f;
     while (next_field(payload, i, f)) {
@@ -359,6 +361,7 @@ bool list(std::vector<Entry>& out, std::string* error) {
         size_t j = 0;
         Field g;
         while (next_field(f.bytes, j, g)) {
+            if (g.num == 21 && g.type == 0) e.hidden = g.v != 0;
             if (g.type != 2) continue;
             std::string s(g.bytes);
             if (g.num == 1) e.id = s;
@@ -370,6 +373,33 @@ bool list(std::vector<Entry>& out, std::string* error) {
         if (!e.id.empty()) out.push_back(std::move(e));
     }
     return true;
+}
+
+bool set_hidden(const std::vector<std::string>& ids, bool hidden) {
+    if (ids.empty()) return true;
+    std::string msg, out;
+    for (auto& id : ids) put_field(msg, 2, id);
+    put_field(msg, 3, hidden ? 1 : 0);
+    return request(kWallpaperHide, msg, out, nullptr);
+}
+
+// The item folder an entry comes from (its resource is the folder or a file in it).
+static bool in_dir(const Entry& e, const std::string& dir) {
+    return e.resource == dir || starts_with(e.resource, dir + "/");
+}
+
+void sync_hidden() {
+    std::vector<Entry> all;
+    if (!list(all)) return;
+    std::vector<Item> want = items();
+    std::vector<std::string> hide, show;
+    for (auto& e : all) {
+        bool keep = std::any_of(want.begin(), want.end(), [&](const Item& it) { return in_dir(e, it.dir); });
+        if (keep && e.hidden) show.push_back(e.id);
+        else if (!keep && !e.hidden) hide.push_back(e.id);
+    }
+    set_hidden(hide, true);
+    set_hidden(show, false);
 }
 
 bool scan(std::string* error) {
@@ -396,9 +426,9 @@ bool apply_dir(const std::string& dir, std::string* error) {
     auto find = [&](std::string& id) {
         std::vector<Entry> all;
         if (!list(all, error)) return false;
-        std::string d = dir.back() == '/' ? dir : dir + "/";
+        std::string d = dir.back() == '/' ? dir.substr(0, dir.size() - 1) : dir;
         for (auto& e : all)
-            if (e.resource == dir || starts_with(e.resource, d)) {
+            if (in_dir(e, d)) {
                 id = e.id;
                 return true;
             }
@@ -562,6 +592,36 @@ std::vector<Item> items() {
         });
     }
     return out;
+}
+
+int clean_workshop() {
+    int removed = 0;
+    for (auto& lib : steam_libraries()) {
+        std::set<std::string> subs;
+        time_t since = 0;
+        // no list (or an empty one): nothing is known, nothing goes
+        if (!subscriptions(lib, subs, since) || subs.empty() || since <= 0) continue;
+        std::string ws = lib + "/steamapps/workshop/content/431960";
+        DIR* d = opendir(ws.c_str());
+        if (!d) continue;
+        std::vector<std::string> gone;
+        while (dirent* e = readdir(d)) {
+            std::string name = e->d_name;
+            if (name.empty() || name.find_first_not_of("0123456789") != std::string::npos || subs.count(name)) continue;
+            struct stat st {};
+            // older than Steam's last rewrite of the list: really unsubscribed,
+            // not a download the list has yet to catch up with
+            if (stat((ws + "/" + name).c_str(), &st) == 0 && S_ISDIR(st.st_mode) && st.st_ctime + 60 < since)
+                gone.push_back(ws + "/" + name);
+        }
+        closedir(d);
+        for (auto& dir : gone) {
+            nftw(dir.c_str(), [](const char* p, const struct stat*, int, FTW*) { return remove(p); }, 16,
+                 FTW_DEPTH | FTW_PHYS);
+            if (!file_exists(dir)) ++removed;
+        }
+    }
+    return removed;
 }
 
 }  // namespace island::waywallen
