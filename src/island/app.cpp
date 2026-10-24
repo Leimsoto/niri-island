@@ -870,11 +870,8 @@ void App::lock_screen(double preview) {
         proc::spawn_shell(cmd);
         return;
     }
-    // the wallpaper (a video's still frame) for the blurred background
-    std::string wp = backdrop_.current();
-    std::string ext = lower(wp.substr(wp.rfind('.') == std::string::npos ? wp.size() : wp.rfind('.') + 1));
-    if (ext == "mp4" || ext == "webm" || ext == "mkv" || ext == "mov") wp = cache_dir() + "/wallpaper-frame.jpg";
-    lock_.wallpaper = wp;
+    // the wallpaper (a video's frame, an item's preview) for the blurred background
+    lock_.wallpaper = backdrop_.still();
     if (!lock_.lock(preview)) proc::spawn_shell("swaylock -f -c 141218");  // no lock protocol: fall back
 }
 

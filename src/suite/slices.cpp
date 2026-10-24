@@ -441,7 +441,7 @@ void WallPicker::draw_tiles(cairo_t* cr, float W, float H, float t_open, float t
                 rrect(cr, box, lerp(12, 0, ie));
             }
             cairo_clip(cr);
-            const std::string& src = wp.video ? wp.thumb : wp.path;
+            const std::string& src = wp.image();
             if (big_fit_ && big_path_ == src) cover(cr, big_fit_, box, 1, ie < 0.999f ? CAIRO_FILTER_FAST : CAIRO_FILTER_BILINEAR);
             else if (!wp.thumb.empty() && !starts_with(wp.thumb, "http"))
                 if (cairo_surface_t* t2 = ImageCache::get().request(wp.thumb, 520)) cover(cr, t2, box, 1, CAIRO_FILTER_FAST);
@@ -488,7 +488,7 @@ void WallPicker::draw_tiles(cairo_t* cr, float W, float H, float t_open, float t
         cairo_set_source_rgba(cr, rim.r, rim.g, rim.b, (sel ? 0.95f : (kind == 1 ? 0.3f : 0.12f) + 0.6f * hv) * fade);
         cairo_set_line_width(cr, sel ? 2.5 : 1.2);
         cairo_stroke(cr);
-        if (wp.video && sel) {  // a small play mark, no words
+        if (wp.moving() && sel) {  // a small play mark, no words
             float px = cx, py = y + th - 22;
             cairo_move_to(cr, px - 6, py - 8);
             cairo_line_to(cr, px + 8, py);
@@ -513,7 +513,7 @@ void WallPicker::request_big() {
     if (sel_ < 0 || sel_ >= static_cast<int>(visible_.size()) || last_w_ <= 0) return;
     const Wallpaper& w = walls_[visible_[sel_]];
     if (w.remote) return;  // the full image comes when it is applied
-    std::string src = w.video ? w.thumb : w.path;
+    std::string src = w.image();
     if (src.empty() || src == big_path_ || src == big_loading_) return;
     big_loading_ = src;
     int sc = std::max(1, scale());
@@ -902,7 +902,7 @@ void WallPicker::key_slices(xkb_keysym_t sym, const std::string& utf8) {
                 wh_sort_ = (wh_sort_ + 1) % 4;
                 wh_fetch(false);
             } else {
-                set_filter((kind_ + 1) % 3, hue_);
+                set_filter((kind_ + 1) % (has_engine() ? 4 : 3), hue_);
             }
             return;
         case XKB_KEY_Return:
@@ -959,8 +959,8 @@ void WallPicker::draw_filter_bar(cairo_t* cr, float W, float H, float t_in) {
     x += btn;
     sep(x);
     if (!remote_) {
-        const char* gl[3] = {"󰸉", "󰋩", "󰕧"};  // all, still, video
-        for (int i = 0; i < 3; ++i) {
+        const char* gl[4] = {"󰸉", "󰋩", "󰕧", "󰓓"};  // all, still, video, Wallpaper Engine
+        for (int i = 0; i < (has_engine() ? 4 : 3); ++i) {
             w::icon_button(c, ID("sl.kind", i), {x, bar.y + 4, btn, btn}, gl[i], 15, kind_ == i).click([this, i] { set_filter(i, hue_); });
             x += btn + 4;
         }
@@ -1360,7 +1360,7 @@ void WallPicker::draw_slices(cairo_t* cr, float W, float H, float dt) {
             bool small_rest = !chosen && std::fabs(qw - g.small_w) < 0.5f && std::fabs(qh - g.small_h) < 0.5f;
             bool big_rest = !chosen && std::fabs(qw - g.big_w) < 0.5f && std::fabs(qh - g.big_h) < 0.5f;
             float darken = !chosen && a > 0.5f ? std::min(0.5f, 0.12f + 0.04f * a) * (1.0f - hv) : 0.0f;
-            const std::string& src = wp.video ? wp.thumb : wp.path;
+            const std::string& src = wp.image();
             cairo_surface_t* cut = nullptr;
             if (!wp.thumb.empty() && (small_rest || big_rest))
                 cut = slice_image(wp.thumb, static_cast<int>(qw + qsk), static_cast<int>(qh), qsk);
@@ -1409,7 +1409,7 @@ void WallPicker::draw_slices(cairo_t* cr, float W, float H, float dt) {
                 cairo_set_line_width(cr, a < 0.5f ? 2.5 : 1.2);
                 cairo_stroke(cr);
             }
-            if (wp.video && !chosen && a < 0.5f) {  // a small play mark, no words
+            if (wp.moving() && !chosen && a < 0.5f) {  // a small play mark, no words
                 float px = qx + qsk * 0.15f + qw / 2, py = qy + qh - 24;
                 cairo_move_to(cr, px - 6, py - 8);
                 cairo_line_to(cr, px + 8, py);

@@ -14,6 +14,7 @@
 #include "core/config.hpp"
 #include "core/loop.hpp"
 #include "core/proc.hpp"
+#include "services/waywallen.hpp"
 #include "services/images.hpp"
 #include "ui/paint.hpp"
 #include "ui/theme.hpp"
@@ -142,8 +143,9 @@ bool make_thumb(Wallpaper& w, const std::string& dir) {
             if (!file_exists(jpg)) return false;
             out = jpg;
         } else {
-            GError* err = nullptr;
-            GdkPixbuf* pb = gdk_pixbuf_new_from_file_at_scale(w.path.c_str(), 520, 520, TRUE, &err);
+            GError* err = nullptr;  // (an item's preview: a GIF gives its first frame)
+            const std::string& src = w.engine ? w.preview : w.path;
+            GdkPixbuf* pb = gdk_pixbuf_new_from_file_at_scale(src.c_str(), 520, 520, TRUE, &err);
             if (!pb) {
                 if (err) g_error_free(err);
                 return false;
@@ -261,7 +263,21 @@ void WallPicker::scan() {
     Loop::get().async(
         [found, index_path] {
             for (auto& d : config().wallpaper_dirs) walk(expand_home(d), *found);
+            if (config().wallpaper_engine)  // downloaded Workshop items
+                for (auto& it : waywallen::items()) {
+                    if (it.preview.empty()) continue;
+                    struct stat st {};
+                    stat((it.dir + "/project.json").c_str(), &st);
+                    Wallpaper w;
+                    w.path = it.dir;
+                    w.name = it.title;
+                    w.preview = it.preview;
+                    w.engine = true;
+                    w.mtime = static_cast<int64_t>(st.st_mtime);
+                    found->push_back(std::move(w));
+                }
             std::sort(found->begin(), found->end(), [](const Wallpaper& a, const Wallpaper& b) {
+                if (a.engine != b.engine) return !a.engine;
                 if (a.video != b.video) return !a.video;
                 return lower(a.name) < lower(b.name);
             });
@@ -300,6 +316,7 @@ void WallPicker::scan() {
                 return;
             }
             walls_ = std::move(*found);
+            has_engine_ = std::any_of(walls_.begin(), walls_.end(), [](const Wallpaper& w) { return w.engine; });
             refilter();
             for (size_t i = 0; i < visible_.size(); ++i)
                 if (walls_[visible_[i]].path == current_ && (sel_ < 0 || !moved_)) sel_ = static_cast<int>(i);
@@ -370,8 +387,9 @@ void WallPicker::refilter() {
             visible_.push_back(static_cast<int>(i));
             continue;
         }
-        if (kind_ == 1 && w.video) continue;
+        if (kind_ == 1 && w.moving()) continue;
         if (kind_ == 2 && !w.video) continue;
+        if (kind_ == 3 && !w.engine) continue;
         if (!q.empty() && lower(w.name).find(q) == std::string::npos) continue;
         if (hue_ >= 0) {
             if (w.hue < 0) continue;
@@ -396,7 +414,8 @@ void WallPicker::apply(int index, bool stay) {
     if (index < 0 || index >= static_cast<int>(walls_.size())) return;
     const Wallpaper& w = walls_[index];
     std::string cmd = config().cmd_wallpaper_apply;
-    if ((cmd.empty() || cmd == "internal" || cmd.find("skwd") != std::string::npos) && on_apply) {
+    // (Wallpaper Engine items always go through the backdrop: it runs waywallen)
+    if ((w.engine || cmd.empty() || cmd == "internal" || cmd.find("skwd") != std::string::npos) && on_apply) {
         on_apply(w.path);
     } else {
         if (cmd.find("{path}") == std::string::npos) cmd += " {path}";

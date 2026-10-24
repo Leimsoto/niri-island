@@ -15,11 +15,16 @@ constexpr int kTileRows = 3;
 struct Wallpaper {
     std::string path, name, thumb;  // remote: path is the full image's URL, thumb its preview URL
     bool video = false;
+    bool engine = false;            // a Wallpaper Engine item: path is its folder, preview its picture
+    std::string preview;
     bool remote = false;            // from wallhaven, not downloaded yet
     std::string resolution;
     bool mature = false;            // wallhaven sketchy / nsfw
     float hue = -1, sat = 0, val = 0;  // of the thumbnail's dominant colour
     int64_t mtime = 0;
+    bool moving() const { return video || engine; }
+    // what to show it with: the file itself, or a still of it
+    const std::string& image() const { return moving() ? thumb : path; }
 };
 
 // Every wallpaper in the folders, two ways: a carousel of skewed, backlit
@@ -53,7 +58,7 @@ private:
     std::vector<int> visible_;
     bool scanning_ = false;
     int thumbs_left_ = 0;
-    int kind_ = 0;          // 0 all, 1 images, 2 videos
+    int kind_ = 0;          // 0 all, 1 images, 2 videos, 3 Wallpaper Engine
     int hue_ = -1;          // -1 any, 0..11 hue buckets, 12 greys
     std::string search_;
     int sel_ = -1;
@@ -131,6 +136,8 @@ private:
 
     void scan();
     void refilter();
+    bool has_engine_ = false;  // Wallpaper Engine items among the local ones
+    bool has_engine() const { return has_engine_; }
     void apply(int index, bool stay);
     void ensure_visible(int pos);
     std::string current_wallpaper() const;

@@ -11,7 +11,8 @@
 namespace island {
 
 // The wallpaper itself: a background-layer surface showing the image (cropped
-// to fill), or mpvpaper for videos. It remembers the last one, and makes the
+// to fill), mpvpaper for videos, or waywallen for Wallpaper Engine (a
+// Workshop item's folder). It remembers the last one, and makes the
 // colour palette the island themes itself with (matugen, or the image's
 // dominant colour when matugen is missing).
 class Backdrop {
@@ -26,6 +27,9 @@ public:
     void pump();                          // draws when needed (from the loop)
     void outputs_changed();               // a screen plugged in or out
     void set_paused(bool paused);         // a video wallpaper stops while hidden
+    bool engine() const { return we_; }   // a Wallpaper Engine one is on screen
+    // A picture of the current wallpaper (a video's frame, an item's preview).
+    std::string still() const;
 
     static std::string state_path();      // {"path": …}
     static std::string palette_path();    // colors.json for the theme
@@ -55,6 +59,8 @@ private:
     void drop_surface();
     void stop_video();
     bool paused_ = false;
+    bool we_ = false;   // waywallen draws it
+    void stop_engine();
     void send_mpv(const std::string& cmd);
     void render(Out& o);
     // Once on every screen, the full picture (a 4K PNG is 33 MB decoded) is

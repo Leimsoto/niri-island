@@ -16,6 +16,7 @@
 #include "core/config.hpp"
 #include "core/loop.hpp"
 #include "services/images.hpp"
+#include "services/waywallen.hpp"
 #include "ui/paint.hpp"
 
 namespace island {
@@ -183,6 +184,23 @@ void Backdrop::set_paused(bool paused) {
     if (paused == paused_) return;
     paused_ = paused;
     if (video_.pid > 0) send_mpv(std::string(R"({"command":["set_property","pause",)") + (paused ? "true" : "false") + "]}");
+    if (we_) Loop::get().async([paused] { waywallen::set_paused(paused); });
+}
+
+// Something else is on screen: waywallen (and its renderer) can go.
+void Backdrop::stop_engine() {
+    if (!we_) return;
+    we_ = false;
+    Loop::get().async([] { waywallen::stop_and_quit(); });
+}
+
+std::string Backdrop::still() const {
+    if (is_video(path_)) return cache_dir() + "/wallpaper-frame.jpg";
+    if (we_ || waywallen::is_item(path_)) {
+        waywallen::Item it;
+        return waywallen::read_item(path_, it) ? it.preview : "";
+    }
+    return path_;
 }
 
 void Backdrop::set(const std::string& path) {
@@ -190,6 +208,55 @@ void Backdrop::set(const std::string& path) {
     path_ = path;
     save_state();
     uint64_t gen = ++gen_;
+    if (waywallen::is_item(path)) {
+        // waywallen draws it on its own background surface; ours goes once it is up.
+        stop_video();
+        paused_ = false;
+        we_ = true;
+        waywallen::Item item;
+        waywallen::read_item(path, item);
+        bool audio = config().wallpaper_engine_audio;
+        auto err = std::make_shared<std::string>();
+        Loop::get().async(
+            [path, audio, err] {
+                if (!waywallen::installed()) {
+                    *err = "Para Wallpaper Engine hace falta waywallen (flatpak org.waywallen.waywallen)";
+                    return;
+                }
+                if (!waywallen::display_installed()) {
+                    *err = "Falta waywallen-layer-shell (de waywallen-display) para mostrar Wallpaper Engine";
+                    return;
+                }
+                if (!waywallen::ensure_running()) {
+                    *err = "waywallen no arrancó";
+                    return;
+                }
+                if (!waywallen::plugin_installed()) {
+                    *err = "Falta el plugin open-wallpaper-engine en waywallen";
+                    return;
+                }
+                if (!waywallen::apply_dir(path, err.get())) {
+                    if (err->empty()) *err = "waywallen no pudo aplicar el fondo";
+                    return;
+                }
+                waywallen::set_muted(!audio);
+            },
+            [this, gen, path, err] {
+                if (gen != gen_) return;
+                if (!err->empty()) {
+                    if (on_error) on_error(*err);
+                    return;
+                }
+                // the renderer takes a moment to show its first frame
+                Loop::get().after(1.2, [this, gen, path] {
+                    if (gen != gen_) return;
+                    drop_surface();
+                    if (on_shown) on_shown(path);
+                });
+            });
+        if (!item.preview.empty()) make_palette(item.preview, false);
+        return;
+    }
     if (is_video(path)) {
         // mpvpaper paints videos on the background layer by itself.
         stop_video();
@@ -205,6 +272,7 @@ void Backdrop::set(const std::string& path) {
         Loop::get().after(0.6, [this, gen, path] {
             if (gen != gen_) return;
             drop_surface();
+            stop_engine();
             if (on_shown) on_shown(path);
         });
         make_palette(path, true);
@@ -228,7 +296,9 @@ void Backdrop::set(const std::string& path) {
                           mark_dirty();
                           // Under our surface by now: the video can stop.
                           Loop::get().after(0.3, [this, gen] {
-                              if (gen == gen_) stop_video();
+                              if (gen != gen_) return;
+                              stop_video();
+                              stop_engine();
                           });
                       });
     make_palette(path, false);

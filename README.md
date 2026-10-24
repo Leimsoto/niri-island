@@ -82,6 +82,10 @@ temporizador y cronómetro con vueltas, **notificaciones** (historial y No moles
   aplicación instantánea. Modo **wallhaven**: cuadrícula desplazable, búsqueda, orden, color, contenido
   +18 opcional (marcado en rojo) y descarga a `~/Imágenes/wallpapers/wallhaven`. Los fondos de vídeo **se pausan**
   mientras una ventana ocupa la pantalla (completa o maximizada), como en skwd-wall; se desactiva en Ajustes → Fondos.
+- **Wallpaper Engine** vía [waywallen](https://github.com/waywallen/waywallen): los elementos del Workshop que Steam
+  tenga descargados salen en el selector (filtro propio) con su vista previa; al aplicar uno la isla arranca el
+  demonio sin interfaz, se aparta y genera la paleta desde la vista previa. Al volver a una imagen o vídeo normal,
+  waywallen se cierra. Se pausa igual que los vídeos; sonido y accesos al Workshop en Ajustes → Fondos.
 - **Capturas** (Mod+S): la pantalla se congela al instante tal cual está, islas y paneles incluidos, y una burbuja
   que sale del borde inferior pregunta qué hacer; editor con región, formas, flechas, texto, pixelado, contador y
   deshacer. Mientras dura, el teclado es solo de la captura. **Grabación** con pausa,
@@ -106,6 +110,12 @@ sudo cp /etc/pam.d/swaylock /etc/pam.d/niri-island   # servicio PAM del bloqueo 
 Opcionales en tiempo de ejecución: `nmcli`, `cava`, `cliphist` + `wl-clipboard` + `wtype` (portapapeles),
 `matugen` (paleta), `mpvpaper` (fondos de vídeo), `wf-recorder` + `ffmpeg` (grabación), `grim`, `swayidle`
 (protector e inactividad), `brightnessctl`, `power-profiles-daemon`.
+
+Para Wallpaper Engine: el Flatpak `org.waywallen.waywallen` con el plugin
+[open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine) (las escenas necesitan además
+Wallpaper Engine instalado en Steam) y `waywallen-layer-shell` de
+[waywallen-display](https://github.com/waywallen/waywallen-display), que es quien lo muestra en niri (desde Flatpak
+waywallen no puede usar layer-shell).
 
 ## Integración con niri
 

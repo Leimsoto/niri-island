@@ -8,6 +8,7 @@
 #include "core/config.hpp"
 #include "core/proc.hpp"
 #include "island/app.hpp"
+#include "services/waywallen.hpp"
 #include "ui/paint.hpp"
 #include "ui/theme.hpp"
 
@@ -864,6 +865,23 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
                cfg.wallpaper_pause_covered = v;
                save();
            });
+    // Wallpaper Engine through waywallen
+    toggle(5, "Wallpaper Engine", "Wallpaper Engine", "Los fondos del Workshop que tengas descargados aparecen en el selector (los dibuja waywallen)",
+           [&] { return cfg.wallpaper_engine; },
+           [&, save](bool v) {
+               cfg.wallpaper_engine = v;
+               save();
+           });
+    toggle(5, "Wallpaper Engine", "Sonido", "Los fondos con audio suenan",
+           [&] { return cfg.wallpaper_engine_audio; },
+           [&, save](bool v) {
+               cfg.wallpaper_engine_audio = v;
+               save();
+               if (backdrop_.engine()) Loop::get().async([v] { waywallen::set_muted(!v); });
+           });
+    buttons(5, "Wallpaper Engine", "Más fondos", "Suscríbete en el Workshop; Steam los descarga y aparecen aquí",
+            {{"Abrir Workshop", [] { proc::spawn({"xdg-open", "steam://url/SteamWorkshopPage/431960"}); }},
+             {"Abrir waywallen", [] { Loop::get().async([] { waywallen::open_ui(); }); }}});
     preview(5, "Selector", "Estilo del selector", "", {"Carrusel", "Panal", "Tarjetas"},
             [&] {
                 const std::string& st = cfg.wallpaper_picker_style;
@@ -1189,4 +1207,5 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
     cairo_restore(cr);
 }
 
-}  // namespace island
+}  // namespace island#include "services/waywallen.hpp"
+
