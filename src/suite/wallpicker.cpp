@@ -240,6 +240,7 @@ void WallPicker::opened() {
     kind_ = 0;
     hue_ = -1;
     current_ = current_wallpaper();
+    if (waywallen::is_item(current_)) kind_ = 3;  // open where the current one is
     search_.clear();
     if (walls_.empty()) scan();
     else {
@@ -387,9 +388,9 @@ void WallPicker::refilter() {
             visible_.push_back(static_cast<int>(i));
             continue;
         }
+        if ((kind_ == 3) != w.engine) continue;  // Wallpaper Engine apart from the rest
         if (kind_ == 1 && w.moving()) continue;
         if (kind_ == 2 && !w.video) continue;
-        if (kind_ == 3 && !w.engine) continue;
         if (!q.empty() && lower(w.name).find(q) == std::string::npos) continue;
         if (hue_ >= 0) {
             if (w.hue < 0) continue;

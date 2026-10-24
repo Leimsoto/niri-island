@@ -147,6 +147,7 @@ std::string App::command(const std::string& line) {
     if (c == "wallpapers" || c == "walls" || c == "wallpaper-picker") {
         open_wallpaper_picker();
         if (a.size() > 1 && a[1] == "wallhaven") wallpicker_.show_wallhaven();  // straight to the downloads
+        else if (a.size() > 1 && a[1] == "engine") wallpicker_.show_engine();
         return "opened";
     }
     if (c == "clipboard") return toggle_panel(View::Clipboard);

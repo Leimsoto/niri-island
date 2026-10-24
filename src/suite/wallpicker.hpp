@@ -36,6 +36,7 @@ public:
     ~WallPicker() override;
     void show();
     void show_wallhaven() { set_remote(true); }
+    void show_engine(bool on = true);  // only the Wallpaper Engine items (or back to the rest)
     void prewarm();
     void backdrop_shown(const std::string& path);
     void dismiss() { slices_close(false); }
@@ -58,7 +59,7 @@ private:
     std::vector<int> visible_;
     bool scanning_ = false;
     int thumbs_left_ = 0;
-    int kind_ = 0;          // 0 all, 1 images, 2 videos, 3 Wallpaper Engine
+    int kind_ = 0;          // 0 all, 1 images, 2 videos (none of them Wallpaper Engine), 3 Wallpaper Engine
     int hue_ = -1;          // -1 any, 0..11 hue buckets, 12 greys
     std::string search_;
     int sel_ = -1;

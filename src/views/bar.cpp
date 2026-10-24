@@ -562,11 +562,12 @@ static int niri_gaps() {
 static void write_niri_rules() {
     std::string path = home_dir() + "/.config/niri/cfg/niri-island.kdl";
     std::string body = "// Generado por niri-island. Se reescribe solo.\n"
-        // The wallpaper, still or animated (mpvpaper), is one backdrop behind
+        // The wallpaper, still or animated (mpvpaper, waywallen), is one backdrop behind
         // every workspace in the overview, not a copy inside each.
         "layer-rule {\n"
         "    match namespace=\"^niri-island-wallpaper$\"\n"
         "    match namespace=\"^mpvpaper$\"\n"
+        "    match namespace=\"^waywallen-wallpaper$\"\n"
         "    place-within-backdrop true\n"
         "}\n";
     if (config().compositor_blur) {

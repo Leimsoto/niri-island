@@ -155,7 +155,7 @@ Todos los paneles se cierran con el mismo atajo que los abre.
 ```
 paneles   cc launcher [texto] wifi bt sound weather calendar tasks notes note-new stats session clipboard
           notifications tray timer stopwatch settings [sección] glance close back
-suite     wallpapers [wallhaven] | wallpaper [current|next|prev|set <ruta>] | capture [record] |
+suite     wallpapers [wallhaven|engine] | wallpaper [current|next|prev|set <ruta>] | capture [record] |
           screenshot [region|screen|window] | record [...] | screensaver [stop] | lock [--preview <s>] | lock-state
 media     play-pause next prev
 niveles   volume-up volume-down volume <n> mute mic-mute brightness-up brightness-down

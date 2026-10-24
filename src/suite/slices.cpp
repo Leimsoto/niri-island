@@ -633,6 +633,11 @@ const char* kWhColors[13] = {"cc0000", "ff6600", "ffcc33", "cccc33", "77cc33", "
                              "0099cc", "0066cc", "333399", "993399", "ea4c88", "999999"};
 }  // namespace
 
+void WallPicker::show_engine(bool on) {
+    if (on && remote_) set_remote(false);
+    set_filter(on ? 3 : 0, hue_);
+}
+
 void WallPicker::set_remote(bool on) {
     if (on == remote_ || inserting_ || leaving_) return;
     remote_ = on;
@@ -901,8 +906,8 @@ void WallPicker::key_slices(xkb_keysym_t sym, const std::string& utf8) {
             if (remote_) {
                 wh_sort_ = (wh_sort_ + 1) % 4;
                 wh_fetch(false);
-            } else {
-                set_filter((kind_ + 1) % (has_engine() ? 4 : 3), hue_);
+            } else if (kind_ != 3) {
+                set_filter((kind_ + 1) % 3, hue_);
             }
             return;
         case XKB_KEY_Return:
@@ -957,10 +962,16 @@ void WallPicker::draw_filter_bar(cairo_t* cr, float W, float H, float t_in) {
     // source: wallhaven on/off
     w::icon_button(c, ID("sl.remote"), {x, bar.y + 4, btn, btn}, "󰇚", 16, remote_).click([this] { set_remote(!remote_); });
     x += btn;
+    // source: Wallpaper Engine (the Workshop items, on their own)
+    if (has_engine()) {
+        x += 4;
+        w::icon_button(c, ID("sl.engine"), {x, bar.y + 4, btn, btn}, "󰓓", 16, !remote_ && kind_ == 3).click([this] { show_engine(kind_ != 3 || remote_); });
+        x += btn;
+    }
     sep(x);
-    if (!remote_) {
-        const char* gl[4] = {"󰸉", "󰋩", "󰕧", "󰓓"};  // all, still, video, Wallpaper Engine
-        for (int i = 0; i < (has_engine() ? 4 : 3); ++i) {
+    if (!remote_ && kind_ != 3) {
+        const char* gl[3] = {"󰸉", "󰋩", "󰕧"};  // all, still, video
+        for (int i = 0; i < 3; ++i) {
             w::icon_button(c, ID("sl.kind", i), {x, bar.y + 4, btn, btn}, gl[i], 15, kind_ == i).click([this, i] { set_filter(i, hue_); });
             x += btn + 4;
         }
