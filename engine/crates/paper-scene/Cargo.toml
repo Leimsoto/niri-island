@@ -1,0 +1,33 @@
+[package]
+name = "paper-scene"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Wallpaper Engine scene format parsing and library audit"
+
+[dependencies]
+paper-control = { path = "../paper-control" }
+anyhow = { workspace = true }
+bitflags = { version = "2", features = ["std"] }
+image = { workspace = true }
+libc = "0.2"
+rquickjs = "0.12"
+sha2 = "0.10"
+tracing = { workspace = true }
+shaderc = { version = "0.9", default-features = false }
+serde_json = { workspace = true }
+lz4_flex = { version = "0.11", default-features = false, features = ["safe-decode"] }
+texpresso = { workspace = true }
+hassle-rs = "0.12"
+swash = "0.2.10"
+read-fonts = "0.41"
+
+tempfile = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["bitflags"]
+
+[lints]
+workspace = true

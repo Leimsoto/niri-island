@@ -1,0 +1,355 @@
+class Vec2 {
+    constructor(x = 0, y) { if (typeof x === 'object') { y = x.y; x = x.x; } this.x = x; this.y = y ?? x; }
+    copy() { return new this.constructor(this); }
+    add(v) { return this.map((x, k) => x + (typeof v === 'number' ? v : v[k])); }
+    subtract(v) { return this.map((x, k) => x - (typeof v === 'number' ? v : v[k])); }
+    multiply(v) { return this.map((x, k) => x * (typeof v === 'number' ? v : v[k])); }
+    divide(v) { return this.map((x, k) => x / (typeof v === 'number' ? v : v[k])); }
+    map(f) { const v = this.copy(); for (const k of ['x', 'y', 'z', 'w']) if (k in v) v[k] = f(this[k], k); return v; }
+    length() { return Math.sqrt(this.dot(this)); }
+    lengthSqr() { return this.dot(this); }
+    dot(v) { return ['x', 'y', 'z', 'w'].reduce((s, k) => s + (this[k] ?? 0) * (v[k] ?? 0), 0); }
+    normalize() { const n = this.length(); return n ? this.divide(n) : this.copy(); }
+    equals(v) { return this.x === v.x && this.y === v.y && this.z === v.z && this.w === v.w; }
+    toString() { return ['x', 'y', 'z', 'w'].filter(k => k in this).map(k => this[k]).join(' '); }
+}
+class Vec3 extends Vec2 {
+    constructor(x = 0, y, z) { super(x, y); this.z = typeof x === 'object' ? (x.z ?? z ?? 0) : (z ?? x); }
+    cross(v) { return new Vec3(this.y * v.z - this.z * v.y, this.z * v.x - this.x * v.z, this.x * v.y - this.y * v.x); }
+}
+class Vec4 extends Vec3 {
+    constructor(x = 0, y, z, w) { super(x, y, z); this.w = typeof x === 'object' ? (x.w ?? w ?? 0) : (w ?? x); }
+}
+Object.assign(globalThis, { Vec2, Vec3, Vec4 });
+const __changes = new Map();
+let __nativeWrite = false;
+const __modules = [];
+const __timers = new Map();
+let __timerId = 0;
+let __current = null;
+const __vectors = new Set(['origin', 'scale', 'angles', 'color', 'size', 'parallaxDepth', 'clearcolor', 'ambientcolor', 'skylightcolor', 'bloomtint']);
+function __coerce(value, key) {
+    if (__vectors.has(key)) {
+        const a = typeof value === 'string' ? value.trim().split(/\s+/).map(Number) : Array.isArray(value) ? value : null;
+        if (a) return key === 'size' || key === 'parallaxDepth' ? new Vec2(...a) : new Vec3(...a);
+        if (typeof value === 'number') return new Vec3(value);
+    }
+    return value;
+}
+function __plain(value, key) {
+    if (value instanceof Vec2) {
+        let parts = ['x','y','z','w'].filter(k => k in value).map(k => value[k]);
+        if (key === 'angles') parts = parts.map(n => n * Math.PI / 180);
+        return parts.join(' ');
+    }
+    return value;
+}
+function __wrap(value, path, key, eager = false, converted = false) {
+    value = __coerce(value, key);
+    if (value instanceof Vec2) {
+        if (key === 'angles' && !converted) value = value.multiply(180 / Math.PI);
+        return new Proxy(value, { set(target, k, v) { if (target[k] !== v) { target[k] = v; if (!__nativeWrite) __changes.set(path, __plain(target, key)); } return true; } });
+    }
+    if (!value || typeof value !== 'object') return value;
+    const wrapped = new Set();
+    if (eager) for (const k of Object.keys(value)) {
+        value[k] = __wrap(value[k], path + '/' + k.replace(/~/g,'~0').replace(/\//g,'~1'), k, true);
+        wrapped.add(k);
+    }
+    return new Proxy(value, { get(target, k) {
+        const child = target[k];
+        if (typeof k !== 'string' || wrapped.has(k) || (!__vectors.has(k) && (!child || typeof child !== 'object'))) return child;
+        const descriptor = Object.getOwnPropertyDescriptor(target, k);
+        if (!descriptor || (!descriptor.configurable && !descriptor.writable)) return child;
+        const result = __wrap(child, path + '/' + k.replace(/~/g,'~0').replace(/\//g,'~1'), k);
+        if (result !== child) { target[k] = result; wrapped.add(k); }
+        return result;
+    }, defineProperty(target, k, descriptor) {
+        if (!('value' in descriptor) && descriptor.writable === false) this.get(target, k);
+        const changed = ('value' in descriptor && descriptor.value !== target[k]) || 'get' in descriptor;
+        const defined = Reflect.defineProperty(target, k, descriptor);
+        if (defined && changed) wrapped.delete(k);
+        return defined;
+    }, deleteProperty(target, k) {
+        const deleted = Reflect.deleteProperty(target, k);
+        if (deleted) wrapped.delete(k);
+        return deleted;
+    }, set(target, k, v) {
+        v = __coerce(v, k);
+        if (!(target[k] instanceof Vec2 && v instanceof Vec2 && target[k].equals(v)) && target[k] !== v) {
+            const p = path + '/' + String(k).replace(/~/g,'~0').replace(/\//g,'~1');
+            if (!__nativeWrite) __changes.set(p, __plain(v, k));
+            const numericVector = v instanceof Vec2 && __vectors.has(k)
+                && typeof v.x === 'number' && typeof v.y === 'number'
+                && (typeof v.z === 'number' || (!('z' in v) && !('w' in v)));
+            target[k] = v instanceof Vec2
+                ? numericVector
+                    ? __wrap(k === 'size' || k === 'parallaxDepth' ? new Vec2(v.x,v.y) : new Vec3(v.x,v.y,v.z),p,k,true,true)
+                    : __wrap(__plain(v,k),p,k,true)
+                : __wrap(v,p,k,true);
+            wrapped.add(k);
+        }
+        return true;
+    }});
+}
+const __commands = [];
+const __sprites = new Map();
+function __command(kind, target, op, value) {
+    if (__commands.length < 4096) __commands.push([kind, String(target), op, value === undefined ? null : value]);
+}
+function __drainCommands() { const out = JSON.stringify(__commands); __commands.length = 0; return out; }
+function __setSprites(json) {
+    __sprites.clear();
+    for (const [index, frames, duration] of JSON.parse(json)) __sprites.set(index, {frames, duration});
+}
+function __textureAnimation(index) {
+    const info = () => __sprites.get(index) || {frames: 1, duration: 0};
+    const state = {frame: 0, playing: true, rate: 1, since: 0};
+    const push = (op, value) => __command('sprite', index, op, value);
+    const estimate = () => {
+        const {frames, duration} = info();
+        if (!state.playing || duration <= 0 || frames <= 1) return state.frame;
+        return (state.frame + Math.floor((engine.runtime - state.since) * frames / duration * state.rate)) % frames;
+    };
+    return {
+        get frameCount() { return info().frames; },
+        get duration() { return info().duration; },
+        get rate() { return state.rate; },
+        set rate(value) { state.frame = estimate(); state.since = engine.runtime; state.rate = Number(value) || 0; push('rate', state.rate); },
+        play() { if (!state.playing) { state.playing = true; state.since = engine.runtime; } push('play'); },
+        stop() { state.playing = false; state.frame = 0; push('stop'); },
+        pause() { state.frame = estimate(); state.playing = false; push('pause'); },
+        isPlaying() { return state.playing; },
+        getFrame() { return estimate(); },
+        setFrame(frame) { state.frame = Math.max(0, Math.floor(Number(frame) || 0)); state.since = engine.runtime; push('frame', state.frame); },
+        join() { state.playing = true; state.rate = 1; state.frame = 0; state.since = engine.runtime; push('join'); }
+    };
+}
+function __applyUserProperties(properties = engine.userProperties) {
+    for (let i = 0; i < __modules.length; i++) {
+        const m = __modules[i];
+        if (!m || m.disabled || typeof m.ns.applyUserProperties !== 'function') continue;
+        __current = m;
+        try { m.ns.applyUserProperties(properties); } catch (e) { m.disabled = true; __log('applyUserProperties ' + i + ': ' + String(e)); }
+        __current = null;
+    }
+}
+function __setup(json, props) {
+    globalThis.__initial = JSON.parse(json).objects || [];
+    globalThis.__scene = __wrap(JSON.parse(json), '', '');
+    globalThis.__layers = __scene.objects || [];
+    globalThis.__byId = new Map(__layers.map(l => [String(l.id), l]));
+    __setUserProperties(JSON.parse(props));
+    engine.canvasSize = new Vec2(__scene.general?.orthogonalprojection?.width ?? 1920, __scene.general?.orthogonalprojection?.height ?? 1080);
+    for (const layer of __layers) {
+        for (const [key,value] of Object.entries({visible:true, origin:'0 0 0', scale:'1 1 1', angles:'0 0 0', color:'1 1 1', alpha:1}))
+            if (layer[key] === undefined) layer[key] = value;
+        Object.defineProperty(layer, 'getParent', {value: () => layer.parent === undefined || layer.parent === null ? undefined : __byId.get(String(layer.parent))});
+        Object.defineProperty(layer, 'getChildren', {value: () => __layers.filter(l => String(l.parent) === String(layer.id))});
+        Object.defineProperty(layer, 'getEffect', {value: key => (layer.effects || []).find(e => e.name === key || e.id === key)});
+        Object.defineProperty(layer, 'getAnimation', {value: () => { throw Error('SceneScript timeline control is not implemented'); }});
+    }
+    __layers.forEach((layer, index) => {
+        if (layer.image !== undefined) {
+            let animation;
+            Object.defineProperty(layer, 'getTextureAnimation', {value: () => animation ??= __textureAnimation(index)});
+            Object.defineProperty(layer, 'getEffectCount', {value: () => (layer.effects || []).length});
+        }
+        if (layer.sound !== undefined) {
+            let playing = layer.startsilent !== true;
+            Object.defineProperty(layer, 'play', {value: () => { playing = true; __command('sound', layer.id, 'play'); }});
+            Object.defineProperty(layer, 'stop', {value: () => { playing = false; __command('sound', layer.id, 'stop'); }});
+            Object.defineProperty(layer, 'pause', {value: () => { playing = false; __command('sound', layer.id, 'pause'); }});
+            Object.defineProperty(layer, 'isPlaying', {value: () => playing});
+        }
+    });
+    __changes.clear();
+}
+function __owner(path) {
+    const parts = path.split('/').slice(1).map(s => s.replace(/~1/g,'/').replace(/~0/g,'~'));
+    const key = parts.pop(); let object = __scene;
+    for (const p of parts) object = object[p];
+    return [object, key];
+}
+let __keyframes = [];
+function __setKeyframes(json) { __keyframes = JSON.parse(json).map(path => path.split('/').slice(1).map(s => s.replace(/~1/g,'/').replace(/~0/g,'~'))); }
+function __keyframe(index, a, b, c, d, count) {
+    const parts = __keyframes[index];
+    const key = parts[parts.length - 1];
+    let object = __scene;
+    for (let i = 0; i < parts.length - 1; i++) { object = object?.[parts[i]]; }
+    if (!object || typeof object !== 'object') return;
+    let value = __coerce(count === 1 ? a : [a,b,c,d].slice(0,count), key);
+    if (key === 'angles' && value instanceof Vec2) {
+        value.x *= 180 / Math.PI;
+        value.y *= 180 / Math.PI;
+        value.z *= 180 / Math.PI;
+    }
+    __nativeWrite = true;
+    try { object[key] = value; } finally { __nativeWrite = false; }
+}
+const __cursorHooks = ['cursorEnter','cursorLeave','cursorMove','cursorDown','cursorUp','cursorClick'];
+function __register(index, ns, path) { const [object,key] = __owner(path); __modules[index] = {ns, object, key, layer:path.startsWith('/objects/') ? __layers[Number(path.split('/')[2])] : null, disabled:false, cursor:__cursorHooks.some(name => typeof ns[name] === 'function')}; }
+function __disable(index) { if (__modules[index]) __modules[index].disabled = true; }
+function __invoke(index, name) {
+    const m = __modules[index];
+    if (!m || m.disabled || typeof m.ns[name] !== 'function') return;
+    __current = m;
+    const value = m.object[m.key];
+    const result = m.ns[name](value instanceof Vec2 ? value.copy() : value);
+    if (result !== undefined) m.object[m.key] = result;
+    __current = null;
+}
+function __drain() { const result = JSON.stringify([...__changes]); __changes.clear(); return result; }
+function __frame(time, dt, x, y) {
+    engine.runtime = time; engine.frametime = dt;
+    input.cursorWorldPosition = new Vec3(x * engine.canvasSize.x, (1 - y) * engine.canvasSize.y, 0);
+    input.cursorScreenPosition = new Vec2(x * engine.canvasSize.x, y * engine.canvasSize.y);
+}
+const __scriptProperties = new Map();
+function __setUserProperties(properties) {
+    for (const key of Object.keys(engine.userProperties)) delete engine.userProperties[key];
+    for (const [name,entry] of Object.entries(properties)) if (entry.value !== undefined) engine.userProperties[name] = entry.type === 'color' ? __coerce(entry.value, 'color') : entry.value;
+}
+function __updateUserProperties(json) {
+    const update = JSON.parse(json);
+    for (const [path,value] of update.values) {
+        const [object,key] = __owner(path);
+        object[key] = value;
+    }
+    for (const [index,properties] of update.scripts) {
+        const target = __scriptProperties.get(index);
+        if (!target) continue;
+        for (const [key,value] of Object.entries(properties)) if (key in target.values) target.values[key] = target.colors.has(key) ? __coerce(value, 'color') : value;
+    }
+    __setUserProperties(update.properties);
+    const changed = {};
+    for (const name of Object.keys(update.changed)) changed[name] = engine.userProperties[name];
+    if (Object.keys(changed).length) __applyUserProperties(changed);
+}
+function __createScriptProperties(defaults = {}, index = -1) {
+    const values = {};
+    const colors = new Set();
+    if (index >= 0) __scriptProperties.set(index, {values,colors});
+    const builder = { finish: () => values };
+    for (const kind of ['Slider','Checkbox','Combo','Color','Text','Texture']) builder['add'+kind] = o => { values[o.name] = defaults[o.name] ?? o.value ?? o.options?.[0]?.value; if (kind === 'Color') { colors.add(o.name); values[o.name] = __coerce(values[o.name], 'color'); } return builder; };
+    return builder;
+}
+const engine = {
+    runtime:0, frametime:0, canvasSize:new Vec2(1920,1080), screenResolution:new Vec2(1920,1080), userProperties:{}, isRunningInEditor:()=>false,
+    AUDIO_RESOLUTION_16:16,AUDIO_RESOLUTION_32:32,AUDIO_RESOLUTION_64:64,
+    isDesktopDevice:()=>true,isMobileDevice:()=>false,isWallpaper:()=>true,isScreensaver:()=>false,
+    isPortrait:()=>engine.canvasSize.y>engine.canvasSize.x,isLandscape:()=>engine.canvasSize.y<=engine.canvasSize.x,
+    registerAsset:file=>({file:String(file)}),
+    openUserShortcut:()=>false,
+    get timeOfDay(){const d=new Date();return (d.getHours()*3600+d.getMinutes()*60+d.getSeconds())/86400;},
+    registerAudioBuffers: size => { if (!Number.isInteger(size) || size < 1 || size > 128) throw Error('Invalid audio buffer size'); let b = __audio.get(size); if (!b) { b = {left:new Float32Array(size),right:new Float32Array(size),average:new Float32Array(size)}; __audio.set(size,b); } return {left:b.left.subarray(),right:b.right.subarray(),average:b.average.subarray()}; },
+    setTimeout: (fn, delay=0) => __timer(fn, delay, false), setInterval: (fn, delay=0) => __timer(fn, delay, true),
+    clearTimeout: id => __timers.delete(id), clearInterval: id => __timers.delete(id)
+};
+const __audio = new Map();
+function __timer(fn, delay, repeat) {
+    if (typeof fn !== 'function' || !Number.isFinite(delay) || __timers.size >= 256) throw Error('Invalid or excessive SceneScript timers');
+    const id = ++__timerId; __timers.set(id, {fn, delay:Math.max(1,delay)/1000, due:engine.runtime+Math.max(1,delay)/1000, repeat}); return () => __timers.delete(id);
+}
+function __tickTimers() {
+    for (const [id,timer] of [...__timers]) if (timer.due <= engine.runtime) {
+        if (timer.repeat) timer.due = engine.runtime + timer.delay; else __timers.delete(id);
+        timer.fn();
+    }
+}
+const input = {cursorWorldPosition:new Vec3(),cursorScreenPosition:new Vec2(),cursorLeftDown:false};
+const __layerOf = key => typeof key === 'object' && key !== null ? key : (typeof key === 'number' ? __layers[key] : __layers.find(l => l.name === key || String(l.id) === String(key)));
+const thisScene = {
+    getLayer: key => __layers.find(l => l.name === key || String(l.id) === String(key)),
+    getLayerCount: () => __layers.length,
+    enumerateLayers: () => [...__layers],
+    getLayerIndex: layer => __layers.indexOf(__layerOf(layer)),
+    getLayerByIndex: index => __layers[index],
+    getInitialLayerConfig: layer => { const i = __layers.indexOf(__layerOf(layer)); return i >= 0 ? JSON.parse(JSON.stringify(__initial[i] ?? {})) : undefined; },
+    destroyLayer: layer => { const l = __layerOf(layer); if (!l) return false; l.visible = false; return true; },
+    sortLayer: () => { throw Error('SceneScript layer reordering is not implemented'); },
+    createLayer: () => { throw Error('SceneScript dynamic layer creation is not implemented'); }
+};
+const __generalDefaults = {bloom:false, bloomstrength:2, bloomthreshold:0.65, bloomtint:'1 1 1', clearenabled:true, clearcolor:'0 0 0', ambientcolor:'0.3 0.3 0.3', skylightcolor:'0.3 0.3 0.3',
+    fov:50, nearz:0.01, farz:10000, zoom:1, camerafade:false, camerashake:false, camerashakespeed:1, camerashakeamplitude:1, camerashakeroughness:1,
+    cameraparallax:false, cameraparallaxamount:0.5, cameraparallaxdelay:0.1, cameraparallaxmouseinfluence:0.5};
+for (const [key, fallback] of Object.entries(__generalDefaults)) Object.defineProperty(thisScene, key, {
+    enumerable: true,
+    get() {
+        const general = globalThis.__scene?.general;
+        let value = general ? general[key] : undefined;
+        if (value && typeof value === 'object' && !(value instanceof Vec2) && 'value' in value) value = __coerce(value.value, key);
+        return value === undefined || value === null ? __coerce(fallback, key) : value;
+    },
+    set(value) { const general = globalThis.__scene?.general; if (general) general[key] = value; }
+});
+function __destroyAll() {
+    for (const m of __modules) {
+        if (!m || m.disabled || typeof m.ns.destroy !== 'function') continue;
+        __current = m;
+        try { m.ns.destroy(); } catch (e) { __log('destroy: ' + String(e)); }
+        __current = null;
+    }
+}
+const shared = {};
+const console = {log: (...args) => __log(args.map(String).join(' ')), warn: (...args) => __log(args.map(String).join(' ')), error: (...args) => __log(args.map(String).join(' '))};
+Object.assign(globalThis, {engine,input,thisScene,shared,console,createScriptProperties:__createScriptProperties});
+
+Object.assign(globalThis, {MediaPlaybackEvent:{PLAYBACK_PLAYING:1,PLAYBACK_PAUSED:2,PLAYBACK_STOPPED:0}});
+function __audioUpdate(count,left,right) { const b=__audio.get(count); if(!b)return; b.left.set(left); b.right.set(right); for(let i=0;i<count;i++)b.average[i]=(left[i]+right[i])*0.5; }
+
+let __lastPointer = [-1,-1];
+let __lastButtons = [false,false,false];
+let __hover = new Set();
+const __pressed = new Map();
+function __localPosition(layer,world) {
+    const chain=[], seen=new Set();
+    for(let current=layer;current&&!seen.has(current)&&chain.length<64;current=current.getParent()) {seen.add(current);chain.push(current);}
+    let p=world.copy();
+    for(const current of chain.reverse()) {
+        p=p.subtract(current.origin);
+        const angle=-current.angles.z*Math.PI/180, c=Math.cos(angle), s=Math.sin(angle);
+        p=new Vec3(p.x*c-p.y*s,p.x*s+p.y*c,p.z).divide(current.scale);
+    }
+    return p.add(new Vec3((layer.size?.x||0)/2,(layer.size?.y||0)/2,0));
+}
+function __pointer(x,y,buttons,hits) {
+    const moved=x!==__lastPointer[0] || y!==__lastPointer[1];
+    if(!moved && buttons.every((v,i)=>v===__lastButtons[i])) return;
+    input.cursorWorldPosition=new Vec3(x*engine.canvasSize.x,(1-y)*engine.canvasSize.y,0);
+    input.cursorScreenPosition=new Vec2(x*engine.canvasSize.x,y*engine.canvasSize.y);
+    input.cursorLeftDown=!!buttons[0];
+    const hovered=new Set(hits);
+    for(let i=0;i<__modules.length;i++) {
+        const m=__modules[i]; if(!m || m.disabled || !m.layer || !m.cursor) continue;
+        const id=String(m.layer.id), inside=hovered.has(id), was=__hover.has(id);
+        const worldPosition=input.cursorWorldPosition.copy();
+        const event={worldPosition, localPosition:__localPosition(m.layer,worldPosition), cursorWorldPosition:worldPosition, cursorScreenPosition:input.cursorScreenPosition.copy()};
+        const call=name=>{if(typeof m.ns[name]==='function') m.ns[name](event);};
+        try {
+            if(inside&&!was) call('cursorEnter');
+            if(!inside&&was) call('cursorLeave');
+            if((inside||__pressed.has(i))&&moved) call('cursorMove');
+            if(inside&&buttons[0]&&!__lastButtons[0]) {__pressed.set(i,true);call('cursorDown');}
+            if(!buttons[0]&&__lastButtons[0]) {if(inside||__pressed.has(i))call('cursorUp');if(inside&&__pressed.has(i))call('cursorClick');__pressed.delete(i);}
+        } catch(e) {m.disabled=true;__log('cursor script '+i+': '+String(e));}
+    }
+    __lastPointer=[x,y];__lastButtons=buttons;__hover=hovered;
+}
+
+const __mediaState = new Map();
+function __media(json) {
+    const events=JSON.parse(json);
+    for(const [name,event] of Object.entries(events)) {
+        const signature=JSON.stringify(event);
+        if(__mediaState.get(name)===signature)continue;
+        __mediaState.set(name,signature);
+        for(const key of ['primaryColor','secondaryColor','tertiaryColor','textColor','highContrastColor']) if(Array.isArray(event[key]))event[key]=new Vec3(...event[key]);
+        for(const m of __modules) {
+            if(!m || m.disabled || typeof m.ns[name]!=='function')continue;
+            try {m.ns[name](event);} catch(e){m.disabled=true;__log(name+': '+String(e));}
+        }
+    }
+}
+function __needsMedia() { return __modules.some(m=>m && ['mediaPlaybackChanged','mediaPropertiesChanged','mediaThumbnailChanged','mediaStatusChanged','mediaTimelineChanged'].some(name=>typeof m.ns[name]==='function')); }

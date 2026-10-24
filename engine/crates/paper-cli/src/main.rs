@@ -1,0 +1,17 @@
+mod app;
+mod backend;
+mod cli;
+mod client;
+mod manager;
+mod outputs;
+mod server;
+mod we_source;
+
+fn main() {
+    paper_log::init_tracing("engine");
+    if let Err(error) = app::run() {
+        tracing::error!(error = format!("{error:#}"), "skwd-paper failed");
+        eprintln!("skwd-paper: {error:#}");
+        std::process::exit(1);
+    }
+}

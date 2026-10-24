@@ -16,6 +16,7 @@
 #include "core/config.hpp"
 #include "core/loop.hpp"
 #include "services/images.hpp"
+#include "services/engine.hpp"
 #include "services/waywallen.hpp"
 #include "ui/paint.hpp"
 
@@ -74,6 +75,9 @@ Backdrop::~Backdrop() {
 }
 
 void Backdrop::init() {
+    // A previous run may have left them drawing: whatever comes next retires
+    // them (both checks are cheap no-ops when nothing runs).
+    engine_on_ = ww_on_ = true;
     std::string text, path;
     if (read_file(state_path(), text)) {
         json j = json::parse(text, nullptr, false);
@@ -184,19 +188,43 @@ void Backdrop::set_paused(bool paused) {
     if (paused == paused_) return;
     paused_ = paused;
     if (video_.pid > 0) send_mpv(std::string(R"({"command":["set_property","pause",)") + (paused ? "true" : "false") + "]}");
-    if (we_) Loop::get().async([paused] { waywallen::set_paused(paused); });
+    if (engine_on_) Loop::get().async([paused] { engine::set_paused(paused); });
+    if (ww_on_) Loop::get().async([paused] { waywallen::set_paused(paused); });
 }
 
-// Something else is on screen: waywallen (and its renderer) can go.
-void Backdrop::stop_engine() {
-    if (!we_) return;
-    we_ = false;
-    Loop::get().async([] { waywallen::stop_and_quit(); });
+void Backdrop::set_audio(bool on) {
+    if (drawer_ == Drawer::Engine && waywallen::is_item(path_)) Loop::get().async([on] { engine::set_muted(!on); });
+    if (drawer_ == Drawer::Waywallen) Loop::get().async([on] { waywallen::set_muted(!on); });
+}
+
+// Whoever drew before, except `keep`, stops (our surface is on top by now,
+// or the new drawer is up).
+void Backdrop::retire(Drawer keep) {
+    if (keep != Drawer::Mpv) stop_video();
+    if (keep != Drawer::Engine && engine_on_) {
+        engine_on_ = false;
+        Loop::get().async([] { engine::stop(); });
+    }
+    if (keep != Drawer::Waywallen && ww_on_) {
+        ww_on_ = false;
+        Loop::get().async([] { waywallen::stop_and_quit(); });
+    }
+}
+
+// Someone else draws `path` now: our surface and the previous drawer go.
+void Backdrop::handed_over(Drawer to, uint64_t gen, const std::string& path, double settle) {
+    drawer_ = to;
+    Loop::get().after(settle, [this, gen, path, to] {
+        if (gen != gen_) return;
+        drop_surface();
+        retire(to);
+        if (on_shown) on_shown(path);
+    });
 }
 
 std::string Backdrop::still() const {
     if (is_video(path_)) return cache_dir() + "/wallpaper-frame.jpg";
-    if (we_ || waywallen::is_item(path_)) {
+    if (waywallen::is_item(path_)) {
         waywallen::Item it;
         return waywallen::read_item(path_, it) ? it.preview : "";
     }
@@ -208,31 +236,45 @@ void Backdrop::set(const std::string& path) {
     path_ = path;
     save_state();
     uint64_t gen = ++gen_;
-    if (waywallen::is_item(path)) {
-        // waywallen draws it on its own background surface; ours goes once it is up.
-        stop_video();
-        paused_ = false;
-        we_ = true;
-        waywallen::Item item;
-        waywallen::read_item(path, item);
+    paused_ = false;
+    bool item = waywallen::is_item(path);
+    waywallen::Item project;
+    if (item) waywallen::read_item(path, project);
+
+    // Wallpaper Engine scenes and videos, and plain videos: our engine.
+    if ((item && engine::renders(project.type)) || (!item && is_video(path) && engine::installed())) {
+        bool muted = !item || !config().wallpaper_engine_audio;
+        auto err = std::make_shared<std::string>();
+        engine::Kind kind = item ? engine::Kind::Engine : engine::Kind::Video;
+        Loop::get().async([path, kind, muted, err] { engine::apply(path, kind, muted, err.get()); },
+                          [this, gen, path, err] {
+                              if (!err->empty()) {
+                                  if (gen == gen_ && on_error) on_error(*err);
+                                  return;
+                              }
+                              engine_on_ = true;
+                              if (gen != gen_) {  // something newer came meanwhile
+                                  if (drawer_ != Drawer::Engine) retire(drawer_);
+                                  return;
+                              }
+                              handed_over(Drawer::Engine, gen, path, 0.3);
+                          });
+        if (item && !project.preview.empty()) make_palette(project.preview, false);
+        else if (!item) make_palette(path, true);
+        return;
+    }
+    if (item) {
+        // Web wallpapers (for now): waywallen, on its own background surface.
         bool audio = config().wallpaper_engine_audio;
         auto err = std::make_shared<std::string>();
         Loop::get().async(
             [path, audio, err] {
-                if (!waywallen::installed()) {
-                    *err = "Para Wallpaper Engine hace falta waywallen (flatpak org.waywallen.waywallen)";
-                    return;
-                }
-                if (!waywallen::display_installed()) {
-                    *err = "Falta waywallen-layer-shell (de waywallen-display) para mostrar Wallpaper Engine";
+                if (!waywallen::installed() || !waywallen::display_installed() || !waywallen::plugin_installed()) {
+                    *err = "Los fondos web necesitan waywallen";
                     return;
                 }
                 if (!waywallen::ensure_running()) {
                     *err = "waywallen no arrancó";
-                    return;
-                }
-                if (!waywallen::plugin_installed()) {
-                    *err = "Falta el plugin open-wallpaper-engine en waywallen";
                     return;
                 }
                 if (!waywallen::apply_dir(path, err.get())) {
@@ -243,39 +285,31 @@ void Backdrop::set(const std::string& path) {
                 waywallen::sync_hidden();
             },
             [this, gen, path, err] {
-                if (gen != gen_) return;
                 if (!err->empty()) {
-                    if (on_error) on_error(*err);
+                    if (gen == gen_ && on_error) on_error(*err);
                     return;
                 }
-                // the renderer takes a moment to show its first frame
-                Loop::get().after(1.2, [this, gen, path] {
-                    if (gen != gen_) return;
-                    drop_surface();
-                    if (on_shown) on_shown(path);
-                });
+                ww_on_ = true;
+                if (gen != gen_) {
+                    if (drawer_ != Drawer::Waywallen) retire(drawer_);
+                    return;
+                }
+                handed_over(Drawer::Waywallen, gen, path, 1.2);  // its renderer takes a moment
             });
-        if (!item.preview.empty()) make_palette(item.preview, false);
+        if (!project.preview.empty()) make_palette(project.preview, false);
         return;
     }
     if (is_video(path)) {
-        // mpvpaper paints videos on the background layer by itself.
+        // no engine built: mpvpaper paints videos on the background layer by itself
         stop_video();
-        paused_ = false;
         if (!proc::has("mpvpaper")) {
-            if (on_error) on_error("Para fondos de vídeo hace falta mpvpaper");
+            if (on_error) on_error("Para fondos de vídeo hace falta niri-island-engine o mpvpaper");
             return;
         }
         video_ = proc::start({"mpvpaper", "-l", "background", "-o", "no-audio --loop-file=inf --panscan=1.0 --hwdec=auto --input-ipc-server=" + mpv_socket(),
                               "*", path},
                              cache_dir() + "/mpvpaper.log");
-        // Our surface goes once the video has had a moment to appear.
-        Loop::get().after(0.6, [this, gen, path] {
-            if (gen != gen_) return;
-            drop_surface();
-            stop_engine();
-            if (on_shown) on_shown(path);
-        });
+        handed_over(Drawer::Mpv, gen, path, 0.6);
         make_palette(path, true);
         return;
     }
@@ -295,11 +329,10 @@ void Backdrop::set(const std::string& path) {
                           fitted_ = false;
                           ensure_surface();
                           mark_dirty();
-                          // Under our surface by now: the video can stop.
+                          drawer_ = Drawer::Own;
+                          // Under our surface by now: whoever drew before can stop.
                           Loop::get().after(0.3, [this, gen] {
-                              if (gen != gen_) return;
-                              stop_video();
-                              stop_engine();
+                              if (gen == gen_) retire(Drawer::Own);
                           });
                       });
     make_palette(path, false);

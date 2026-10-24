@@ -75,6 +75,21 @@ target_link_libraries(niri-island PRIVATE island-core)
 
 install(TARGETS niri-island RUNTIME DESTINATION bin)
 
+# The wallpaper engine (Rust, engine/): Wallpaper Engine scenes and videos.
+option(NIRI_ISLAND_ENGINE "Build niri-island-engine (needs cargo)" ON)
+find_program(CARGO cargo)
+if(NIRI_ISLAND_ENGINE AND CARGO)
+    set(ENGINE_OUT ${CMAKE_CURRENT_BINARY_DIR}/engine/release)
+    add_custom_target(engine ALL
+        COMMAND ${CARGO} build --release --workspace --manifest-path ${CMAKE_CURRENT_SOURCE_DIR}/engine/Cargo.toml
+                --target-dir ${CMAKE_CURRENT_BINARY_DIR}/engine
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/engine
+        USES_TERMINAL
+        COMMENT "cargo: niri-island-engine")
+    install(PROGRAMS ${ENGINE_OUT}/niri-island-engine ${ENGINE_OUT}/niri-island-engine-vk ${ENGINE_OUT}/niri-island-engine-still
+            DESTINATION bin)
+endif()
+
 # Tests: cmake --build build && ctest --test-dir build --output-on-failure
 enable_testing()
 file(GLOB TEST_SRCS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)

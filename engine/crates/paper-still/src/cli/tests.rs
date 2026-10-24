@@ -1,0 +1,63 @@
+#![cfg(test)]
+
+use super::*;
+use clap::Parser;
+
+#[test]
+fn version_is_headless_and_exact() {
+    let error = Cli::try_parse_from(["skwd-wall-still", "--version"]).unwrap_err();
+    assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
+    assert_eq!(error.to_string(), concat!("skwd-wall-still ", env!("CARGO_PKG_VERSION"), "\n"));
+}
+
+#[test]
+fn fill_mode_parser() {
+    assert_eq!(parse_fill_mode("fit"), Ok(FillMode::Fit));
+    assert_eq!(parse_fill_mode("span"), Ok(FillMode::Span));
+    assert!(parse_fill_mode("Fit").is_err());
+    assert!(parse_fill_mode("banana").is_err());
+}
+
+#[test]
+fn layer_parser() {
+    assert_eq!(parse_layer("background"), Ok(paper_control::Layer::Background));
+    assert_eq!(parse_layer("bottom"), Ok(paper_control::Layer::Bottom));
+    assert_eq!(parse_layer("top"), Ok(paper_control::Layer::Top));
+    assert_eq!(parse_layer("overlay"), Ok(paper_control::Layer::Overlay));
+    assert!(parse_layer("invalid").is_err());
+}
+
+#[test]
+fn frame_stream_contract() {
+    let cli = Cli::try_parse_from([
+        "skwd-wall-still",
+        "*",
+        "/wall/a.png",
+        "--frame-stream",
+        "1920x1080",
+        "--fill-mode",
+        "fit",
+        "--stream-no-header",
+    ])
+    .unwrap();
+    assert_eq!(cli.frame_stream, vec!["1920x1080".to_string()]);
+    assert!(cli.frame_fd.is_empty());
+    assert_eq!(cli.fill_mode, FillMode::Fit);
+    assert!(cli.stream_no_header);
+    let shared = Cli::try_parse_from([
+        "skwd-wall-still",
+        "*",
+        "/wall/a.png",
+        "--frame-stream",
+        "1920x1080",
+        "--frame-fd",
+        "4",
+        "--frame-stream",
+        "1309x2327",
+        "--frame-fd",
+        "6",
+    ])
+    .unwrap();
+    assert_eq!(shared.frame_stream, vec!["1920x1080".to_string(), "1309x2327".to_string()]);
+    assert_eq!(shared.frame_fd, vec![4, 6]);
+}

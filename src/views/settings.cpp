@@ -877,7 +877,7 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
            [&, save](bool v) {
                cfg.wallpaper_engine_audio = v;
                save();
-               if (backdrop_.engine()) Loop::get().async([v] { waywallen::set_muted(!v); });
+               backdrop_.set_audio(v);
            });
     toggle(5, "Wallpaper Engine", "Borrar los que dejas de seguir", "Steam deja en disco los fondos de los que te desuscribes; la isla los borra",
            [&] { return cfg.wallpaper_engine_clean; },

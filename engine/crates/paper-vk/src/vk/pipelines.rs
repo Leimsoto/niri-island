@@ -1,0 +1,601 @@
+use anyhow::{Context, Result, anyhow};
+use ash::vk;
+
+use super::Renderer;
+
+#[cfg(all(test, feature = "shared-device"))]
+mod tests;
+
+impl Renderer {
+    pub(crate) fn create_render_pass(
+        device: &ash::Device,
+        format: vk::Format,
+        headless: bool,
+    ) -> Result<vk::RenderPass> {
+        unsafe {
+            let attachment = [vk::AttachmentDescription::default()
+                .format(format)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::STORE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .final_layout(if headless {
+                    vk::ImageLayout::GENERAL
+                } else {
+                    vk::ImageLayout::PRESENT_SRC_KHR
+                })];
+            let color_ref = [vk::AttachmentReference::default()
+                .attachment(0)
+                .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
+            let subpass = [vk::SubpassDescription::default()
+                .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+                .color_attachments(&color_ref)];
+            let render_pass = device.create_render_pass(
+                &vk::RenderPassCreateInfo::default().attachments(&attachment).subpasses(&subpass),
+                None,
+            )?;
+            Ok(render_pass)
+        }
+    }
+
+    pub(crate) fn create_pipelines(
+        device: &ash::Device,
+        extent: vk::Extent2D,
+        render_pass: vk::RenderPass,
+        desc_layout: vk::DescriptorSetLayout,
+    ) -> Result<(vk::PipelineLayout, vk::Pipeline, vk::PipelineLayout)> {
+        unsafe {
+            let layouts = [desc_layout];
+            let push = [vk::PushConstantRange::default()
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+                .size(48)];
+            let pipeline_layout = device.create_pipeline_layout(
+                &vk::PipelineLayoutCreateInfo::default()
+                    .set_layouts(&layouts)
+                    .push_constant_ranges(&push),
+                None,
+            )?;
+
+            let pipeline = build_pipeline(
+                device,
+                &PipelineSpec {
+                    vert: include_bytes!(concat!(env!("OUT_DIR"), "/fullscreen.vert.spv")),
+                    frag: include_bytes!(concat!(env!("OUT_DIR"), "/nv12.frag.spv")),
+                    topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    blend: vk::PipelineColorBlendAttachmentState::default()
+                        .color_write_mask(vk::ColorComponentFlags::RGBA),
+                    dynamic: &[],
+                    layout: pipeline_layout,
+                    render_pass,
+                    extent,
+                },
+            )?;
+
+            let sand_push = [vk::PushConstantRange::default()
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+                .size(64)];
+            let sand_sets = [desc_layout, desc_layout];
+            let pipeline_layout_sand = device.create_pipeline_layout(
+                &vk::PipelineLayoutCreateInfo::default()
+                    .set_layouts(&sand_sets)
+                    .push_constant_ranges(&sand_push),
+                None,
+            )?;
+
+            Ok((pipeline_layout, pipeline, pipeline_layout_sand))
+        }
+    }
+
+    pub(crate) fn ensure_transition_pipelines(&mut self) -> Result<()> {
+        if self.pipeline_fade != vk::Pipeline::null() {
+            return Ok(());
+        }
+        let device = self.device.clone();
+        let extent = self.extent;
+        let render_pass = self.render_pass;
+        unsafe {
+            self.pipeline_fade = build_pipeline(
+                &device,
+                &PipelineSpec {
+                    vert: include_bytes!(concat!(env!("OUT_DIR"), "/fullscreen.vert.spv")),
+                    frag: include_bytes!(concat!(env!("OUT_DIR"), "/nv12.frag.spv")),
+                    topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    blend: vk::PipelineColorBlendAttachmentState::default()
+                        .color_write_mask(vk::ColorComponentFlags::RGBA)
+                        .blend_enable(true)
+                        .src_color_blend_factor(vk::BlendFactor::CONSTANT_ALPHA)
+                        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_CONSTANT_ALPHA)
+                        .color_blend_op(vk::BlendOp::ADD)
+                        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+                        .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+                        .alpha_blend_op(vk::BlendOp::ADD),
+                    dynamic: &[vk::DynamicState::BLEND_CONSTANTS],
+                    layout: self.pipeline_layout,
+                    render_pass,
+                    extent,
+                },
+            )?;
+
+            self.pipeline_sand = build_pipeline(
+                &device,
+                &PipelineSpec {
+                    vert: include_bytes!(concat!(env!("OUT_DIR"), "/sand_grain.vert.spv")),
+                    frag: include_bytes!(concat!(env!("OUT_DIR"), "/sand_grain.frag.spv")),
+                    topology: vk::PrimitiveTopology::POINT_LIST,
+                    blend: vk::PipelineColorBlendAttachmentState::default()
+                        .color_write_mask(vk::ColorComponentFlags::RGBA)
+                        .blend_enable(true)
+                        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                        .color_blend_op(vk::BlendOp::ADD)
+                        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+                        .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                        .alpha_blend_op(vk::BlendOp::ADD),
+                    dynamic: &[],
+                    layout: self.pipeline_layout_sand,
+                    render_pass,
+                    extent,
+                },
+            )?;
+
+            self.pipeline_base = build_pipeline(
+                &device,
+                &PipelineSpec {
+                    vert: include_bytes!(concat!(env!("OUT_DIR"), "/sand_base.vert.spv")),
+                    frag: include_bytes!(concat!(env!("OUT_DIR"), "/sand_base.frag.spv")),
+                    topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    blend: vk::PipelineColorBlendAttachmentState::default()
+                        .color_write_mask(vk::ColorComponentFlags::RGBA),
+                    dynamic: &[],
+                    layout: self.pipeline_layout_sand,
+                    render_pass,
+                    extent,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "shared-device")]
+    pub fn effect_pipeline(&mut self, fx: usize) -> Result<vk::Pipeline> {
+        if let Some(pipe) = self.effect_pipes.get(&fx) {
+            return Ok(*pipe);
+        }
+        let spv =
+            EFFECT_SPV.get(fx).ok_or_else(|| anyhow::anyhow!("effect index {fx} out of range"))?;
+        let pipe = unsafe {
+            build_pipeline(
+                &self.device,
+                &PipelineSpec {
+                    vert: include_bytes!(concat!(env!("OUT_DIR"), "/sand_base.vert.spv")),
+                    frag: spv,
+                    topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    blend: vk::PipelineColorBlendAttachmentState::default()
+                        .color_write_mask(vk::ColorComponentFlags::RGBA),
+                    dynamic: &[],
+                    layout: self.pipeline_layout_sand,
+                    render_pass: self.render_pass,
+                    extent: self.extent,
+                },
+            )?
+        };
+        self.effect_pipes.insert(fx, pipe);
+        Ok(pipe)
+    }
+}
+
+#[cfg(feature = "shared-device")]
+include!(concat!(env!("OUT_DIR"), "/effects_gen.rs"));
+
+fn make_module(device: &ash::Device, bytes: &[u8]) -> Result<vk::ShaderModule> {
+    let words: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+        .collect();
+    unsafe {
+        device
+            .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)
+            .context("shader module")
+    }
+}
+
+struct PipelineSpec<'a> {
+    vert: &'a [u8],
+    frag: &'a [u8],
+    topology: vk::PrimitiveTopology,
+    blend: vk::PipelineColorBlendAttachmentState,
+    dynamic: &'a [vk::DynamicState],
+    layout: vk::PipelineLayout,
+    render_pass: vk::RenderPass,
+    extent: vk::Extent2D,
+}
+
+fn raster_pipeline_info<'a>(
+    viewport: &'a vk::PipelineViewportStateCreateInfo<'a>,
+    raster: &'a vk::PipelineRasterizationStateCreateInfo<'a>,
+    samples: &'a vk::PipelineMultisampleStateCreateInfo<'a>,
+) -> vk::GraphicsPipelineCreateInfo<'a> {
+    vk::GraphicsPipelineCreateInfo::default()
+        .viewport_state(viewport)
+        .rasterization_state(raster)
+        .multisample_state(samples)
+}
+
+unsafe fn build_pipeline(device: &ash::Device, spec: &PipelineSpec<'_>) -> Result<vk::Pipeline> {
+    let vert = make_module(device, spec.vert)?;
+    let frag = make_module(device, spec.frag)?;
+    let stages = [
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(vert)
+            .name(c"main"),
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(frag)
+            .name(c"main"),
+    ];
+    let vi = vk::PipelineVertexInputStateCreateInfo::default();
+    let ia = vk::PipelineInputAssemblyStateCreateInfo::default().topology(spec.topology);
+    let viewport = [vk::Viewport {
+        x: 0.0,
+        y: 0.0,
+        width: spec.extent.width as f32,
+        height: spec.extent.height as f32,
+        min_depth: 0.0,
+        max_depth: 1.0,
+    }];
+    let scissor = [vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: spec.extent }];
+    let vp = vk::PipelineViewportStateCreateInfo::default().viewports(&viewport).scissors(&scissor);
+    let rs = vk::PipelineRasterizationStateCreateInfo::default()
+        .polygon_mode(vk::PolygonMode::FILL)
+        .cull_mode(vk::CullModeFlags::NONE)
+        .line_width(1.0);
+    let ms = vk::PipelineMultisampleStateCreateInfo::default()
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    let blend_att = [spec.blend];
+    let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_att);
+    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(spec.dynamic);
+    let mut info = raster_pipeline_info(&vp, &rs, &ms)
+        .stages(&stages)
+        .vertex_input_state(&vi)
+        .input_assembly_state(&ia)
+        .color_blend_state(&blend)
+        .layout(spec.layout)
+        .render_pass(spec.render_pass)
+        .subpass(0);
+    if !spec.dynamic.is_empty() {
+        info = info.dynamic_state(&dynamic);
+    }
+    unsafe {
+        let pipeline = device
+            .create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)
+            .map_err(|(_, err)| err)?[0];
+        device.destroy_shader_module(vert, None);
+        device.destroy_shader_module(frag, None);
+        Ok(pipeline)
+    }
+}
+
+pub(super) fn create_scene_render_pass(
+    device: &ash::Device,
+    format: vk::Format,
+) -> Result<vk::RenderPass> {
+    create_scene_pass(device, format, vk::ImageLayout::UNDEFINED)
+}
+
+pub(super) fn create_scene_render_pass_load(
+    device: &ash::Device,
+    format: vk::Format,
+) -> Result<vk::RenderPass> {
+    create_scene_pass(device, format, vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+}
+
+fn create_scene_pass(
+    device: &ash::Device,
+    format: vk::Format,
+    initial_layout: vk::ImageLayout,
+) -> Result<vk::RenderPass> {
+    let load = initial_layout != vk::ImageLayout::UNDEFINED;
+    unsafe {
+        let attachment = [vk::AttachmentDescription::default()
+            .format(format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(if load { vk::AttachmentLoadOp::LOAD } else { vk::AttachmentLoadOp::CLEAR })
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .initial_layout(initial_layout)
+            .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+        let color_ref = [vk::AttachmentReference::default()
+            .attachment(0)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
+        let subpass = [vk::SubpassDescription::default()
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+            .color_attachments(&color_ref)];
+        let dependencies = [
+            vk::SubpassDependency::default()
+                .src_subpass(vk::SUBPASS_EXTERNAL)
+                .dst_subpass(0)
+                .src_stage_mask(
+                    vk::PipelineStageFlags::FRAGMENT_SHADER
+                        | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                        | vk::PipelineStageFlags::TRANSFER,
+                )
+                .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+                .src_access_mask(
+                    vk::AccessFlags::SHADER_READ
+                        | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                        | vk::AccessFlags::TRANSFER_READ,
+                )
+                .dst_access_mask(
+                    vk::AccessFlags::COLOR_ATTACHMENT_READ
+                        | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                ),
+            vk::SubpassDependency::default()
+                .src_subpass(0)
+                .dst_subpass(vk::SUBPASS_EXTERNAL)
+                .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+                .dst_stage_mask(vk::PipelineStageFlags::FRAGMENT_SHADER)
+                .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ),
+        ];
+        device
+            .create_render_pass(
+                &vk::RenderPassCreateInfo::default()
+                    .attachments(&attachment)
+                    .subpasses(&subpass)
+                    .dependencies(&dependencies),
+                None,
+            )
+            .map_err(|err| anyhow!("scene render pass: {err}"))
+    }
+}
+
+impl Renderer {
+    pub fn scene_pass_for(&mut self, format: vk::Format) -> Result<vk::RenderPass> {
+        self.ensure_scene_pipelines()?;
+        if format == vk::Format::R8G8B8A8_UNORM {
+            return Ok(self.scene_pass);
+        }
+        if let Some((_, pass)) = self.format_passes.iter().find(|(known, _)| *known == format) {
+            return Ok(*pass);
+        }
+        let pass = create_scene_render_pass(&self.device, format)?;
+        self.format_passes.push((format, pass));
+        Ok(pass)
+    }
+
+    pub fn scene_pass_load_for(&mut self, format: vk::Format) -> Result<vk::RenderPass> {
+        self.ensure_scene_pipelines()?;
+        if let Some((_, pass)) = self.format_passes_load.iter().find(|(known, _)| *known == format)
+        {
+            return Ok(*pass);
+        }
+        let pass = create_scene_render_pass_load(&self.device, format)?;
+        self.format_passes_load.push((format, pass));
+        Ok(pass)
+    }
+
+    pub fn scene_pass_append_for(&mut self, format: vk::Format) -> Result<vk::RenderPass> {
+        self.ensure_scene_pipelines()?;
+        if let Some((_, pass)) =
+            self.format_passes_append.iter().find(|(known, _)| *known == format)
+        {
+            return Ok(*pass);
+        }
+        let pass =
+            create_scene_pass(&self.device, format, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)?;
+        self.format_passes_append.push((format, pass));
+        Ok(pass)
+    }
+
+    pub(crate) fn ensure_scene_pipelines(&mut self) -> Result<()> {
+        if self.pipeline_layer != vk::Pipeline::null() {
+            return Ok(());
+        }
+        let device = self.device.clone();
+        unsafe {
+            self.scene_pass = create_scene_render_pass(&device, vk::Format::R8G8B8A8_UNORM)?;
+
+            let layouts = [self.desc_layout];
+            let push = [vk::PushConstantRange::default()
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+                .size(112)];
+            self.pipeline_layout_layer = device.create_pipeline_layout(
+                &vk::PipelineLayoutCreateInfo::default()
+                    .set_layouts(&layouts)
+                    .push_constant_ranges(&push),
+                None,
+            )?;
+            let vert =
+                make_module(&device, include_bytes!(concat!(env!("OUT_DIR"), "/layer.vert.spv")))?;
+            let frag =
+                make_module(&device, include_bytes!(concat!(env!("OUT_DIR"), "/layer.frag.spv")))?;
+            let puppet_vert =
+                make_module(&device, include_bytes!(concat!(env!("OUT_DIR"), "/puppet.vert.spv")))?;
+            let stages = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(vert)
+                    .name(c"main"),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(frag)
+                    .name(c"main"),
+            ];
+            let vi = vk::PipelineVertexInputStateCreateInfo::default();
+            let ia = vk::PipelineInputAssemblyStateCreateInfo::default()
+                .topology(vk::PrimitiveTopology::TRIANGLE_STRIP);
+            let viewport = [vk::Viewport::default()];
+            let scissor = [vk::Rect2D::default()];
+            let vp = vk::PipelineViewportStateCreateInfo::default()
+                .viewports(&viewport)
+                .scissors(&scissor);
+            let rs = vk::PipelineRasterizationStateCreateInfo::default()
+                .polygon_mode(vk::PolygonMode::FILL)
+                .cull_mode(vk::CullModeFlags::NONE)
+                .line_width(1.0);
+            let ms = vk::PipelineMultisampleStateCreateInfo::default()
+                .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+            let att = [vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
+                .blend_enable(true)
+                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                .color_blend_op(vk::BlendOp::ADD)
+                .src_alpha_blend_factor(vk::BlendFactor::ONE)
+                .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                .alpha_blend_op(vk::BlendOp::ADD)];
+            let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&att);
+            let dyn_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+            let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dyn_states);
+            let layer_info = raster_pipeline_info(&vp, &rs, &ms)
+                .stages(&stages)
+                .vertex_input_state(&vi)
+                .input_assembly_state(&ia)
+                .color_blend_state(&blend)
+                .dynamic_state(&dynamic)
+                .layout(self.pipeline_layout_layer)
+                .render_pass(self.scene_pass)
+                .subpass(0);
+            self.pipeline_layer = device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &[layer_info], None)
+                .map_err(|(_, err)| err)?[0];
+            let att_add = [vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
+                .blend_enable(true)
+                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                .dst_color_blend_factor(vk::BlendFactor::ONE)
+                .color_blend_op(vk::BlendOp::ADD)
+                .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+                .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+                .alpha_blend_op(vk::BlendOp::ADD)];
+            let blend_add = vk::PipelineColorBlendStateCreateInfo::default().attachments(&att_add);
+            self.pipeline_layer_add = device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    &[layer_info.color_blend_state(&blend_add)],
+                    None,
+                )
+                .map_err(|(_, err)| err)?[0];
+            let att_copy = [vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)];
+            let blend_copy =
+                vk::PipelineColorBlendStateCreateInfo::default().attachments(&att_copy);
+            self.pipeline_layer_copy = device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    &[layer_info.color_blend_state(&blend_copy)],
+                    None,
+                )
+                .map_err(|(_, err)| err)?[0];
+            let att_screen = [vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
+                .blend_enable(true)
+                .src_color_blend_factor(vk::BlendFactor::ONE_MINUS_DST_COLOR)
+                .dst_color_blend_factor(vk::BlendFactor::ONE)
+                .color_blend_op(vk::BlendOp::ADD)
+                .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+                .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+                .alpha_blend_op(vk::BlendOp::ADD)];
+            let blend_screen =
+                vk::PipelineColorBlendStateCreateInfo::default().attachments(&att_screen);
+            self.pipeline_layer_screen = device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    &[layer_info.color_blend_state(&blend_screen)],
+                    None,
+                )
+                .map_err(|(_, err)| err)?[0];
+            let puppet_stages = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(puppet_vert)
+                    .name(c"main"),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(frag)
+                    .name(c"main"),
+            ];
+            let puppet_bind = [vk::VertexInputBindingDescription::default()
+                .binding(0)
+                .stride(16)
+                .input_rate(vk::VertexInputRate::VERTEX)];
+            let puppet_attrs = [
+                vk::VertexInputAttributeDescription::default()
+                    .location(0)
+                    .binding(0)
+                    .format(vk::Format::R32G32_SFLOAT)
+                    .offset(0),
+                vk::VertexInputAttributeDescription::default()
+                    .location(1)
+                    .binding(0)
+                    .format(vk::Format::R32G32_SFLOAT)
+                    .offset(8),
+            ];
+            let puppet_vi = vk::PipelineVertexInputStateCreateInfo::default()
+                .vertex_binding_descriptions(&puppet_bind)
+                .vertex_attribute_descriptions(&puppet_attrs);
+            let puppet_ia = vk::PipelineInputAssemblyStateCreateInfo::default()
+                .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+            self.pipeline_puppet = device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    &[layer_info
+                        .stages(&puppet_stages)
+                        .vertex_input_state(&puppet_vi)
+                        .input_assembly_state(&puppet_ia)],
+                    None,
+                )
+                .map_err(|(_, err)| err)?[0];
+            device.destroy_shader_module(vert, None);
+            device.destroy_shader_module(puppet_vert, None);
+            device.destroy_shader_module(frag, None);
+        }
+        self.ensure_rgba_pipelines()
+    }
+
+    pub(crate) fn ensure_rgba_pipelines(&mut self) -> Result<()> {
+        if self.pipeline_rgba != vk::Pipeline::null() {
+            return Ok(());
+        }
+        let device = self.device.clone();
+        let extent = self.extent;
+        unsafe {
+            self.pipeline_rgba = build_pipeline(
+                &device,
+                &PipelineSpec {
+                    vert: include_bytes!(concat!(env!("OUT_DIR"), "/fullscreen.vert.spv")),
+                    frag: include_bytes!(concat!(env!("OUT_DIR"), "/rgba.frag.spv")),
+                    topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    blend: vk::PipelineColorBlendAttachmentState::default()
+                        .color_write_mask(vk::ColorComponentFlags::RGBA),
+                    dynamic: &[],
+                    layout: self.pipeline_layout,
+                    render_pass: self.render_pass,
+                    extent,
+                },
+            )?;
+            self.pipeline_rgba_fade = build_pipeline(
+                &device,
+                &PipelineSpec {
+                    vert: include_bytes!(concat!(env!("OUT_DIR"), "/fullscreen.vert.spv")),
+                    frag: include_bytes!(concat!(env!("OUT_DIR"), "/rgba.frag.spv")),
+                    topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    blend: vk::PipelineColorBlendAttachmentState::default()
+                        .color_write_mask(vk::ColorComponentFlags::RGBA)
+                        .blend_enable(true)
+                        .src_color_blend_factor(vk::BlendFactor::CONSTANT_ALPHA)
+                        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_CONSTANT_ALPHA)
+                        .color_blend_op(vk::BlendOp::ADD)
+                        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+                        .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+                        .alpha_blend_op(vk::BlendOp::ADD),
+                    dynamic: &[vk::DynamicState::BLEND_CONSTANTS],
+                    layout: self.pipeline_layout,
+                    render_pass: self.render_pass,
+                    extent,
+                },
+            )?;
+        }
+        Ok(())
+    }
+}

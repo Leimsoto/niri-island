@@ -11,8 +11,9 @@
 namespace island {
 
 // The wallpaper itself: a background-layer surface showing the image (cropped
-// to fill), mpvpaper for videos, or waywallen for Wallpaper Engine (a
-// Workshop item's folder). It remembers the last one, and makes the
+// to fill); niri-island-engine for videos and Wallpaper Engine scenes and
+// videos (a Workshop item's folder); waywallen for web ones; mpvpaper for
+// videos when the engine is not built. It remembers the last one, and makes the
 // colour palette the island themes itself with (matugen, or the image's
 // dominant colour when matugen is missing).
 class Backdrop {
@@ -27,7 +28,7 @@ public:
     void pump();                          // draws when needed (from the loop)
     void outputs_changed();               // a screen plugged in or out
     void set_paused(bool paused);         // a video wallpaper stops while hidden
-    bool engine() const { return we_; }   // a Wallpaper Engine one is on screen
+    void set_audio(bool on);              // a Wallpaper Engine one's sound
     // A picture of the current wallpaper (a video's frame, an item's preview).
     std::string still() const;
 
@@ -59,8 +60,12 @@ private:
     void drop_surface();
     void stop_video();
     bool paused_ = false;
-    bool we_ = false;   // waywallen draws it
-    void stop_engine();
+    // who draws what is on screen; who else may still be running
+    enum class Drawer { Own, Mpv, Engine, Waywallen };
+    Drawer drawer_ = Drawer::Own;
+    bool engine_on_ = false, ww_on_ = false;
+    void retire(Drawer keep);
+    void handed_over(Drawer to, uint64_t gen, const std::string& path, double settle);
     void send_mpv(const std::string& cmd);
     void render(Out& o);
     // Once on every screen, the full picture (a 4K PNG is 33 MB decoded) is

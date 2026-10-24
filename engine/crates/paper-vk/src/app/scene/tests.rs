@@ -1,0 +1,1225 @@
+use super::*;
+
+thread_local! {
+    pub(super) static REPLAY_SNAPSHOTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn texture_key(rgba: &[u8], clamp: bool, nearest: bool) -> TextureKey {
+    TextureKey { pixels: paper_scene::tex::Pixels::rgba(2, 1, rgba.to_vec()), clamp, nearest }
+}
+
+#[test]
+fn texture_interning_uses_exact_payload_and_sampler_identity() {
+    let base = texture_key(&[1, 2, 3, 4, 5, 6, 7, 8], true, false);
+    let mut slots = HashMap::new();
+    slots.insert(base, 7);
+
+    assert_eq!(slots.get(&texture_key(&[1, 2, 3, 4, 5, 6, 7, 8], true, false)), Some(&7));
+    let mut wrong_dimensions = texture_key(&[1, 2, 3, 4, 5, 6, 7, 8], true, false);
+    wrong_dimensions.pixels = paper_scene::tex::Pixels::rgba(1, 2, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(slots.get(&wrong_dimensions), None);
+    assert_eq!(slots.get(&texture_key(&[1, 2, 3, 4, 5, 6, 7, 9], true, false)), None);
+    assert_eq!(slots.get(&texture_key(&[1, 2, 3, 4, 5, 6, 7, 8], false, false)), None);
+    assert_eq!(slots.get(&texture_key(&[1, 2, 3, 4, 5, 6, 7, 8], true, true)), None);
+}
+
+#[test]
+fn taking_a_texture_key_releases_the_model_payload() {
+    let mut texture = paper_scene::model::solid_texture();
+    let expected = texture.pixels.clone();
+    let key = TextureKey::take(&mut texture);
+
+    assert!(texture.pixels.levels.is_empty());
+    assert_eq!(texture.pixels.bytes(), 0);
+    assert_eq!(key.pixels, expected);
+    assert_eq!((key.pixels.width(), key.pixels.height()), (1, 1));
+    assert_eq!(key.pixels.bytes(), 4);
+}
+
+#[test]
+fn scene_transitions_accept_standard_effects() {
+    let effect = paper_shaders::effect_index("inkwell-drop").unwrap();
+    assert_eq!(transition_style(Some("inkwell-drop")), TransitionStyle::Effect(effect));
+}
+
+#[test]
+fn scene_transitions_keep_sand_and_fade_fallbacks() {
+    let sand = paper_shaders::sand_style_index("sand-donut").unwrap();
+    assert_eq!(transition_style(Some("sand-donut")), TransitionStyle::Sand(sand));
+    assert_eq!(transition_style(Some("fade")), TransitionStyle::Fade);
+    assert_eq!(transition_style(Some("not-a-transition")), TransitionStyle::Fade);
+    assert_eq!(transition_style(None), TransitionStyle::Fade);
+}
+
+#[test]
+fn clamped_scene_raster_keeps_logical_layer_coordinates() {
+    let dimensions = scene_dimensions_for((3840.0, 2160.0), 2048);
+    assert_eq!(dimensions.logical, [3840.0, 2160.0]);
+    assert_eq!(dimensions.raster, (2048, 1152));
+
+    // Mirror layer.vert for an axis-aligned full-canvas quad. Its corners must
+    // still cover clip space even though the backing image is rasterized smaller.
+    let rect = [1920.0_f32, 1080.0_f32, 3840.0_f32, 2160.0_f32];
+    let project = |corner: [f32; 2]| {
+        let point = [rect[0] + (corner[0] - 0.5) * rect[2], rect[1] + (corner[1] - 0.5) * rect[3]];
+        [point[0] / dimensions.logical[0] * 2.0 - 1.0, point[1] / dimensions.logical[1] * 2.0 - 1.0]
+    };
+
+    assert_eq!(project([0.0, 0.0]), [-1.0, -1.0]);
+    assert_eq!(project([0.5, 0.5]), [0.0, 0.0]);
+    assert_eq!(project([1.0, 1.0]), [1.0, 1.0]);
+
+    // Passing the raster extent as the shader canvas recreates the old zoom.
+    let old_right = rect[2] / dimensions.raster.0 as f32 * 2.0 - 1.0;
+    assert!(old_right > 1.0);
+}
+
+#[test]
+fn fit_scene_raster_tracks_the_largest_output() {
+    let dimensions = scene_dimensions_for_outputs(
+        (3840.0, 2160.0),
+        4096,
+        &[(1920, 1080), (2560, 1440)],
+        FillMode::Fit,
+    );
+
+    assert_eq!(dimensions.logical, [3840.0, 2160.0]);
+    assert_eq!(dimensions.raster, (2560, 1440));
+}
+
+#[test]
+fn fill_scene_raster_covers_portrait_outputs() {
+    let dimensions =
+        scene_dimensions_for_outputs((3840.0, 2160.0), 4096, &[(1080, 1920)], FillMode::Fill);
+
+    assert_eq!(dimensions.raster, (3413, 1920));
+}
+
+#[test]
+fn stretch_scene_raster_tracks_portrait_output_axes() {
+    let dimensions =
+        scene_dimensions_for_outputs((3840.0, 2160.0), 4096, &[(1080, 1920)], FillMode::Stretch);
+
+    assert_eq!(dimensions.logical, [3840.0, 2160.0]);
+    assert_eq!(dimensions.raster, (1080, 1920));
+}
+
+#[test]
+fn stretch_scene_raster_covers_each_multi_output_axis() {
+    let dimensions = scene_dimensions_for_outputs(
+        (3840.0, 2160.0),
+        4096,
+        &[(2560, 1080), (1080, 1920)],
+        FillMode::Stretch,
+    );
+
+    assert_eq!(dimensions.raster, (2560, 1920));
+}
+
+#[test]
+fn configured_scene_limit_still_bounds_output_raster() {
+    let dimensions =
+        scene_dimensions_for_outputs((3840.0, 2160.0), 2048, &[(3840, 2160)], FillMode::Fill);
+
+    assert_eq!(dimensions.raster, (2048, 1152));
+}
+
+#[test]
+fn center_and_tile_keep_authored_raster_dimensions() {
+    for mode in [FillMode::Center, FillMode::Tile] {
+        let dimensions =
+            scene_dimensions_for_outputs((3840.0, 2160.0), 4096, &[(1920, 1080)], mode);
+        assert_eq!(dimensions.raster, (3840, 2160));
+    }
+}
+
+#[test]
+fn effect_targets_follow_scene_raster_scale() {
+    let dimensions =
+        scene_dimensions_for_outputs((3840.0, 2160.0), 4096, &[(1920, 1080)], FillMode::Fit);
+
+    assert_eq!(effect_dimensions_for((3840.0, 2160.0), dimensions), (1920, 1080));
+    assert_eq!(effect_dimensions_for((1920.0, 1080.0), dimensions), (960, 540));
+}
+
+#[test]
+fn effect_target_cap_preserves_layer_aspect() {
+    let dimensions = scene_dimensions_for((3840.0, 2160.0), 4096);
+
+    assert_eq!(effect_dimensions_for((3840.0, 2160.0), dimensions), (2048, 1152));
+}
+
+#[test]
+fn scene_fade_commits_exact_endpoints_before_leaving_the_transition_path() {
+    assert_eq!(
+        scene_fade_step(None, false),
+        SceneFadeStep { mix: 1.0, render_transition: false, finish_after_commit: false }
+    );
+    assert_eq!(
+        scene_fade_step(Some(0.18), true),
+        SceneFadeStep { mix: 0.0, render_transition: true, finish_after_commit: false }
+    );
+    assert_eq!(
+        scene_fade_step(Some(0.18), false),
+        SceneFadeStep { mix: 0.18, render_transition: true, finish_after_commit: false }
+    );
+    assert_eq!(
+        scene_fade_step(Some(1.04), false),
+        SceneFadeStep { mix: 1.0, render_transition: true, finish_after_commit: true }
+    );
+}
+
+#[test]
+fn scene_swap_transition_never_inherits_a_previous_duration() {
+    assert_eq!(scene_swap_duration(0), None);
+    assert_eq!(scene_swap_duration(40), Some(80));
+    assert_eq!(scene_swap_duration(600), Some(600));
+    assert_eq!(scene_swap_duration(8000), Some(4000));
+}
+
+#[test]
+fn every_output_owns_an_independent_scene_presenter() {
+    let outputs = [(2560, 1440), (1920, 1080), (3840, 2160)];
+    let (shared, shared_indices) = scene_presenter_layout(&outputs, (3440, 1440), true);
+    assert_eq!(shared, [(3440, 1440), (3440, 1440), (3440, 1440)]);
+    assert_eq!(shared_indices, [0, 1, 2]);
+
+    let (native, native_indices) = scene_presenter_layout(&outputs, (3440, 1440), false);
+    assert_eq!(native, outputs);
+    assert_eq!(native_indices, [0, 1, 2]);
+}
+
+#[test]
+fn shared_scene_slot_waits_for_every_borrower() {
+    let mut free = [vec![], vec![], vec![]];
+    let available = |free: &[Vec<usize>]| shared_scene_slot(free.iter().map(Vec::as_slice), 2);
+    free[0].push(0);
+    free[1].push(0);
+    assert_eq!(available(&free), None);
+    free[2].push(1);
+    assert_eq!(available(&free), None);
+    free[2].push(0);
+    assert_eq!(available(&free), Some(0));
+}
+
+#[test]
+fn shared_scene_pool_growth_unblocks_fragmented_outputs() {
+    let mut free = [vec![0], vec![1], vec![0]];
+    assert_eq!(shared_scene_slot(free.iter().map(Vec::as_slice), 2), None);
+    for output in &mut free {
+        output.push(2);
+    }
+    assert_eq!(shared_scene_slot(free.iter().map(Vec::as_slice), 3), Some(2));
+    free[0].retain(|&bi| bi != 2);
+    assert_eq!(shared_scene_slot(free.iter().map(Vec::as_slice), 3), None);
+    free[0].push(2);
+    assert_eq!(shared_scene_slot(free.iter().map(Vec::as_slice), 3), Some(2));
+}
+
+#[test]
+fn shared_scene_pool_keeps_fast_outputs_independent_of_retained_frames() {
+    let count = 6;
+    let mut free = [vec![1, 2, 3, 4, 5], vec![0, 3, 4, 5], vec![0, 1, 2, 5]];
+    let mut current = 0;
+    for _ in 0..100 {
+        let next = shared_scene_slot(free.iter().map(Vec::as_slice), count).unwrap();
+        assert!(next == 0 || next == 5);
+        free[0].retain(|&bi| bi != next);
+        assert_eq!(count - free[0].len(), 2);
+        free[0].push(current);
+        current = next;
+    }
+    assert_eq!(free[1], [0, 3, 4, 5]);
+    assert_eq!(free[2], [0, 1, 2, 5]);
+}
+
+#[test]
+fn shared_scene_pool_does_not_reuse_closed_outputs_unreleased_storage() {
+    let live = [1, 2];
+    let closed = [0, 2];
+    assert_eq!(shared_scene_slot([live.as_slice(), closed.as_slice()].into_iter(), 3), Some(2));
+}
+
+#[test]
+fn effect_target_accounting_retains_only_the_selected_output() {
+    let ping_output = classify_effect_target_bytes(&[64, 64, 16, 8], FxTargetId::Ping).unwrap();
+    assert_eq!(ping_output, EffectTargetBytes { retained: 64, transient: 88 });
+
+    let named_output = classify_effect_target_bytes(&[64, 64, 16, 8], FxTargetId::Fbo(1)).unwrap();
+    assert_eq!(named_output, EffectTargetBytes { retained: 8, transient: 144 });
+}
+
+#[test]
+fn effect_target_accounting_rejects_an_unknown_named_output() {
+    assert_eq!(classify_effect_target_bytes(&[64, 64, 16], FxTargetId::Fbo(1)), None);
+}
+
+#[test]
+fn scratch_layout_reuses_only_compatible_cross_layer_targets() {
+    let full = FxTargetClass { width: 1920, height: 1080, repeat: false, format: 37 };
+    let half = FxTargetClass { width: 960, height: 540, repeat: false, format: 37 };
+    let repeating = FxTargetClass { repeat: true, ..full };
+
+    let layout = plan_scratch_layout(&[vec![full, full, half], vec![full, half], vec![repeating]]);
+
+    // Targets in one layer never alias even when their image class matches.
+    assert_ne!(layout.assignments[0][0], layout.assignments[0][1]);
+    // Sequential layers reuse matching scratch slots.
+    assert_eq!(layout.assignments[1][0], layout.assignments[0][0]);
+    assert_eq!(layout.assignments[1][1], layout.assignments[0][2]);
+    // Sampler addressing is part of compatibility.
+    assert_ne!(layout.assignments[2][0], layout.assignments[0][0]);
+    assert_eq!(layout.physical_classes.len(), 4);
+}
+
+#[test]
+fn scene_sampled_ping_pong_target_never_enters_scratch_alias_pool() {
+    let plan = lifetime::plan_targets(&[], &[None, None], &[vec![], vec![]], &[0, 0]).unwrap();
+    assert!(plan.lifetimes[FxTargetId::Ping.index()].scratch_eligible());
+
+    assert!(scratch_candidate(&plan, &BTreeSet::new(), FxTargetId::Ping));
+    assert!(!scratch_candidate(&plan, &BTreeSet::from([CompositeBuffer::A]), FxTargetId::Ping));
+    assert!(!scratch_candidate(&plan, &BTreeSet::new(), plan.output));
+}
+
+#[test]
+fn passive_target_quad_crops_padded_texture_at_layer_extent() {
+    let mut texture = paper_scene::model::solid_texture();
+    texture.width = 4;
+    texture.height = 8;
+    texture.img_width = 3;
+    texture.img_height = 5;
+    let layer = paper_scene::model::Layer {
+        live_text: None,
+        script_text: None,
+        is_text: false,
+        mouse: paper_scene::mouse::LayerMouse::default(),
+        id: "producer".into(),
+        name: "producer".into(),
+        visible: true,
+        texture,
+        puppet: None,
+        center: (0.0, 0.0),
+        size: (300.0, 500.0),
+        scale: (1.0, 1.0),
+        depth: 0.0,
+        scene_order: 0,
+        alpha: 1.0,
+        angle: 0.0,
+        color: [1.0; 3],
+        color_blend: 0,
+        passthrough: false,
+        composition_size: None,
+        copy_background: false,
+        solid: false,
+        effects: Vec::new(),
+    };
+
+    let quad = passive_target_quad(&layer, 7, ash::vk::Extent2D { width: 300, height: 500 });
+    assert_eq!(quad.rect, [150.0, 250.0, 300.0, 500.0]);
+    assert_eq!(quad.uv, [0.0, 0.0, 0.75, 0.625]);
+    assert_eq!(quad.texture, 7);
+    assert!(quad.blend == vk::SceneBlend::Copy);
+}
+
+#[test]
+fn active_and_passive_duplicate_ids_remain_ambiguous() {
+    let layer = |name: &str| paper_scene::model::Layer {
+        live_text: None,
+        script_text: None,
+        is_text: false,
+        mouse: paper_scene::mouse::LayerMouse::default(),
+        id: "duplicate".into(),
+        name: name.into(),
+        visible: true,
+        texture: paper_scene::model::solid_texture(),
+        puppet: None,
+        center: (0.0, 0.0),
+        size: (1.0, 1.0),
+        scale: (1.0, 1.0),
+        depth: 0.0,
+        scene_order: 0,
+        alpha: 1.0,
+        angle: 0.0,
+        color: [1.0; 3],
+        color_blend: 0,
+        passthrough: false,
+        composition_size: None,
+        copy_background: false,
+        solid: false,
+        effects: Vec::new(),
+    };
+    let layers = [layer("active"), layer("passive")];
+    let active_layers = BTreeSet::from([0]);
+    let referenced = BTreeSet::from(["duplicate".to_string()]);
+    let passive_indices = passive_provider_indices(&layers, &active_layers, &referenced);
+    assert_eq!(passive_indices, [1]);
+
+    let consumer_binds = vec![vec![(
+        0,
+        EffectBind::LayerComposite { layer: "duplicate".into(), buffer: CompositeBuffer::A },
+    )]];
+    let nodes = [
+        LayerTargetNode {
+            id: &layers[0].id,
+            scene_order: 0,
+            local_targets: &[],
+            binds: &[],
+            dynamic: false,
+            prefix_dynamic: false,
+            passthrough: false,
+        },
+        LayerTargetNode {
+            id: "consumer",
+            scene_order: 1,
+            local_targets: &[],
+            binds: &consumer_binds,
+            dynamic: false,
+            prefix_dynamic: false,
+            passthrough: false,
+        },
+    ];
+    let passive = [PassiveLayerTarget { id: &layers[passive_indices[0]].id, dynamic: false }];
+
+    assert_eq!(
+        plan_scene_targets(&nodes, &passive),
+        Err(paper_scene::scene_targets::SceneTargetPlanError::AmbiguousLayer {
+            consumer: 1,
+            layer: "duplicate".into(),
+        })
+    );
+}
+
+#[test]
+fn full_frame_prefix_merges_lower_particles_in_unified_order() {
+    let image = |texture| vk::SceneQuad {
+        projection: None,
+        order_bias: 0,
+        rect: [0.0; 4],
+        uv: [0.0; 4],
+        tint: [1.0; 4],
+        angle: 0.0,
+        texture,
+        blend: vk::SceneBlend::Alpha,
+    };
+    let images = [image(10), image(30)];
+    let particles = [OrderedParticleQuad { scene_order: 1, quad: image(20) }];
+
+    let prefix = ordered_scene_quads(&images, &[0, 2], &particles, 0, Some(2));
+    assert_eq!(prefix.iter().map(|quad| quad.texture).collect::<Vec<_>>(), [10, 20]);
+    let full = ordered_scene_quads(&images, &[0, 2], &particles, 0, None);
+    assert_eq!(full.iter().map(|quad| quad.texture).collect::<Vec<_>>(), [10, 20, 30]);
+}
+
+#[test]
+fn strict_startup_rejects_any_scene_loader_skip() {
+    let skipped = vec![
+        "layer: unsupported object".to_string(),
+        "layer: effect material unavailable".to_string(),
+    ];
+
+    assert!(validate_scene_skips(false, &skipped).is_ok());
+    let error = validate_scene_skips(true, &skipped).unwrap_err().to_string();
+    assert!(error.contains("2 skipped element(s)"));
+    assert!(error.contains("unsupported object"));
+    assert!(error.contains("effect material unavailable"));
+    assert!(validate_scene_skips(true, &[]).is_ok());
+}
+
+#[test]
+fn strict_startup_rejects_pipeline_fallback_but_best_effort_accepts_it() {
+    assert!(validate_pipeline_skip(false, "clock", "shader compile failed").is_ok());
+    let error =
+        validate_pipeline_skip(true, "clock", "shader compile failed").unwrap_err().to_string();
+    assert!(error.contains("effect pipeline on clock"));
+    assert!(error.contains("shader compile failed"));
+}
+
+fn sound_package(files: &[(&str, &[u8])]) -> paper_scene::pkg::Package {
+    let mut bytes = Vec::new();
+    let push = |bytes: &mut Vec<u8>, text: &str| {
+        bytes.extend_from_slice(&(text.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(text.as_bytes());
+    };
+    push(&mut bytes, "PKGV0007");
+    bytes.extend_from_slice(&(files.len() as u32).to_le_bytes());
+    let mut offset = 0u32;
+    for (path, data) in files {
+        push(&mut bytes, path);
+        bytes.extend_from_slice(&offset.to_le_bytes());
+        bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        offset += data.len() as u32;
+    }
+    for (_, data) in files {
+        bytes.extend_from_slice(data);
+    }
+    paper_scene::pkg::Package::parse(bytes).unwrap()
+}
+
+#[test]
+fn preset_sound_visibility_and_user_override_share_scene_defaults() {
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().join("1");
+    let preset = root.path().join("2");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::create_dir(&preset).unwrap();
+    std::fs::write(
+        parent.join("project.json"),
+        br#"{"general":{"properties":{"music":{"type":"bool","value":true}}}}"#,
+    )
+    .unwrap();
+    std::fs::write(preset.join("project.json"), br#"{"dependency":"1","preset":{"music":false}}"#)
+        .unwrap();
+    let package = sound_package(&[
+        ("scene.json", br#"{"objects":[{"id":1,"sound":["clip.ogg"],"visible":{"user":"music","value":true}}]}"#),
+        ("clip.ogg", b"fixture"),
+    ]);
+    let defaults = paper_scene::model::Properties::new();
+    let properties = super::properties::resolved(preset.to_str().unwrap(), &defaults);
+    assert!(paper_scene::sound::scene_sounds(&package, &properties).unwrap().is_empty());
+    let overrides = paper_scene::model::Properties::from([("music".into(), vec![1.0])]);
+    let properties = super::properties::resolved(preset.to_str().unwrap(), &overrides);
+    assert_eq!(paper_scene::sound::scene_sounds(&package, &properties).unwrap().len(), 1);
+    let properties = super::properties::resolved(parent.to_str().unwrap(), &defaults);
+    assert_eq!(paper_scene::sound::scene_sounds(&package, &properties).unwrap().len(), 1);
+}
+
+#[test]
+fn every_scene_sound_is_staged_as_its_own_voice_with_the_authored_playback() {
+    let scene = br#"{"objects":[
+        {"name":"Ambience","sound":["s/wind.ogg"],"volume":0.4,"playbackmode":"loop"},
+        {"name":"Birds","sound":["s/a.ogg","s/b.ogg"],"volume":1.3,"playbackmode":"random",
+         "mintime":10.0,"maxtime":30.0},
+        {"name":"Sting","sound":"s/hit.ogg","playbackmode":"single"},
+        {"name":"Quiet","sound":"s/wind.ogg","startsilent":true}
+    ]}"#;
+    let pkg = sound_package(&[
+        ("scene.json", scene),
+        ("s/wind.ogg", b"wind"),
+        ("s/a.ogg", b"a"),
+        ("s/b.ogg", b"b"),
+        ("s/hit.ogg", b"hit"),
+    ]);
+    let audio = SceneAudio::extract(&pkg, &paper_scene::model::Properties::new())
+        .unwrap()
+        .expect("scene declares sounds");
+    let voices = audio.voices();
+    assert_eq!(
+        voices.iter().map(|voice| voice.name.as_str()).collect::<Vec<_>>(),
+        ["Ambience", "Birds", "Sting"],
+        "a start-silent object must not become a voice"
+    );
+    assert_eq!(voices[0].mode, paper_audio::VoiceMode::Loop);
+    assert_eq!(voices[1].mode, paper_audio::VoiceMode::Random);
+    assert_eq!(voices[2].mode, paper_audio::VoiceMode::Once);
+    assert_eq!(voices[1].clips.len(), 2, "a random pool keeps every clip");
+    assert!((voices[1].gain - 1.3).abs() < f32::EPSILON);
+    assert!((voices[1].min_gap - 10.0).abs() < f32::EPSILON);
+    assert!((voices[1].max_gap - 30.0).abs() < f32::EPSILON);
+
+    for voice in &voices {
+        for clip in &voice.clips {
+            assert!(std::path::Path::new(clip).is_file(), "each clip is staged on disk: {clip}");
+        }
+    }
+    assert_eq!(audio.summary().split(", ").count(), 4, "every staged clip is named in the log");
+}
+
+#[test]
+fn a_scene_without_playable_sounds_produces_no_audio() {
+    let pkg = sound_package(&[(
+        "scene.json",
+        br#"{"objects":[{"sound":"s/missing.ogg"},{"image":"models/bg.json"}]}"#,
+    )]);
+    assert!(SceneAudio::extract(&pkg, &paper_scene::model::Properties::new()).unwrap().is_none());
+}
+
+#[test]
+fn a_user_bound_sound_volume_follows_the_scene_property() {
+    let scene = br#"{"objects":[{"name":"Music","sound":"s/theme.ogg",
+        "volume":{"user":"music_volume","value":0.9}}]}"#;
+    let pkg = sound_package(&[("scene.json", scene), ("s/theme.ogg", b"theme")]);
+    let baked =
+        SceneAudio::extract(&pkg, &paper_scene::model::Properties::new()).unwrap().expect("sound");
+    assert!((baked.voices()[0].gain - 0.9).abs() < f32::EPSILON);
+
+    let mut properties = paper_scene::model::Properties::new();
+    properties.insert("music_volume".into(), vec![0.2]);
+    let tuned = SceneAudio::extract(&pkg, &properties).unwrap().expect("sound");
+    assert!((tuned.voices()[0].gain - 0.2).abs() < f32::EPSILON);
+}
+
+#[test]
+fn atlas_frames_advance_by_cumulative_frame_time_and_wrap() {
+    use paper_scene::model::SpriteFrame;
+    let frames = vec![
+        SpriteFrame { uv: [0.0, 0.0, 0.5, 1.0], rotated: false, time: 0.1, image: 0 },
+        SpriteFrame { uv: [0.5, 0.0, 0.5, 1.0], rotated: false, time: 0.3, image: 0 },
+    ];
+    assert_eq!(animation_frame(&frames, 0.4, 0.0).uv, frames[0].uv);
+    assert_eq!(animation_frame(&frames, 0.4, 0.05).uv, frames[0].uv);
+    assert_eq!(animation_frame(&frames, 0.4, 0.2).uv, frames[1].uv);
+    assert_eq!(animation_frame(&frames, 0.4, 0.45).uv, frames[0].uv);
+    assert_eq!(animation_frame(&frames, 0.0, 9.0).uv, frames[0].uv);
+}
+
+fn transform(m: &Mat4, p: [f32; 4]) -> [f32; 4] {
+    let mut out = [0.0; 4];
+    for (row, slot) in out.iter_mut().enumerate() {
+        *slot = (0..4).map(|k| m[k * 4 + row] * p[k]).sum();
+    }
+    out
+}
+
+#[test]
+fn scene_ortho_maps_engine_space_to_vulkan_clip() {
+    let m = scene_ortho((1920.0, 1080.0), false);
+    assert_eq!(transform(&m, [0.0, 0.0, 0.0, 1.0]), [-1.0, 1.0, 0.5, 1.0]);
+    assert_eq!(transform(&m, [1920.0, 1080.0, 0.0, 1.0]), [1.0, -1.0, 0.5, 1.0]);
+    let d3d = scene_ortho((1920.0, 1080.0), true);
+    assert_eq!(transform(&d3d, [0.0, 0.0, 0.0, 1.0]), [-1.0, -1.0, 0.5, 1.0]);
+    assert_eq!(transform(&d3d, [1920.0, 1080.0, 0.0, 1.0]), [1.0, 1.0, 0.5, 1.0]);
+    let model = model_matrix((100.0, 50.0, 0.0), [2.0, 3.0, 1.0], 0.0);
+    let mvp = mat4_mul(&m, &model);
+    let p = transform(&mvp, [10.0, 10.0, 0.0, 1.0]);
+    assert!((p[0] - (2.0 * 120.0 / 1920.0 - 1.0)).abs() < 1e-5);
+    assert!((p[1] - (1.0 - 2.0 * 80.0 / 1080.0)).abs() < 1e-5);
+    let inverse = model_inverse((100.0, 50.0, 0.0), [2.0, 3.0, 1.0], 0.0);
+    let back = transform(&inverse, [120.0, 80.0, 0.0, 1.0]);
+    assert!((back[0] - 10.0).abs() < 1e-5 && (back[1] - 10.0).abs() < 1e-5);
+
+    let turned = model_matrix((100.0, 50.0, 0.0), [2.0, 3.0, 1.0], std::f32::consts::FRAC_PI_2);
+    let up = transform(&turned, [10.0, 0.0, 0.0, 1.0]);
+    assert!(
+        (up[0] - 100.0).abs() < 1e-4 && (up[1] - 70.0).abs() < 1e-4,
+        "a quarter turn sends local +x to world +y: {up:?}"
+    );
+    let undo = model_inverse((100.0, 50.0, 0.0), [2.0, 3.0, 1.0], std::f32::consts::FRAC_PI_2);
+    let back = transform(&undo, [up[0], up[1], 0.0, 1.0]);
+    assert!(
+        (back[0] - 10.0).abs() < 1e-4 && back[1].abs() < 1e-4,
+        "the inverse undoes rotation and scale: {back:?}"
+    );
+}
+
+#[test]
+fn scene_perspective_keeps_the_centre_and_depth_in_range() {
+    let m = scene_perspective((1920.0, 1080.0), false);
+    let d3d = scene_perspective((1920.0, 1080.0), true);
+    let up = transform(&m, [960.0, 1080.0, 0.0, 1.0]);
+    let up_d3d = transform(&d3d, [960.0, 1080.0, 0.0, 1.0]);
+    assert!((up[1] / up[3] + up_d3d[1] / up_d3d[3]).abs() < 1e-5);
+    assert!(up_d3d[1] / up_d3d[3] > 0.0);
+    let centre = transform(&m, [960.0, 540.0, 0.0, 1.0]);
+    assert!(centre[0].abs() < 1e-5 && centre[1].abs() < 1e-5);
+    let ndc_z = centre[2] / centre[3];
+    assert!(ndc_z > 0.0 && ndc_z < 1.0, "{ndc_z}");
+    let near = transform(&m, [960.0, 540.0, 500.0, 1.0]);
+    let far = transform(&m, [960.0, 540.0, -500.0, 1.0]);
+    assert!(near[3] < far[3]);
+    let right = transform(&m, [1500.0, 540.0, 0.0, 1.0]);
+    assert!(right[0] / right[3] > 0.0);
+    let up = transform(&m, [960.0, 1000.0, 0.0, 1.0]);
+    assert!(up[1] / up[3] < 0.0);
+}
+
+#[test]
+fn scene_perspective_matches_the_engine_eye_distance() {
+    for (w, h) in [(1920.0f32, 1080.0f32), (2560.0, 1440.0), (1920.0, 1920.0)] {
+        let m = scene_perspective((w, h), false);
+        let d = super::particle_eye_distance(h);
+        assert!((d - 0.45 * h).abs() < 1e-3);
+        let flat = transform(&m, [w * 0.5, h * 0.5 + 100.0, 0.0, 1.0]);
+        assert!((flat[1] / flat[3] - (-100.0 / (h * 0.5))).abs() < 1e-5, "{:?}", flat);
+        for z in [200.0f32, 100.0, -100.0, -200.0] {
+            let p = transform(&m, [w * 0.5 + 100.0, h * 0.5 + 100.0, z, 1.0]);
+            let s = d / (d - z);
+            assert!((p[0] / p[3] - 100.0 * s / (w * 0.5)).abs() < 1e-4, "z={z} {:?}", p);
+            assert!((p[1] / p[3] + 100.0 * s / (h * 0.5)).abs() < 1e-4, "z={z} {:?}", p);
+        }
+    }
+}
+
+#[test]
+fn sprite_grid_reports_engine_render_var() {
+    use paper_scene::model::{SpriteFrame, Texture};
+    let mut texture = paper_scene::model::solid_texture();
+    texture.width = 400;
+    texture.height = 200;
+    assert_eq!(sprite_grid(&texture), [0.0, 0.0, 0.0, 0.5]);
+    let frame =
+        |x: f32, y: f32| SpriteFrame { uv: [x, y, 0.25, 0.5], rotated: false, time: 0.1, image: 0 };
+    texture.frames = vec![frame(0.0, 0.0), frame(0.25, 0.0), frame(0.5, 0.0)];
+    let grid = sprite_grid(&texture);
+    assert_eq!(grid[0], 0.25);
+    assert_eq!(grid[1], 0.5);
+    assert_eq!(grid[2], 3.0);
+    assert!((grid[3] - 1.0).abs() < 1e-6);
+    let _: &Texture = &texture;
+}
+
+#[test]
+fn layer_model_matrix_composes_origin_rotation_and_scale_without_size() {
+    let mut layer = paper_scene::model::Layer {
+        live_text: None,
+        script_text: None,
+        is_text: false,
+        mouse: paper_scene::mouse::LayerMouse::default(),
+        id: "1".into(),
+        name: "L".into(),
+        visible: true,
+        texture: paper_scene::model::solid_texture(),
+        puppet: None,
+        center: (300.0, 200.0),
+        size: (944.0, 147.0),
+        scale: (7.375, 1.15),
+        depth: 5.0,
+        scene_order: 0,
+        alpha: 1.0,
+        angle: -std::f32::consts::FRAC_PI_2,
+        color: [1.0, 1.0, 1.0],
+        color_blend: 0,
+        passthrough: false,
+        composition_size: None,
+        copy_background: false,
+        solid: false,
+        effects: Vec::new(),
+    };
+    let (m, inv) = layer_model_matrix(&layer, (1920.0, 1080.0));
+    let x_axis = transform(&m, [1.0, 0.0, 0.0, 0.0]);
+    assert!((x_axis[0]).abs() < 1e-5 && (x_axis[1] - 7.375).abs() < 1e-5, "{x_axis:?}");
+    assert_eq!(transform(&m, [0.0, 0.0, 0.0, 1.0]), [300.0, 880.0, 5.0, 1.0]);
+    let back = transform(&inv, [300.0, 880.0, 5.0, 1.0]);
+    assert!(back.iter().zip([0.0, 0.0, 0.0, 1.0]).all(|(a, b)| (a - b).abs() < 1e-4), "{back:?}");
+    layer.angle = 0.0;
+    let (m, _) = layer_model_matrix(&layer, (1920.0, 1080.0));
+    assert!((m[0] - 7.375).abs() < 1e-6 && (m[5] - 1.15).abs() < 1e-6);
+    assert_ne!(m[0], 944.0);
+}
+
+#[test]
+#[ignore = "requires Vulkan, Wallpaper Engine assets, and SKWD_WE_CLOCK_LIBRARY"]
+fn clock_effects_refresh_pixels_across_a_minute_without_continuous_animation() {
+    let root = std::env::var("SKWD_WE_CLOCK_LIBRARY").expect("Workshop library path");
+    let sd = crate::shared::create(std::ptr::null_mut()).unwrap();
+    for (item, layer_id, has_effect) in
+        [("3735385298", "66", true), ("2138975215", "67", false), ("3735385298", "58", true)]
+    {
+        let dir = std::path::Path::new(&root).join(item);
+        let pkg = paper_scene::pkg::Package::open(&dir.join("scene.pkg")).unwrap();
+        let mut model = paper_scene::model::load_from_dir(&pkg, &dir).unwrap();
+        assert!(model.scripts.is_none(), "known native clocks must not allocate a JS runtime");
+        model.layers.retain(|layer| layer.id == layer_id);
+        model.particles.clear();
+        model.skipped.clear();
+        assert_eq!(model.layers.len(), 1);
+        model.canvas = (1024.0, 512.0);
+        model.clear = [0.5; 3];
+        model.layers[0].center = (512.0, 256.0);
+        model.layers[0].visible = true;
+        model.layers[0].mouse = paper_scene::mouse::LayerMouse::default();
+        assert_eq!(!model.layers[0].effects.is_empty(), has_effect);
+        assert!(model.layers[0].live_text.is_some());
+        let raster =
+            layer_effect_dimensions(&model.layers[0], scene_dimensions_for(model.canvas, 4096));
+        assert_eq!(raster, (model.layers[0].texture.width, model.layers[0].texture.height));
+        let mut group = build_group(&sd, &mut model, true, &[(1024, 512)], FillMode::Fit).unwrap();
+        assert!(!group.animated(), "clock effects must sleep between clock ticks");
+        assert_eq!(!group.fx.is_empty(), has_effect, "live effects must survive static baking");
+        group.live_text_due = f32::INFINITY;
+        let now = paper_scene::dynamic_text::LocalTime {
+            hour: 20,
+            minute: 44,
+            second: 59,
+            day: 11,
+            month: 9,
+            year: 2026,
+            weekday: 5,
+        };
+        let mut frames = Vec::new();
+        for (index, instant) in [
+            now,
+            paper_scene::dynamic_text::LocalTime {
+                minute: 45,
+                second: 0,
+                day: 12,
+                weekday: 6,
+                ..now
+            },
+            now,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            group.refresh_live_text(instant).unwrap();
+            group.compose(index as f32, 1.0 / 60.0).unwrap();
+            let expected = if layer_id == "58" {
+                if index == 1 { "12.septembre.2026" } else { "11.septembre.2026" }
+            } else if index == 1 {
+                "20:45:00"
+            } else {
+                "20:44:59"
+            };
+            assert_eq!(group.live_text[0].shown, expected);
+            let (w, h, pixels) = group.read_canvas().unwrap();
+            if let Ok(evidence) = std::env::var("SKWD_WE_CLOCK_EVIDENCE") {
+                image::save_buffer(
+                    std::path::Path::new(&evidence).join(format!("{item}-{layer_id}-{index}.png")),
+                    &pixels,
+                    w,
+                    h,
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
+            frames.push(pixels);
+        }
+        assert_ne!(frames[0], frames[1], "composed clock pixels must change");
+        assert_eq!(frames[0], frames[2], "only the requested clock value should change the frame");
+        group.destroy();
+    }
+}
+
+#[test]
+fn pointer_unprojection_uses_centered_layer_coordinates() {
+    let canvas = (1920.0, 1080.0);
+    let centered =
+        layer_projection_inverse(&model_inverse((960.0, 540.0, 0.0), [1.0; 3], 0.0), canvas);
+    assert_eq!([centered[12], centered[13]], [0.0, 0.0]);
+    assert_eq!([centered[0], centered[5]], [960.0, 540.0]);
+    let shifted =
+        layer_projection_inverse(&model_inverse((480.0, 270.0, 0.0), [2.0, 3.0, 1.0], 0.0), canvas);
+    assert_eq!([shifted[12], shifted[13]], [240.0, 90.0]);
+    assert_eq!([shifted[0], shifted[5]], [480.0, 180.0]);
+    let rotated = layer_projection_inverse(
+        &model_inverse((960.0, 540.0, 0.0), [1.0; 3], std::f32::consts::FRAC_PI_2),
+        canvas,
+    );
+    assert!((rotated[1] + 960.0).abs() < 0.001);
+    assert!((rotated[4] - 540.0).abs() < 0.001);
+}
+
+#[test]
+#[ignore = "requires Vulkan, Wallpaper Engine assets, and SKWD_WE_XRAY_PROJECT"]
+fn hidden_animated_layer_remains_available_to_xray_on_hover() {
+    let dir = std::path::PathBuf::from(
+        std::env::var("SKWD_WE_XRAY_PROJECT").expect("ROG Workshop project path"),
+    );
+    let pkg = paper_scene::pkg::Package::open(&dir.join("scene.pkg")).unwrap();
+    let mut model = paper_scene::model::load_from_dir(&pkg, &dir).unwrap();
+    let sd = crate::shared::create(std::ptr::null_mut()).unwrap();
+    let mut group = build_group(&sd, &mut model, false, &[(1280, 720)], FillMode::Fit).unwrap();
+    assert!(group.scripts.is_some());
+    let source = group.fx.iter().find(|fx| fx.layer_id == "13").unwrap();
+    assert!(!source.sampled_targets.is_empty());
+    let mut counts = Vec::new();
+    for (index, position) in [[0.0, 0.0], [0.5, 0.5], [0.0, 0.0]].into_iter().enumerate() {
+        group.mouse.update(index as u64 + 1, position, [false; 3], (1280, 720), FillMode::Fit);
+        group.compose(index as f32 / 15.0, 1.0 / 15.0).unwrap();
+        let (w, h, pixels) = group.read_canvas().unwrap();
+        let count = pixels
+            .chunks_exact(4)
+            .enumerate()
+            .filter(|(index, rgba)| {
+                let (x, y) = (*index as u32 % w, *index as u32 / w);
+                x > w * 35 / 100
+                    && x < w * 65 / 100
+                    && y > h * 40 / 100
+                    && y < h * 62 / 100
+                    && rgba[0] > 120
+                    && u16::from(rgba[0]) > u16::from(rgba[1]) * 2
+                    && f32::from(rgba[0]) > f32::from(rgba[2]) * 1.25
+            })
+            .count();
+        counts.push(count);
+    }
+    group.destroy();
+    assert!(counts[1] > counts[0] + 250, "reveal on hover: {counts:?}");
+    assert!(counts[1] > counts[2] + 250, "clear on departure: {counts:?}");
+}
+
+fn test_layer(visible: bool, effects: usize) -> paper_scene::model::Layer {
+    let mut layer = paper_scene::model::Layer {
+        id: String::new(),
+        name: String::new(),
+        visible,
+        texture: paper_scene::model::solid_texture(),
+        puppet: None,
+        center: (0.0, 0.0),
+        size: (1.0, 1.0),
+        scale: (1.0, 1.0),
+        depth: 0.0,
+        scene_order: 0,
+        alpha: 1.0,
+        angle: 0.0,
+        color: [1.0; 3],
+        color_blend: 0,
+        passthrough: false,
+        composition_size: None,
+        copy_background: false,
+        solid: false,
+        live_text: None,
+        script_text: None,
+        is_text: false,
+        mouse: paper_scene::mouse::LayerMouse::default(),
+        effects: Vec::new(),
+    };
+    layer.effects = (0..effects)
+        .map(|_| paper_scene::effects::Effect {
+            name: String::new(),
+            passes: Vec::new(),
+            fbos: Vec::new(),
+            swaps: Vec::new(),
+        })
+        .collect();
+    layer
+}
+
+#[test]
+fn chain_admission_prefers_visible_layers_in_scene_order() {
+    let layers = vec![
+        test_layer(false, 1),
+        test_layer(true, 1),
+        test_layer(true, 0),
+        test_layer(false, 1),
+        test_layer(true, 1),
+    ];
+    assert_eq!(chain_admission_order(&layers, true), vec![1, 4, 0, 3]);
+    assert_eq!(chain_admission_order(&layers, false), vec![1, 4]);
+}
+
+#[test]
+fn sprite_controls_hold_play_and_rejoin_the_shared_clock() {
+    use paper_scene::script::SpriteOp;
+    let frame = |time: f32| paper_scene::model::SpriteFrame {
+        image: 0,
+        time,
+        uv: [0.0; 4],
+        rotated: false,
+    };
+    let mut animation = LayerAnimation {
+        quad: 0,
+        object: Some(0),
+        frames: vec![frame(0.5), frame(0.5), frame(0.5)],
+        total: 1.5,
+        pages: vec![0],
+        slot: 0,
+        image: -1,
+        control: SpriteControl::Follow,
+        rate: 1.0,
+        refresh: None,
+    };
+    assert_eq!(animation.current_frame(0.6), 1);
+    animation.apply(SpriteOp::Frame(2), 0.6);
+    assert_eq!(animation.current_frame(0.6), 2);
+    assert_eq!(animation.current_frame(0.7), 2);
+    animation.apply(SpriteOp::Pause, 0.7);
+    assert_eq!(animation.current_frame(5.0), 2);
+    animation.apply(SpriteOp::Play, 5.0);
+    assert_eq!(animation.current_frame(5.0), 2);
+    assert_eq!(animation.current_frame(5.4), 0);
+    animation.apply(SpriteOp::Stop, 6.0);
+    assert_eq!(animation.current_frame(9.0), 0);
+    animation.apply(SpriteOp::Join, 9.0);
+    assert_eq!(animation.current_frame(0.6), 1);
+}
+
+#[test]
+fn background_projection_inverts_translated_rotated_and_mirrored_layer_corners() {
+    let canvas = (3840.0, 2160.0);
+    for rect in [[1920.0, 440.0, -600.0, 240.0], [3460.0, 220.0, -380.0, 280.0]] {
+        for angle in [0.0, std::f32::consts::FRAC_PI_2, std::f32::consts::PI, 0.3] {
+            let matrix = background_projection(rect, angle, canvas);
+            let (sin, cos) = angle.sin_cos();
+            for corner in [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]] {
+                let x = corner[0] * rect[2];
+                let y = corner[1] * rect[3];
+                let world = [rect[0] + x * cos - y * sin, rect[1] + x * sin + y * cos];
+                let source = [world[0] / canvas.0 - 0.5, world[1] / canvas.1 - 0.5, 0.0, 1.0];
+                let projected =
+                    matrix.map(|row| row.iter().zip(source).map(|(a, b)| a * b).sum::<f32>());
+                assert!((projected[0] - corner[0] * 2.0).abs() < 1e-5);
+                assert!((projected[1] - corner[1] * 2.0).abs() < 1e-5);
+                assert_eq!(projected[2], 1.0);
+            }
+        }
+    }
+}
+
+#[test]
+fn composition_effects_keep_authored_resolution_when_geometry_or_output_shrinks() {
+    let mut layer = test_layer(true, 1);
+    layer.passthrough = true;
+    layer.copy_background = true;
+    layer.size = (-1920.0 * 0.30868, 1080.0 * 0.21645);
+    layer.scale = (-0.30868, 0.21645);
+    layer.composition_size = Some((1920.0, 1080.0));
+    let mut low_resolution = scene_dimensions_for((3840.0, 2160.0), 4096);
+    low_resolution.raster = (1920, 1080);
+    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (1920, 1080));
+    low_resolution.raster = (960, 540);
+    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (1920, 1080));
+    layer.scale = (-0.61736, 0.43290);
+    layer.composition_size = Some((960.0, 540.0));
+    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (960, 540));
+    layer.copy_background = false;
+    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (960, 540));
+    layer.composition_size = Some((3840.0, 2160.0));
+    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (2048, 1152));
+    layer.composition_size = None;
+    low_resolution.raster = (1920, 1080);
+    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (296, 117));
+}
+
+#[test]
+fn hidden_compositions_defer_authored_targets_until_a_visibility_reload() {
+    let mut layer = test_layer(false, 1);
+    layer.id = "composition".into();
+    layer.size = (-592.6656, 233.766);
+    layer.composition_size = Some((1920.0, 1080.0));
+    let dimensions = SceneDimensions { logical: [3840.0, 2160.0], raster: (1920, 1080) };
+    assert_eq!(layer_effect_dimensions(&layer, dimensions), (296, 117));
+    assert_eq!(
+        deferred_composition_layers(std::slice::from_ref(&layer), dimensions),
+        ["composition"]
+    );
+    layer.visible = true;
+    assert_eq!(layer_effect_dimensions(&layer, dimensions), (1920, 1080));
+    assert!(deferred_composition_layers(std::slice::from_ref(&layer), dimensions).is_empty());
+    layer.visible = false;
+    layer.effects.clear();
+    assert!(deferred_composition_layers(std::slice::from_ref(&layer), dimensions).is_empty());
+}
+
+#[test]
+fn untimed_sprites_advance_once_per_update_and_obey_controls() {
+    use paper_scene::script::SpriteOp;
+    let mut animation = LayerAnimation {
+        quad: 0,
+        object: Some(0),
+        frames: (0..7)
+            .map(|image| paper_scene::model::SpriteFrame {
+                image,
+                time: 1.0,
+                uv: [0.0; 4],
+                rotated: false,
+            })
+            .collect(),
+        total: 7.0,
+        pages: vec![],
+        slot: 0,
+        image: -1,
+        control: SpriteControl::Follow,
+        rate: 1.0,
+        refresh: Some(SpriteRefresh::default()),
+    };
+    assert_eq!(animation.advance(0.0).image, 0);
+    assert_eq!(animation.advance(0.01).image, 1);
+    assert_eq!(animation.advance(0.01).image, 1);
+    assert_eq!(animation.advance(10.0).image, 2);
+    for (tick, image) in (11..18).zip([3, 4, 5, 6, 0, 1, 2]) {
+        assert_eq!(animation.advance(tick as f32).image, image);
+    }
+    animation.apply(SpriteOp::Pause, 17.0);
+    assert_eq!(animation.advance(18.0).image, 2);
+    animation.apply(SpriteOp::Play, 18.0);
+    assert_eq!(animation.advance(18.0).image, 2);
+    assert_eq!(animation.advance(19.0).image, 3);
+    animation.apply(SpriteOp::Frame(6), 19.0);
+    assert_eq!(animation.advance(19.0).image, 6);
+    assert_eq!(animation.advance(20.0).image, 0);
+    animation.apply(SpriteOp::Stop, 20.0);
+    assert_eq!(animation.advance(21.0).image, 0);
+    animation.apply(SpriteOp::Rate(0.5), 21.0);
+    animation.apply(SpriteOp::Play, 21.0);
+    assert_eq!(animation.advance(21.0).image, 0);
+    assert_eq!(animation.advance(22.0).image, 1);
+    assert_eq!(animation.advance(23.0).image, 1);
+    animation.apply(SpriteOp::Rate(1.0), 24.0);
+    animation.apply(SpriteOp::Frame(4), 25.0);
+    assert_eq!(animation.advance(25.0).image, 4);
+    assert_eq!(animation.advance(26.0).image, 5);
+}
+
+#[test]
+fn background_only_scenes_distinguish_hidden_content_from_failed_content() {
+    use serde_json::json;
+    let hidden = json!({"id":1,"image":"missing.json","visible":false});
+    let cases = [
+        (json!([]), true),
+        (json!([hidden.clone()]), true),
+        (json!([{"id":2}, {"id":1,"parent":2,"image":"missing.json","visible":false}]), true),
+        (json!([hidden.clone(), {"id":2,"sound":["sound.ogg"]}]), true),
+        (json!([{"id":1,"image":"missing.json","visible":true}]), false),
+        (json!([hidden.clone(), {"id":2,"image":"missing.json"}]), false),
+        (json!([hidden.clone(), {"id":2,"particle":"missing.json"}]), false),
+        (json!([hidden.clone(), {"id":2,"light":"missing.json"}]), false),
+        (json!([hidden, {"id":2,"unknown":"unsupported"}]), false),
+        (json!([42]), false),
+    ];
+    for (objects, expected) in cases {
+        let scene = json!({"general":{"clearcolor":"0 1 0"},"objects":objects}).to_string();
+        let package = sound_package(&[("scene.json", scene.as_bytes())]);
+        let model =
+            paper_scene::model::load_with(&package, &paper_scene::effects::Assets::discover(None))
+                .unwrap();
+        assert!(model.layers.is_empty() && model.particles.is_empty());
+        assert_eq!(validate_scene_content(&model).is_ok(), expected, "{scene}");
+        assert_eq!(model.clear, [0.0, 1.0, 0.0]);
+    }
+    let package = sound_package(&[("scene.json", b"{}")]);
+    let model =
+        paper_scene::model::load_with(&package, &paper_scene::effects::Assets::discover(None))
+            .unwrap();
+    assert!(validate_scene_content(&model).is_err());
+}
+
+#[test]
+fn scene_prefix_segments_preserve_interleaved_order_without_replaying_particles() {
+    let quad = |texture, order_bias| vk::SceneQuad {
+        projection: None,
+        order_bias,
+        rect: [0.0; 4],
+        uv: [0.0; 4],
+        tint: [1.0; 4],
+        angle: 0.0,
+        texture,
+        blend: vk::SceneBlend::Alpha,
+    };
+    let images = [quad(1, 0), quad(3, 0), quad(5, 0), quad(7, 0)];
+    let orders = [0, 2, 4, 6];
+    let particles = [
+        OrderedParticleQuad { scene_order: 1, quad: quad(2, 0) },
+        OrderedParticleQuad { scene_order: 3, quad: quad(4, 0) },
+        OrderedParticleQuad { scene_order: 4, quad: quad(6, 1) },
+    ];
+    let mut accumulated = Vec::new();
+    let mut from = 0;
+    for before in [2, 4, 6, 7] {
+        accumulated.extend(
+            ordered_scene_quads(&images, &orders, &particles, from, Some(before))
+                .iter()
+                .map(|quad| quad.texture),
+        );
+        let replay = ordered_scene_quads(&images, &orders, &particles, 0, Some(before));
+        assert_eq!(accumulated, replay.iter().map(|quad| quad.texture).collect::<Vec<_>>());
+        from = before;
+    }
+    assert_eq!(accumulated, [1, 2, 3, 4, 5, 6, 7]);
+    assert!(ordered_scene_quads(&images, &orders, &particles, 4, Some(4)).is_empty());
+}
+
+#[test]
+#[ignore = "requires Vulkan, Wallpaper Engine assets, and SKWD_WE_PREFIX_PROJECT"]
+fn incremental_scene_prefix_matches_replay_with_particles_and_grabs() {
+    let dir = std::path::PathBuf::from(
+        std::env::var("SKWD_WE_PREFIX_PROJECT").expect("Rooftop Garden Store Workshop path"),
+    );
+    let project: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("project.json")).unwrap()).unwrap();
+    let sd = crate::shared::create(std::ptr::null_mut()).unwrap();
+    let mut groups = [false, true].map(|replay| {
+        let pkg = paper_scene::pkg::Package::open(&dir.join("scene.pkg")).unwrap();
+        let mut model = paper_scene::model::load_from_dir(&pkg, &dir).unwrap();
+        assert!(model.skipped.is_empty());
+        let host = model.scripts.as_ref().expect("scene clock scripts");
+        let properties = host.properties.clone();
+        let mut scene = pkg.scene_json().unwrap();
+        let mut clocks = 0;
+        for object in scene["objects"].as_array_mut().unwrap() {
+            if let Some(script) = object["text"]["script"].as_str()
+                && script.contains("new Date()")
+            {
+                object["text"]["script"] = serde_json::Value::String(script.replace(
+                    "new Date()",
+                    "new Date(engine.runtime < 100 ? 1790769600000 : 1790773200000)",
+                ));
+                clocks += 1;
+            }
+        }
+        assert_eq!(clocks, 3);
+        model.scripts =
+            paper_scene::script::SceneScripts::load(&mut scene, &properties, &project).unwrap();
+        let previous = REPLAY_SNAPSHOTS.replace(replay);
+        let built = build_group(&sd, &mut model, false, &[(2560, 1440)], FillMode::Fit);
+        REPLAY_SNAPSHOTS.set(previous);
+        let mut group = built.unwrap();
+        group.fixed_daytime = Some(0.5);
+        assert!(group.scene_grab.is_some());
+        assert!(group.particles.iter().any(|particle| particle.system.grab_slot.is_some()));
+        assert_eq!(group.fx.iter().filter(|fx| fx.snapshot).count(), 8);
+        group
+    });
+    matching_scene_pixels(&mut groups, "initial composition");
+    let mut first = None;
+    let mut changed = false;
+    for frame in 0..3000 {
+        let time = frame as f32 / 30.0;
+        for group in &mut groups {
+            group.compose(time, 1.0 / 30.0).unwrap();
+        }
+        if frame % 100 == 99 {
+            let actual = matching_scene_pixels(&mut groups, &format!("frame {frame}"));
+            if let Some(first) = &first {
+                changed |= first != &actual;
+            } else {
+                first = Some(actual);
+            }
+            let draws = |group: &Group| {
+                group
+                    .snapshot_draws
+                    .iter()
+                    .fold((0, 0), |(quads, particles), (q, p)| (quads + q, particles + p))
+            };
+            let incremental = draws(&groups[0]);
+            let replay = draws(&groups[1]);
+            assert!(incremental.0 < replay.0, "{incremental:?} versus {replay:?}");
+            assert!(incremental.1 < replay.1, "{incremental:?} versus {replay:?}");
+            eprintln!(
+                "frame {frame}: snapshot quads/particle batches {incremental:?} versus {replay:?}"
+            );
+        }
+    }
+    assert!(changed, "the scene must animate during the comparison");
+    let before_clock = matching_scene_pixels(&mut groups, "before clock change");
+    for group in &mut groups {
+        let before = group.scripts.as_ref().unwrap().host.as_ref().unwrap().scene.clone();
+        group.compose(100.0, 0.0).unwrap();
+        let after = &group.scripts.as_ref().unwrap().host.as_ref().unwrap().scene;
+        assert!(
+            before["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(after["objects"].as_array().unwrap())
+                .any(|(before, after)| before["text"] != after["text"])
+        );
+    }
+    assert!(
+        before_clock != matching_scene_pixels(&mut groups, "after clock change"),
+        "clock update did not change rendered pixels"
+    );
+    for group in &mut groups {
+        group.fx.rotate_left(1);
+        assert!(group.fx.windows(2).any(|pair| pair[0].scene_order > pair[1].scene_order));
+    }
+    for frame in 3000..3006 {
+        for group in &mut groups {
+            group.compose(frame as f32 / 30.0, 1.0 / 30.0).unwrap();
+        }
+        assert_eq!(groups[0].snapshot_draws, groups[1].snapshot_draws);
+        matching_scene_pixels(&mut groups, &format!("reordered frame {frame}"));
+    }
+    for group in groups {
+        group.destroy();
+    }
+}
+
+fn matching_scene_pixels(groups: &mut [Group; 2], phase: &str) -> Vec<u8> {
+    let (width, height, actual) = groups[0].read_canvas().unwrap();
+    let (expected_width, expected_height, expected) = groups[1].read_canvas().unwrap();
+    assert_eq!((width, height, actual.len()), (expected_width, expected_height, expected.len()));
+    let different = actual.iter().zip(&expected).filter(|(a, b)| a != b).count();
+    assert_eq!(different, 0, "{phase}: incremental prefix changed pixels");
+    actual
+}
