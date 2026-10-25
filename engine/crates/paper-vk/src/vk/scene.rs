@@ -68,6 +68,8 @@ pub struct ParticleDraw<'a> {
     /// A script's model (drawn with depth; its missing attributes read this
     /// zero buffer) rather than particles.
     pub mesh: Option<vk::Buffer>,
+    /// What it is, for SKWD_VK_PROFILE (a model's material).
+    pub label: &'a str,
 }
 
 #[repr(C)]
@@ -913,6 +915,9 @@ impl Renderer {
         self.ensure_scene_pipelines()?;
         self.begin_frame_cmd()?;
         self.scene_gpu_time_ns = None;
+        if let Some(profile) = &mut self.profile {
+            profile.begin(&self.device, self.cmd);
+        }
         if self.scene_timestamp_active {
             let pool = self.scene_query_pool.expect("timestamp pool checked");
             unsafe {
@@ -1283,6 +1288,14 @@ impl Renderer {
     }
 
     pub fn submit_scene_batch(&mut self) -> Result<()> {
+        self.submit_scene_batch_async()?;
+        self.wait_scene_batch()
+    }
+
+    /// Sends the frame to the GPU without waiting for it: the CPU may work on
+    /// the next frame meanwhile (nothing the GPU reads may change), and
+    /// `wait_scene_batch` must come before the command buffer is used again.
+    pub fn submit_scene_batch_async(&mut self) -> Result<()> {
         unsafe {
             if self.scene_timestamp_active {
                 self.device.cmd_write_timestamp(
@@ -1303,7 +1316,16 @@ impl Renderer {
                     self.fence,
                 )?;
             }
+        }
+        Ok(())
+    }
+
+    pub fn wait_scene_batch(&mut self) -> Result<()> {
+        unsafe {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
+            if let Some(profile) = &mut self.profile {
+                profile.collect(&self.device, self.scene_timestamp_period, self.scene_timestamp_valid_bits);
+            }
             if self.scene_timestamp_active {
                 let mut values = [0u64; 2];
                 self.device.get_query_pool_results(
@@ -1321,6 +1343,14 @@ impl Renderer {
             }
         }
         Ok(())
+    }
+
+    /// A point in the frame for SKWD_VK_PROFILE: the GPU time since the last
+    /// mark goes to `label`. Free when profiling is off.
+    pub fn profile_mark(&mut self, label: impl FnOnce() -> String) {
+        if let Some(profile) = &mut self.profile {
+            profile.mark(&self.device, self.cmd, label());
+        }
     }
 
     pub fn take_scene_gpu_time_ns(&mut self) -> Option<u64> {

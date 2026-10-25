@@ -342,3 +342,49 @@ fn annotated_vector_defaults_keep_every_lane() {
     assert_eq!((lane("u_FixedSize", 0), lane("u_FixedSize", 1)), (1.0, 0.59));
     assert_eq!(lane("u_Radius", 0), 0.35);
 }
+
+#[test]
+fn uniforms_resolve_with_the_documented_precedence() {
+    // overrides > per-frame builtins > the pass's constants > builtin defaults
+    let source = "uniform float g_Time;\nuniform float g_Alpha;\nuniform float g_Brightness;\nuniform vec4 g_Texture1Resolution;\nuniform float u_Custom;\nuniform vec3 g_Screen;\nvoid main() { gl_FragColor = vec4(g_Time + g_Alpha + g_Brightness + u_Custom, g_Texture1Resolution.x, g_Screen.x, 1.0); }";
+    let fragment = crate::shader::translate(source, crate::shader::Stage::Fragment, &BTreeMap::new());
+    let mut vertex = crate::shader::translate("void main() {}", crate::shader::Stage::Vertex, &BTreeMap::new());
+    let mut fragment = fragment;
+    crate::shader::unify_uniforms(&mut vertex, &mut fragment);
+    let mut values = BTreeMap::new();
+    values.insert("g_Time".to_string(), vec![99.0]);
+    values.insert("g_Alpha".to_string(), vec![0.5]);
+    values.insert("u_Custom".to_string(), vec![7.0]);
+    let pass = EffectPass {
+        property_source: None,
+        name: "probe".into(),
+        vertex,
+        fragment,
+        hlsl: None,
+        textures: Vec::new(),
+        values,
+        target: None,
+        binds: Vec::new(),
+    };
+    let meta = PassMeta::of(&pass);
+    let lane = |bytes: &[u8], name: &str, index: usize| {
+        let uniform = pass.fragment.uniforms.iter().find(|u| u.name == name).unwrap();
+        let start = uniform.offset + index * 4;
+        f32::from_le_bytes(bytes[start..start + 4].try_into().unwrap())
+    };
+    let clock = FrameClock { time: 3.0, dt: 0.5, daytime: 0.25 };
+    let mut overrides = BTreeMap::new();
+    let bytes = meta.uniform_bytes_with(clock, None, 64, 32, (640, 360), &[None, Some([10.0, 20.0, 0.1, 0.05])], &overrides, false);
+    assert_eq!(lane(&bytes, "g_Time", 0), 3.0, "per-frame time beats a constant");
+    assert_eq!(lane(&bytes, "g_Alpha", 0), 0.5, "a constant beats the default");
+    assert_eq!(lane(&bytes, "g_Brightness", 0), 1.0, "default when nothing else");
+    assert_eq!(lane(&bytes, "u_Custom", 0), 7.0);
+    assert_eq!(lane(&bytes, "g_Texture1Resolution", 0), 10.0, "slot size");
+    assert_eq!(lane(&bytes, "g_Screen", 0), 640.0);
+    overrides.insert("g_Alpha".to_string(), vec![0.25]);
+    overrides.insert("g_Time".to_string(), vec![42.0]);
+    let bytes = meta.uniform_bytes_with(clock, None, 64, 32, (640, 360), &[], &overrides, false);
+    assert_eq!(lane(&bytes, "g_Alpha", 0), 0.25, "overrides beat constants");
+    assert_eq!(lane(&bytes, "g_Time", 0), 42.0, "overrides beat builtins");
+    assert_eq!(lane(&bytes, "g_Texture1Resolution", 0), 64.0, "no slot size: the target's");
+}

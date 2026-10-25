@@ -74,6 +74,8 @@ pub struct Renderer {
     pub(super) scene_timestamp_valid_bits: u32,
     pub(super) scene_timestamp_active: bool,
     pub(super) scene_gpu_time_ns: Option<u64>,
+    /// SKWD_VK_PROFILE: GPU time between marks in a scene frame, by label.
+    pub(super) profile: Option<super::profile::GpuProfile>,
 }
 
 impl Renderer {
@@ -441,6 +443,9 @@ impl Renderer {
                 })
                 .transpose()?;
             let scene_timestamp_active = scene_query_pool.is_some();
+            let profile = (scene_timestamp_valid_bits > 0 && std::env::var_os("SKWD_VK_PROFILE").is_some())
+                .then(|| super::profile::GpuProfile::new(&device))
+                .transpose()?;
             let scene_timestamp_period =
                 f64::from(instance.get_physical_device_properties(phys).limits.timestamp_period);
 
@@ -515,6 +520,7 @@ impl Renderer {
                 scene_timestamp_valid_bits,
                 scene_timestamp_active,
                 scene_gpu_time_ns: None,
+                profile,
             };
             if drm_modifier_ext {
                 renderer.import_modifiers = [
@@ -538,6 +544,9 @@ impl Drop for Renderer {
             }
             if let Some(pool) = self.scene_query_pool.take() {
                 self.device.destroy_query_pool(pool, None);
+            }
+            if let Some(profile) = self.profile.take() {
+                self.device.destroy_query_pool(profile.pool, None);
             }
             self.device.destroy_fence(self.fence, None);
             self.device.destroy_semaphore(self.acquire_sem, None);

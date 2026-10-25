@@ -183,6 +183,8 @@ impl Renderer {
     /// A run of models into `target`, between two parts of its scene pass:
     /// the caller has ended its pass before and resumes after.
     pub(super) fn record_meshes(&mut self, target: &SceneTarget, batches: &[&ParticleDraw<'_>]) -> Result<()> {
+        let (w, h) = (target.extent.width, target.extent.height);
+        self.profile_mark(|| format!("scene layers at {w}x{h}"));
         let framebuffer = self.mesh_framebuffer(target)?;
         let pass = self.mesh_pass_for(target.format, true)?;
         let extent = target.extent;
@@ -223,9 +225,16 @@ impl Renderer {
                 self.device.cmd_bind_vertex_buffers(self.cmd, 0, &[batch.vertices, zero], &[0, 0]);
                 self.device.cmd_bind_index_buffer(self.cmd, batch.indices, 0, vk::IndexType::UINT32);
                 self.device.cmd_draw_indexed(self.cmd, batch.index_count, 1, 0, 0, 0);
+                if self.profile.is_some() {
+                    let (label, triangles) = (batch.label.to_owned(), batch.index_count / 3);
+                    self.profile_mark(|| format!("  model {label} ({triangles} triangles)"));
+                }
             }
             self.device.cmd_end_render_pass(self.cmd);
         }
+        let draws = batches.iter().filter(|b| b.mesh.is_some()).count();
+        let indices: u32 = batches.iter().filter(|b| b.mesh.is_some()).map(|b| b.index_count).sum();
+        self.profile_mark(|| format!("models: {draws} draws, {} triangles at {w}x{h}", indices / 3));
         Ok(())
     }
 

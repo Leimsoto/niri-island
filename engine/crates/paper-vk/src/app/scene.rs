@@ -610,6 +610,8 @@ struct ParticleEngine {
     render_var1: [f32; 4],
     texture_size: [f32; 4],
     scratch: Vec<f32>,
+    /// Sprites already packed into `scratch` for the coming frame.
+    packed: Option<usize>,
 }
 
 struct ParticleGroup {
@@ -1024,6 +1026,7 @@ fn particle_batches<'a>(
                 index_count: draw.index_count,
                 grab: group.system.grab_slot.and(grab),
                 mesh: None,
+                label: "",
             })
         })
         .collect();
@@ -1114,6 +1117,9 @@ enum TransitionStyle {
 
 struct Group {
     scripts: Option<script::Scripts>,
+    /// The particles were already simulated for the coming frame (while the
+    /// GPU drew the previous one).
+    particles_ahead: bool,
     media: Option<media::Media>,
     media_slots: HashMap<paper_scene::model::MediaTexture, usize>,
     media_art: Option<paper_scene::tex::Pixels>,
@@ -1590,6 +1596,39 @@ impl Group {
         }
     }
 
+    /// CPU only: may run while the GPU draws (what the GPU reads is written
+    /// later, in particle_quads).
+    fn simulate_particles(&mut self, dt: f32) {
+        advance_particles(
+            &mut self.particles,
+            dt,
+            Some(&self.mouse),
+            (self.bands.slice(16, false).unwrap_or(&[]), self.bands.slice(16, true).unwrap_or(&[])),
+            None,
+        );
+    }
+
+    /// Ahead of the coming frame: simulate, and pack the batched systems'
+    /// sprites into their CPU scratch (copied to the GPU in particle_quads).
+    fn prepare_particles(&mut self, dt: f32) {
+        self.simulate_particles(dt);
+        for group in &mut self.particles {
+            if !group.visible {
+                continue;
+            }
+            if let Some(engine) = group.engine.as_mut() {
+                let count = paper_scene::particles::pack_sprites(
+                    &group.system,
+                    &group.sim,
+                    group.frames.len(),
+                    &mut engine.scratch,
+                );
+                engine.packed = Some(count);
+            }
+        }
+        self.particles_ahead = true;
+    }
+
     fn particle_quads(
         &mut self,
         time: f32,
@@ -1600,13 +1639,9 @@ impl Group {
         let clock = self.frame_clock(time, dt);
         let screen = (self.target.extent.width, self.target.extent.height);
         let canvas = self.canvas;
-        advance_particles(
-            &mut self.particles,
-            dt,
-            Some(&self.mouse),
-            (self.bands.slice(16, false).unwrap_or(&[]), self.bands.slice(16, true).unwrap_or(&[])),
-            None,
-        );
+        if !std::mem::take(&mut self.particles_ahead) {
+            self.simulate_particles(dt);
+        }
         for (group_index, group) in self.particles.iter_mut().enumerate() {
             let origin = (
                 group.system.origin.0 + group.camera_offset[0],
@@ -1618,12 +1653,15 @@ impl Group {
             }
             if let Some(engine) = group.engine.as_mut() {
                 let system = &group.system;
-                let count = paper_scene::particles::pack_sprites(
-                    system,
-                    &group.sim,
-                    group.frames.len(),
-                    &mut engine.scratch,
-                );
+                let count = match engine.packed.take() {
+                    Some(count) => count,
+                    None => paper_scene::particles::pack_sprites(
+                        system,
+                        &group.sim,
+                        group.frames.len(),
+                        &mut engine.scratch,
+                    ),
+                };
                 let count = count.min(engine.capacity);
                 if count == 0 {
                     continue;
@@ -1631,9 +1669,11 @@ impl Group {
                 let floats = count
                     * paper_scene::particles::SPRITE_VERTICES
                     * paper_scene::particles::SPRITE_FLOATS_PER_VERTEX;
-                let bytes: Vec<u8> =
-                    engine.scratch[..floats].iter().flat_map(|value| value.to_le_bytes()).collect();
-                self.renderer.write_dyn_buffer(&engine.vertices, &bytes);
+                // f32 to bytes in place (little-endian, as the GPU reads them)
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(engine.scratch.as_ptr().cast::<u8>(), floats * std::mem::size_of::<f32>())
+                };
+                self.renderer.write_dyn_buffer(&engine.vertices, bytes);
                 let d3d_clip = engine.pipeline.hlsl && vk::d3d_clip_enabled();
                 let view_projection = if system.perspective {
                     scene_perspective(canvas, d3d_clip)
@@ -1846,6 +1886,7 @@ impl Group {
             return Ok(());
         }
         self.composed_at = time;
+        let mut cpu = CpuProfile::start();
         let logical_canvas = [self.canvas.0.max(1.0), self.canvas.1.max(1.0)];
         let clock = self.frame_clock(time, dt);
         let screen = (self.target.extent.width, self.target.extent.height);
@@ -1860,24 +1901,33 @@ impl Group {
                 &self.textures,
             )?;
         }
+        cpu.lap("videos");
         self.advance_live_text(time)?;
         self.advance_audio(dt);
         self.advance_media()?;
+        cpu.lap("text, audio, media");
         for puppet in &mut self.puppets {
             puppet.pose =
                 paper_scene::puppet::skin(&puppet.puppet.mesh, &puppet.puppet.layers, time);
         }
+        cpu.lap("puppets (cpu)");
         self.advance_scripts(time, dt)?;
+        cpu.lap("scripts");
         self.mesh_frame(time, dt)?;
+        cpu.lap("models (upload)");
         self.advance_layer_animations(time);
         self.advance_mouse(dt);
+        cpu.lap("animations, mouse");
         let debug_fx = std::env::var("SKWD_VK_FX_DEBUG").is_ok();
         let batched = !debug_fx && (!self.fx.is_empty() || !self.puppets.is_empty());
         if batched {
             self.renderer.begin_scene_batch()?;
         }
         self.puppet_frame(batched)?;
+        self.renderer.profile_mark(|| "puppets".into());
+        cpu.lap("begin batch, puppets (gpu)");
         let (particle_quads, particle_draws) = self.particle_quads(time, dt);
+        cpu.lap("particles");
         if self.fx.is_empty() {
             let clear = [self.clear[0], self.clear[1], self.clear[2], 1.0];
             let quads =
@@ -1998,6 +2048,7 @@ impl Group {
                     );
                 }
                 snapshot_before = Some(scene_order);
+                self.renderer.profile_mark(|| format!("snapshot up to layer {scene_order}"));
             }
             let quad = &self.quads[self.fx[fx_index].quad];
             let projection = background_projection(quad.rect, quad.angle, self.canvas);
@@ -2198,6 +2249,11 @@ impl Group {
             self.renderer.point_slot_at(&self.textures[fx.slot], source.0);
             self.quads[fx.quad].texture = fx.slot;
             fx.output = Some(source_id);
+            let (passes, extent) = (fx.pipelines.len(), fx.target(FxTargetId::Ping, fx_scratch).extent);
+            let layer_name = fx.layer_id.clone();
+            self.renderer.profile_mark(|| {
+                format!("fx {layer_name}: {passes} passes at {}x{}", extent.width, extent.height)
+            });
             for (buffer, target_id) in
                 [(CompositeBuffer::A, FxTargetId::Ping), (CompositeBuffer::B, FxTargetId::Pong)]
             {
@@ -2251,7 +2307,24 @@ impl Group {
                 &self.textures,
                 &batches,
             );
-            self.renderer.submit_scene_batch()
+            let (count, w, h) = (quads.len(), self.target.extent.width, self.target.extent.height);
+            self.renderer.profile_mark(|| format!("final scene pass: {count} quads at {w}x{h}"));
+            cpu.lap("recording");
+            self.renderer.submit_scene_batch_async()?;
+            cpu.lap("submit");
+            // While the GPU draws this frame, the scripts' update for the next
+            // (SKWD_VK_OVERLAP=0: one after the other, as before).
+            let overlap = std::env::var("SKWD_VK_OVERLAP").as_deref() != Ok("0");
+            let prefetched = if overlap && self.scripts.is_some() { self.prefetch_scripts(time + dt, dt) } else { Ok(()) };
+            cpu.lap("next frame's scripts (overlapped)");
+            if overlap && !self.particles.is_empty() && self.animated() {
+                self.prepare_particles(dt);
+            }
+            cpu.lap("next frame's particles (overlapped)");
+            let result = self.renderer.wait_scene_batch();
+            cpu.lap("wait for the GPU");
+            cpu.finish();
+            prefetched.and(result)
         }
     }
 
@@ -3607,6 +3680,7 @@ fn build_group(
                                         texture.img_height as f32,
                                     ],
                                     scratch: Vec::new(),
+                                    packed: None,
                                 })
                             }
                             Err(err) => {
@@ -3826,6 +3900,7 @@ fn build_group(
     let scripts = script::Scripts::take(model, &layer_slots)?;
     let mut group = Group {
         scripts,
+        particles_ahead: false,
         media,
         media_slots,
         media_art: None,
@@ -4845,6 +4920,7 @@ pub(super) fn run_scene(
                 bi
             };
             if !shared_pool || shared_frame.is_none() {
+                let present_started = Instant::now();
                 if fade_step.render_transition {
                     presenters[gi].fade(&group, bi, fade_step.mix, trans_style)?;
                 } else {
@@ -4853,6 +4929,7 @@ pub(super) fn run_scene(
                 if dmabuf_present {
                     presenters[gi].wait_render()?;
                 }
+                scene_stats.present(present_started.elapsed());
                 shared_frame = shared_pool.then_some(bi);
             }
             if !dmabuf_present {
@@ -5359,6 +5436,7 @@ struct SceneStats {
     frames: u32,
     total: Duration,
     worst: Duration,
+    presented: Duration,
 }
 
 impl SceneStats {
@@ -5369,7 +5447,12 @@ impl SceneStats {
             frames: 0,
             total: Duration::ZERO,
             worst: Duration::ZERO,
+            presented: Duration::ZERO,
         }
+    }
+
+    fn present(&mut self, took: Duration) {
+        self.presented += took;
     }
 
     fn frame(&mut self, took: Duration) {
@@ -5382,12 +5465,63 @@ impl SceneStats {
         let elapsed = self.since.elapsed();
         if elapsed >= Duration::from_secs(1) {
             tracing::info!(
-                "skwd-wall-vk: scene stats fps={:.1} compose_avg={:.1}ms compose_max={:.1}ms",
+                "skwd-wall-vk: scene stats fps={:.1} compose_avg={:.1}ms compose_max={:.1}ms present_avg={:.1}ms",
                 f64::from(self.frames) / elapsed.as_secs_f64(),
                 self.total.as_secs_f64() * 1000.0 / f64::from(self.frames.max(1)),
                 self.worst.as_secs_f64() * 1000.0,
+                self.presented.as_secs_f64() * 1000.0 / f64::from(self.frames.max(1)),
             );
             *self = Self { since: Instant::now(), ..Self::new() };
         }
+    }
+}
+
+/// With SKWD_VK_PROFILE: where a frame's CPU time goes inside compose,
+/// averaged and logged every 120 frames (next to the GPU profile).
+struct CpuProfile {
+    on: bool,
+    last: Instant,
+    laps: Vec<(&'static str, Duration)>,
+}
+
+thread_local! {
+    static CPU_TOTALS: std::cell::RefCell<(u32, Vec<(&'static str, Duration)>)> =
+        const { std::cell::RefCell::new((0, Vec::new())) };
+}
+
+impl CpuProfile {
+    fn start() -> Self {
+        Self { on: std::env::var_os("SKWD_VK_PROFILE").is_some(), last: Instant::now(), laps: Vec::new() }
+    }
+
+    fn lap(&mut self, label: &'static str) {
+        if self.on {
+            let now = Instant::now();
+            self.laps.push((label, now - self.last));
+            self.last = now;
+        }
+    }
+
+    fn finish(self) {
+        if !self.on {
+            return;
+        }
+        CPU_TOTALS.with(|totals| {
+            let mut totals = totals.borrow_mut();
+            totals.0 += 1;
+            for (label, took) in self.laps {
+                match totals.1.iter_mut().find(|(l, _)| *l == label) {
+                    Some(entry) => entry.1 += took,
+                    None => totals.1.push((label, took)),
+                }
+            }
+            if totals.0 >= 120 {
+                let frames = f64::from(totals.0);
+                for (label, took) in &totals.1 {
+                    tracing::info!("skwd-wall-vk: cpu {:7.2} ms  {label}", took.as_secs_f64() * 1000.0 / frames);
+                }
+                *totals = (0, Vec::new());
+            }
+        });
     }
 }

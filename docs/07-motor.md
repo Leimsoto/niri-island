@@ -203,7 +203,10 @@ fotograma (Koi Pond: ~130 ms) pasa a ~8 ms en V8.
 | `--scene-fps` (policy) | tope de fps de escenas animadas (defecto 30) |
 | `--scene-max` (policy) | lado máximo de la resolución interna |
 | `SKWD_PAPER_GPU_PRIORITY=normal` | no pedir prioridad baja de GPU |
-| `SKWD_VK_SCENE_STATS=1` | cada segundo: `scene stats fps=… compose_avg=…ms compose_max=…ms` |
+| `SKWD_VK_SCENE_STATS=1` | cada segundo: `scene stats fps=… compose_avg=…ms compose_max=…ms present_avg=…ms` |
+| `SKWD_VK_PROFILE=1` | tiempo de GPU por parte del fotograma y de CPU por fase (ver abajo) |
+| `SKWD_VK_OVERLAP=0` | no solapar CPU y GPU |
+| `SKWD_VK_SCENE_BENCH=N` | renderiza N fotogramas sin pausa, registra ms/fotograma (y GPU con `SKWD_VK_SCENE_GPU_TIMESTAMPS`) y sale |
 | `SKWD_VK_SCENE_GPU_TIMESTAMPS` | marcas de tiempo de GPU por pase |
 | `SKWD_DUMP_SHARED_TARGETS=dir` | con `capture-scenes`: guarda cada target compartido como PNG |
 | `SKWD_MESH_DEBUG` | trazas del pase de modelos |
@@ -220,9 +223,56 @@ Medidas en Intel UHD (iGPU, 1080p):
 | Sleeping District (4K, 11 cadenas) | 68 ms → 14 fps, GPU al 100 %, niri al 6 % | 34 ms | 18 ms (~48 fps) |
 | Niwama – Koi Pond (script 3D) | 49 ms | 47 ms | 40 ms |
 
-Koi Pond está limitado por la **serialización CPU→GPU**: la CPU prepara el fotograma (script + grabación, ~35 % de
-un núcleo) y luego espera a la GPU sin solaparse. Para pasar de ~20 fps haría falta tener varios fotogramas en vuelo
-en `Group::compose` (doble búfer de comandos y de targets); es la siguiente mejora pendiente.
+(Tabla anterior al solapamiento CPU/GPU; cifras actuales más abajo.)
+
+### CPU y GPU solapadas
+
+`Group::compose` envía el fotograma a la GPU (`submit_scene_batch_async`) y, **mientras la GPU dibuja**, adelanta
+el trabajo de CPU del siguiente: la llamada a V8 de los scripts (`prefetch_scripts` → `script_tick`) y la
+simulación y empaquetado de partículas (`prepare_particles`). Solo después espera (`wait_scene_batch`). Lo que esas
+fases piden y toca la GPU (texturas de texto, subir modelos, copiar sprites al búfer mapeado, comandos de sprites y
+sonidos) se aplica en el siguiente `compose`, **después** de la espera, así que nunca se escribe algo que la GPU
+esté leyendo. Coste: los scripts ven el tiempo del fotograma siguiente previsto (`time + dt`) y la entrada del
+ratón llega un fotograma más tarde. `SKWD_VK_OVERLAP=0` vuelve al orden en serie.
+
+Lo que no se solapa: la grabación de comandos (un solo command buffer y un UBO por pipeline, reutilizados cada
+fotograma) y la presentación. Tener dos fotogramas completos en vuelo exigiría duplicar command buffers, UBOs,
+descriptores y búferes dinámicos; con las escenas medidas el límite ya es la GPU, así que no compensa por ahora.
+
+Además, `uniform_bytes_with` (`paper-scene/src/effects.rs`) resuelve solo los uniformes que declara el shader, en
+vez de clonar todas las constantes e insertar ~40 valores por pase y fotograma (prioridad: audio > overrides >
+valores del fotograma > constantes del pase > valores por defecto; test
+`uniforms_resolve_with_the_documented_precedence`).
+
+Resultado (iGPU Intel UHD, 1080p, tope 60):
+
+| Escena | Antes de la sesión | Ahora |
+|---|---|---|
+| Sleeping District | 14 fps, 68 ms | **30 fps**, 30,5 ms (GPU ~24 ms) |
+| Niwama – Koi Pond | 20 fps, 49 ms | **24,5 fps**, 38 ms (GPU ~31 ms) |
+
+Lo que queda es coste **del contenido**: en Koi Pond un único material (`materials/draw_11_0.json`, pixel art a
+480×270) se lleva 9 ms porque su shader lee decenas de valores de una textura de datos por cada píxel y hace ray
+marching; en Sleeping District, dos capas de ruido procedural de 8-10 octavas cuestan ~6 ms cada una a 960×540.
+
+### Perfilador (`SKWD_VK_PROFILE=1`)
+
+Con la variable en el entorno del servidor, el renderizador escribe marcas de tiempo de GPU entre las partes del
+fotograma (cada cadena de efectos, cada snapshot, cada modelo de script por material, el pase final) y cronometra
+las fases de CPU de `compose`. Cada 120 fotogramas registra los promedios, de mayor a menor (`vk/profile.rs`,
+`CpuProfile` en `app/scene.rs`):
+
+```
+profile 31.37 ms/frame over 120 frames
+profile    9.07 ms    model materials/draw_11_0.json (27000 triangles)
+profile    4.49 ms  fx 89: 4 passes at 1920x1080
+profile    3.63 ms  scene layers at 1920x1080
+cpu    8.16 ms  next frame's scripts (overlapped)
+cpu   24.90 ms  wait for the GPU
+```
+
+Los números de `fx N` son ids de objeto de `scene.json`: para ver qué efectos son, extraer el `scene.pkg` (formato
+`PKGV`: nombre, número de entradas, y por entrada nombre/offset/tamaño) y buscar ese id.
 
 ## Captura sin pantalla (`capture-scenes`)
 

@@ -25,6 +25,9 @@ pub(super) struct Scripts {
     layouts: Vec<Layout>,
     text: Vec<(usize, usize, ScriptText)>,
     pending: bool,
+    /// The scripts' update for the next frame already ran (while the GPU drew
+    /// this one): whether it changed anything.
+    ticked: Option<bool>,
 }
 
 impl Scripts {
@@ -61,6 +64,7 @@ impl Scripts {
             layouts,
             text,
             pending: true,
+            ticked: None,
         }))
     }
 }
@@ -144,6 +148,51 @@ impl Group {
         result
     }
 
+    /// The expensive half of the next frame's scripts (their JavaScript
+    /// update), run while the GPU still draws this frame. CPU-only: what it
+    /// asks for (textures, models, sounds) is applied by the next
+    /// `advance_scripts`, after the GPU is done.
+    pub(super) fn prefetch_scripts(&mut self, time: f32, dt: f32) -> Result<()> {
+        let Some(mut scripts) = self.scripts.take() else {
+            return Ok(());
+        };
+        let result = match scripts.host.as_mut() {
+            Some(host) if scripts.ticked.is_none() => self.script_tick(host, &scripts.layouts, time, dt).map(|changed| {
+                scripts.ticked = Some(changed);
+            }),
+            _ => Ok(()),
+        };
+        self.scripts = Some(scripts);
+        result
+    }
+
+    fn script_tick(&mut self, host: &mut SceneScripts, layouts: &[Layout], time: f32, dt: f32) -> Result<bool> {
+        if host.needs_audio() {
+            for count in paper_audio::spectrum::BAND_COUNTS {
+                if let (Some(left), Some(right)) = (self.bands.slice(count, false), self.bands.slice(count, true)) {
+                    host.audio(count, left, right)?;
+                }
+            }
+        }
+        let x = self.mouse.position[0] * self.canvas.0;
+        let y = self.mouse.position[1] * self.canvas.1;
+        let hits = layouts
+            .iter()
+            .zip(&self.quads)
+            .filter_map(|(layout, q)| {
+                let (sin, cos) = q.angle.sin_cos();
+                let dx = x - q.rect[0];
+                let dy = y - q.rect[1];
+                (q.tint[3] > 0.0
+                    && (dx * cos + dy * sin).abs() <= q.rect[2].abs() * 0.5
+                    && (-dx * sin + dy * cos).abs() <= q.rect[3].abs() * 0.5)
+                    .then(|| layout.id.clone())
+            })
+            .collect();
+        host.pointer(self.mouse.position, self.mouse.buttons, hits)?;
+        host.tick(time, dt, self.mouse.position)
+    }
+
     fn script_frame(&mut self, scripts: &mut Scripts, time: f32, dt: f32) -> Result<()> {
         let mut changed = match &mut scripts.host {
             Some(host) => {
@@ -154,33 +203,10 @@ impl Group {
             None => scripts.keyframes.apply(&mut scripts.native.as_mut().unwrap().0, time),
         };
         if let Some(host) = &mut scripts.host {
-            if host.needs_audio() {
-                for count in paper_audio::spectrum::BAND_COUNTS {
-                    if let (Some(left), Some(right)) =
-                        (self.bands.slice(count, false), self.bands.slice(count, true))
-                    {
-                        host.audio(count, left, right)?;
-                    }
-                }
-            }
-            let x = self.mouse.position[0] * self.canvas.0;
-            let y = self.mouse.position[1] * self.canvas.1;
-            let hits = scripts
-                .layouts
-                .iter()
-                .zip(&self.quads)
-                .filter_map(|(layout, q)| {
-                    let (sin, cos) = q.angle.sin_cos();
-                    let dx = x - q.rect[0];
-                    let dy = y - q.rect[1];
-                    (q.tint[3] > 0.0
-                        && (dx * cos + dy * sin).abs() <= q.rect[2].abs() * 0.5
-                        && (-dx * sin + dy * cos).abs() <= q.rect[3].abs() * 0.5)
-                        .then(|| layout.id.clone())
-                })
-                .collect();
-            host.pointer(self.mouse.position, self.mouse.buttons, hits)?;
-            changed |= host.tick(time, dt, self.mouse.position)?;
+            changed |= match scripts.ticked.take() {
+                Some(ticked) => ticked,
+                None => self.script_tick(host, &scripts.layouts, time, dt)?,
+            };
             for command in host.take_commands() {
                 match command {
                     paper_scene::script::ScriptCommand::Sprite { object, op } => {

@@ -5,6 +5,7 @@ mod mesh;
 #[cfg(feature = "shared-device")]
 mod nv12;
 mod pipelines;
+mod profile;
 mod renderer;
 mod scene;
 mod swapchain;

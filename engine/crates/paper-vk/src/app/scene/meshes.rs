@@ -468,6 +468,7 @@ pub(super) fn mesh_batches<'a>(
                 index_count: shape.index_count,
                 grab: None,
                 mesh: Some(meshes.zero.buffer),
+                label: draw.pipeline.0.as_str(),
             })
         })
         .collect()

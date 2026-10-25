@@ -124,6 +124,10 @@ perf (`perf_event_paranoid` ≤ 0 o root).
      serie (como Koi Pond).
 3. Devolver el control a la isla: `pkill -x niri-island-eng; niri-island wallpaper set "$(niri-island wallpaper current)"`.
 
+Para saber **qué parte** de la escena cuesta: `SKWD_VK_PROFILE=1` en lugar de (o junto a) `SKWD_VK_SCENE_STATS`
+da el tiempo de GPU de cada cadena de efectos, snapshot y modelo, y el de CPU de cada fase (ver
+[07](07-motor.md#perfilador-skwd_vk_profile1)).
+
 Más instrumentos: `SKWD_VK_SCENE_GPU_TIMESTAMPS` (tiempo de GPU por pase), `SKWD_DUMP_SHARED_TARGETS=dir` con
 `capture-scenes` (ver los targets intermedios como PNG), `SKWD_MESH_DEBUG` (modelos de los scripts),
 `SKWD_PAPER_SHADER_BACKEND=glsl` (descartar dxc).

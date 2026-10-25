@@ -1101,119 +1101,79 @@ impl PassMeta {
         overrides: &BTreeMap<String, Vec<f32>>,
         d3d_clip: bool,
     ) -> Vec<u8> {
-        let mut values = self.constants.clone();
-        values.insert("g_Time".into(), vec![clock.time]);
-        values.insert("g_Frametime".into(), vec![clock.dt]);
-        values.insert("g_Daytime".into(), vec![clock.daytime]);
-        values.insert("g_ParallaxPosition".into(), vec![0.5, 0.5]);
-        values.insert("g_PointerPosition".into(), vec![0.5, 0.5]);
-        values.insert("g_PointerPositionLast".into(), vec![0.5, 0.5]);
-        values.insert("g_PointerState".into(), vec![0.0, 0.0, 0.0, 0.0]);
-        values.entry("g_TextureReductionScale".into()).or_insert_with(|| vec![1.0]);
+        // Only what the shader declares is resolved (cloning every constant
+        // and builtin for each pass of each effect, each frame, was most of
+        // the recording time). Precedence, highest first: audio arrays from
+        // `overrides`, `overrides`, per-frame builtins, the pass constants,
+        // defaults for builtins the constants lack.
         let (sw, sh) = (screen.0.max(1) as f32, screen.1.max(1) as f32);
-        values.entry("g_Screen".into()).or_insert_with(|| vec![sw, sh, sw / sh]);
-        values.entry("g_Alpha".into()).or_insert_with(|| vec![1.0]);
-        values.entry("g_UserAlpha".into()).or_insert_with(|| vec![1.0]);
-        values.entry("g_Brightness".into()).or_insert_with(|| vec![1.0]);
-        values.entry("g_Color".into()).or_insert_with(|| vec![1.0, 1.0, 1.0]);
-        values.entry("g_Color4".into()).or_insert_with(|| vec![1.0, 1.0, 1.0, 1.0]);
-        values.entry("g_Texture0Rotation".into()).or_insert_with(|| vec![1.0, 0.0, 0.0, 1.0]);
-        values.entry("g_Texture0Translation".into()).or_insert_with(|| vec![0.0, 0.0]);
-        values.insert("g_TexelSize".into(), vec![1.0 / sw, 1.0 / sh]);
-        values.insert("g_TexelSizeHalf".into(), vec![0.5 / sw, 0.5 / sh]);
         let ys = if d3d_clip { 1.0 } else { -1.0 };
-        let projection = if let Some((quad_w, quad_h)) = quad {
-            let (qw, qh) = ((quad_w.max(1)) as f32, (quad_h.max(1)) as f32);
-            Some((
-                vec![
-                    2.0 / qw,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    ys * 2.0 / qh,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    1.0,
-                    0.0,
-                    -1.0,
-                    -ys,
-                    0.0,
-                    1.0,
-                ],
-                vec![
-                    qw / 2.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    ys * qh / 2.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    1.0,
-                    0.0,
-                    qw / 2.0,
-                    qh / 2.0,
-                    0.0,
-                    1.0,
-                ],
-            ))
-        } else {
-            None
-        };
-        if let Some((mvp, inverse)) = projection {
-            values.insert("g_EffectModelViewProjectionMatrix".into(), mvp.clone());
-            values.insert("g_EffectModelViewProjectionMatrixInverse".into(), inverse.clone());
-            values.insert("g_ModelViewProjectionMatrix".into(), mvp);
-            values.insert("g_ModelViewProjectionMatrixInverse".into(), inverse);
-        }
-        values.entry("g_ViewProjectionMatrix".into()).or_insert_with(|| {
-            vec![
-                2.0 / sw,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                ys * 2.0 / sh,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                -1.0,
-                -ys,
-                0.5,
-                1.0,
-            ]
-        });
         let (w, h) = (width as f32, height as f32);
-        values.insert("g_Resolution".into(), vec![w, h, 1.0 / w.max(1.0), 1.0 / h.max(1.0)]);
-        for slot in 0..8 {
-            let res = slot_sizes
-                .get(slot)
-                .copied()
-                .flatten()
-                .or_else(|| self.resolutions.get(slot).copied().flatten())
-                .unwrap_or([w, h, w, h]);
-            values.insert(format!("g_Texture{slot}Resolution"), res.to_vec());
-        }
-        for (name, value) in overrides {
-            values.insert(name.clone(), value.clone());
-        }
+        let quad_matrices = quad.map(|(quad_w, quad_h)| {
+            let (qw, qh) = ((quad_w.max(1)) as f32, (quad_h.max(1)) as f32);
+            (
+                vec![2.0 / qw, 0.0, 0.0, 0.0, 0.0, ys * 2.0 / qh, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, -ys, 0.0, 1.0],
+                vec![qw / 2.0, 0.0, 0.0, 0.0, 0.0, ys * qh / 2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, qw / 2.0, qh / 2.0, 0.0, 1.0],
+            )
+        });
+        let forced = |name: &str| -> Option<Vec<f32>> {
+            Some(match name {
+                "g_Time" => vec![clock.time],
+                "g_Frametime" => vec![clock.dt],
+                "g_Daytime" => vec![clock.daytime],
+                "g_ParallaxPosition" | "g_PointerPosition" | "g_PointerPositionLast" => vec![0.5, 0.5],
+                "g_PointerState" => vec![0.0, 0.0, 0.0, 0.0],
+                "g_TexelSize" => vec![1.0 / sw, 1.0 / sh],
+                "g_TexelSizeHalf" => vec![0.5 / sw, 0.5 / sh],
+                "g_Resolution" => vec![w, h, 1.0 / w.max(1.0), 1.0 / h.max(1.0)],
+                "g_EffectModelViewProjectionMatrix" | "g_ModelViewProjectionMatrix" => quad_matrices.as_ref()?.0.clone(),
+                "g_EffectModelViewProjectionMatrixInverse" | "g_ModelViewProjectionMatrixInverse" => {
+                    quad_matrices.as_ref()?.1.clone()
+                }
+                _ => {
+                    let slot = name.strip_prefix("g_Texture")?.strip_suffix("Resolution")?.parse::<usize>().ok()?;
+                    if slot >= 8 {
+                        return None;
+                    }
+                    slot_sizes
+                        .get(slot)
+                        .copied()
+                        .flatten()
+                        .or_else(|| self.resolutions.get(slot).copied().flatten())
+                        .unwrap_or([w, h, w, h])
+                        .to_vec()
+                }
+            })
+        };
+        let default = |name: &str| -> Option<Vec<f32>> {
+            Some(match name {
+                "g_TextureReductionScale" | "g_Alpha" | "g_UserAlpha" | "g_Brightness" => vec![1.0],
+                "g_Screen" => vec![sw, sh, sw / sh],
+                "g_Color" => vec![1.0, 1.0, 1.0],
+                "g_Color4" => vec![1.0, 1.0, 1.0, 1.0],
+                "g_Texture0Rotation" => vec![1.0, 0.0, 0.0, 1.0],
+                "g_Texture0Translation" => vec![0.0, 0.0],
+                "g_ViewProjectionMatrix" => {
+                    vec![2.0 / sw, 0.0, 0.0, 0.0, 0.0, ys * 2.0 / sh, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -ys, 0.5, 1.0]
+                }
+                _ => return None,
+            })
+        };
+        let mut values = BTreeMap::new();
         for uniform in &self.uniforms {
-            let Some((base, _)) = uniform.name.split_once('[') else {
-                continue;
-            };
-            if !base.starts_with(AUDIO_PREFIX) {
-                continue;
-            }
-            if let Some(bands) = overrides.get(base) {
-                values.insert(uniform.name.clone(), bands.clone());
+            let name = uniform.name.as_str();
+            let audio = name
+                .split_once('[')
+                .filter(|(base, _)| base.starts_with(AUDIO_PREFIX))
+                .and_then(|(base, _)| overrides.get(base));
+            let value = audio
+                .or_else(|| overrides.get(name))
+                .cloned()
+                .or_else(|| forced(name))
+                .or_else(|| self.constants.get(name).cloned())
+                .or_else(|| default(name));
+            if let Some(value) = value {
+                values.insert(uniform.name.clone(), value);
             }
         }
         crate::shader::pack_uniforms(&self.uniforms, &values)
