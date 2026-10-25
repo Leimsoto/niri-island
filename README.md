@@ -33,8 +33,15 @@ src/
 ├── views/      cada capa y panel de la isla, módulos de la barra, ajustes
 ├── suite/      overlays a pantalla completa: fondos (backdrop + selector), capturas, protector, bloqueo
 └── island/     la app: arbitraje de capas, morph, entrada, comandos IPC, barras de las esquinas
+engine/         niri-island-engine (Rust, Vulkan, V8): vídeos y escenas de Wallpaper Engine; puente de Steam
 tests/          tests unitarios (ctest), prueba de humo y un reproductor MPRIS falso para pruebas
+tools/          medir la GPU (total y por proceso) y ejecutar la compilación de depuración bajo gdb
+docs/           documentación técnica: compilación, arquitectura, flujos, protocolos, mantenimiento
 ```
+
+**Documentación técnica completa en [`docs/`](docs/README.md)**: cómo se compila cada pieza, procesos e hilos,
+cada servicio y con qué habla, el motor por dentro, la integración con niri, todas las claves de configuración,
+cómo depurar y medir, y qué tocar cuando cambie una API externa.
 
 - **Un solo hilo de estado.** Todo pasa por un bucle `poll` (Wayland, D-Bus de sesión y sistema, udev, inotify,
   niri, IPC, temporizadores). Lo lento (nmcli, descargas, decodificar y escalar imágenes, PAM) va a workers y vuelve
@@ -55,7 +62,7 @@ tests/          tests unitarios (ctest), prueba de humo y un reproductor MPRIS f
   color de la carátula. Si hay un temporizador activo aparece en una franja con sus controles.
 - **Módulos de la barra** (Ajustes → Barra e isla): espacios de trabajo, ventana activa, buscador, bandeja del
   sistema, notificaciones, red, Bluetooth (solo si está activo), volumen, batería (con o sin porcentaje; rayo al
-  cargar) y un **monitor de rendimiento** en su propia isla (CPU, RAM, temperatura, red, disco y swap a elegir; en
+  cargar) y un **monitor de rendimiento** en su propia isla (CPU, GPU, RAM, temperatura, red, disco y swap a elegir; en
   números o en anillos; clic abre el panel del sistema). Cada uno se activa o desactiva, se coloca a la izquierda o a la derecha y se ordena.
 - **Distribuciones**: agrupada (cápsulas junto a la isla), extendida (en las esquinas; los paneles caen bajo su
   botón) o una sola isla. La isla puede flotar o acoplarse al borde (con o sin las laterales).
@@ -88,7 +95,9 @@ temporizador y cronómetro con vueltas, **notificaciones** (historial y No moles
   con progreso y desuscribirse (borra también los archivos), por el cliente de Steam. Mismo panel que wallhaven.
   Las escenas y los vídeos los dibuja **niri-island-engine** (`engine/`, basado en
   [skwd-paper](https://github.com/liixini/skwd-paper)) con Vulkan: un vídeo 1080p60 gasta ~10 % de un núcleo y 0 en
-  pausa. Sus scripts corren en **V8**, como en Wallpaper Engine, incluidos los que construyen su propia escena 3D
+  pausa. Sus colas de GPU van con prioridad baja para no quitarle la GPU a niri, y en Ajustes → Fondos se elige su
+  tope de fotogramas (30/60) y la calidad de las escenas (completa, equilibrada, ligera). Las opciones propias de
+  cada fondo (sliders, interruptores, listas de su `project.json`) se editan en el panel lateral del selector. Sus scripts corren en **V8**, como en Wallpaper Engine, incluidos los que construyen su propia escena 3D
   (`createModelData`: mallas dinámicas con profundidad, targets compartidos entre capas). Los fondos **web** usan el renderizador CEF de [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine)
   hablándole directamente (sus fotogramas dma-buf van a nuestra propia superficie). La isla borra las descargas de
   las que te desuscribes (Steam las deja en disco).
@@ -179,6 +188,7 @@ otros     notify <app> <resumen> <cuerpo> notifications-clear battery tray-list 
 y cachés en `~/.cache/niri-island/`.
 
 Depuración: `NIRI_ISLAND_DEBUG=1` imprime fps y ms por frame de la isla; `NIRI_ISLAND_OVLOG=1` los de los overlays.
+`tools/gpu-procs.py` dice qué proceso ocupa la GPU; más en [docs/10-depuracion.md](docs/10-depuracion.md).
 
 ## Tests
 
