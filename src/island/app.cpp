@@ -796,7 +796,7 @@ std::string App::bar_signature() const {
     if (fullscreen_hide()) s += "|fs";
     if (perf_on()) {
         const auto& st = sysmon_.stats();
-        snprintf(buf, sizeof(buf), "|%d,%d,%d,%d,%d,%d", static_cast<int>(st.cpu), static_cast<int>(st.ram),
+        snprintf(buf, sizeof(buf), "|%d,%d,%d,%d,%d,%d,%d", static_cast<int>(st.cpu), static_cast<int>(st.gpu), static_cast<int>(st.ram),
                  static_cast<int>(st.temp), static_cast<int>(st.net_down / 1024), static_cast<int>(st.disk), static_cast<int>(st.swap));
         s += buf;
         s += config().perf_style;

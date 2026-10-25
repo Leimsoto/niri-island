@@ -77,6 +77,7 @@ fn wanted_device_extension(name: &str) -> bool {
         "subgroup_rotate",
         "cooperative_matrix",
         "queue_family_foreign",
+        "global_priority",
     ]
     .iter()
     .any(|wanted| name.contains(wanted))
@@ -524,6 +525,23 @@ fn create_with_policy(
             );
         }
         let gfx_family = gfx_family.ok_or_else(|| anyhow!("no graphics queue family"))?;
+
+        // A wallpaper must never starve the compositor on a shared GPU: its
+        // queues ask for low priority, so the GPU serves niri first (low is
+        // allowed unprivileged). SKWD_PAPER_GPU_PRIORITY=normal opts out.
+        let low_priority = std::env::var("SKWD_PAPER_GPU_PRIORITY").as_deref() != Ok("normal")
+            && ext_names.iter().any(|name| {
+                name.as_c_str() == c"VK_KHR_global_priority" || name.as_c_str() == c"VK_EXT_global_priority"
+            });
+        let mut global_priorities = vec![
+            vk::DeviceQueueGlobalPriorityCreateInfoKHR::default()
+                .global_priority(vk::QueueGlobalPriorityKHR::LOW);
+            if low_priority { queue_infos.len() } else { 0 }
+        ];
+        for (info, priority) in queue_infos.iter_mut().zip(global_priorities.iter_mut()) {
+            info.p_next = (priority as *mut vk::DeviceQueueGlobalPriorityCreateInfoKHR).cast();
+        }
+        tracing::info!(low_priority, "skwd-wall-vk: GPU queue priority");
 
         let mut device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_infos)

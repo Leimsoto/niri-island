@@ -2785,7 +2785,9 @@ fn layer_effect_dimensions(
     if layer.visible
         && let Some((width, height)) = layer.composition_size
     {
-        return bounded_effect_dimensions(f64::from(width.abs()), f64::from(height.abs()));
+        // authored sizes, scaled as the scene is when it renders smaller
+        let scale = raster_scale(dimensions);
+        return bounded_effect_dimensions(f64::from(width.abs()) * scale, f64::from(height.abs()) * scale);
     }
     if layer.is_text {
         return bounded_effect_dimensions(
@@ -2805,11 +2807,21 @@ fn deferred_composition_layers(
         .filter(|layer| !layer.visible && !layer.effects.is_empty())
         .filter_map(|layer| {
             let (width, height) = layer.composition_size?;
-            let authored =
-                bounded_effect_dimensions(f64::from(width.abs()), f64::from(height.abs()));
+            let scale = raster_scale(dimensions);
+            let authored = bounded_effect_dimensions(
+                f64::from(width.abs()) * scale,
+                f64::from(height.abs()) * scale,
+            );
             (layer_effect_dimensions(layer, dimensions) != authored).then(|| layer.id.clone())
         })
         .collect()
+}
+
+/// How much smaller than its canvas the scene renders (1: full size).
+fn raster_scale(dimensions: SceneDimensions) -> f64 {
+    let x = f64::from(dimensions.raster.0) / f64::from(dimensions.logical[0]);
+    let y = f64::from(dimensions.raster.1) / f64::from(dimensions.logical[1]);
+    x.max(y).min(1.0)
 }
 
 fn effect_dimensions_for(size: (f32, f32), dimensions: SceneDimensions) -> (u32, u32) {
@@ -4510,6 +4522,7 @@ pub(super) fn run_scene(
     let mut next_frame = epoch;
     let mut last_sim = epoch;
     let mut suspended_at: Option<Instant> = None;
+    let mut scene_stats = SceneStats::new();
     let mut idle_paused = false;
 
     loop {
@@ -4758,7 +4771,9 @@ pub(super) fn run_scene(
                 let time = epoch.elapsed().as_secs_f32();
                 let dt = now.duration_since(last_sim).as_secs_f32().clamp(1.0 / 240.0, 0.1);
                 last_sim = now;
+                let compose_started = Instant::now();
                 group.compose(time, dt)?;
+                scene_stats.frame(compose_started.elapsed());
                 animated = group.animated();
                 for (id, op) in group.take_script_sounds() {
                     ctl.scene_sound(&id, op);
@@ -5335,3 +5350,44 @@ mod sprite_tests;
 #[cfg(test)]
 mod tests;
 pub(super) mod thumbnail;
+
+/// With SKWD_VK_SCENE_STATS set, once a second: frames composed and the
+/// time composing took (CPU side, GPU waits included).
+struct SceneStats {
+    enabled: bool,
+    since: Instant,
+    frames: u32,
+    total: Duration,
+    worst: Duration,
+}
+
+impl SceneStats {
+    fn new() -> Self {
+        Self {
+            enabled: std::env::var_os("SKWD_VK_SCENE_STATS").is_some(),
+            since: Instant::now(),
+            frames: 0,
+            total: Duration::ZERO,
+            worst: Duration::ZERO,
+        }
+    }
+
+    fn frame(&mut self, took: Duration) {
+        if !self.enabled {
+            return;
+        }
+        self.frames += 1;
+        self.total += took;
+        self.worst = self.worst.max(took);
+        let elapsed = self.since.elapsed();
+        if elapsed >= Duration::from_secs(1) {
+            tracing::info!(
+                "skwd-wall-vk: scene stats fps={:.1} compose_avg={:.1}ms compose_max={:.1}ms",
+                f64::from(self.frames) / elapsed.as_secs_f64(),
+                self.total.as_secs_f64() * 1000.0 / f64::from(self.frames.max(1)),
+                self.worst.as_secs_f64() * 1000.0,
+            );
+            *self = Self { since: Instant::now(), ..Self::new() };
+        }
+    }
+}

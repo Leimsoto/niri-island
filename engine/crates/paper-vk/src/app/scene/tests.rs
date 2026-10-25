@@ -947,7 +947,10 @@ fn background_projection_inverts_translated_rotated_and_mirrored_layer_corners()
 }
 
 #[test]
-fn composition_effects_keep_authored_resolution_when_geometry_or_output_shrinks() {
+fn composition_effects_follow_the_scene_raster_not_the_geometry() {
+    // A composition renders at the pixels it covers on screen: its authored
+    // size scaled as the whole scene is (a 4K scene on a 1080p screen renders
+    // at half), whatever the layer's own geometry.
     let mut layer = test_layer(true, 1);
     layer.passthrough = true;
     layer.copy_background = true;
@@ -955,16 +958,20 @@ fn composition_effects_keep_authored_resolution_when_geometry_or_output_shrinks(
     layer.scale = (-0.30868, 0.21645);
     layer.composition_size = Some((1920.0, 1080.0));
     let mut low_resolution = scene_dimensions_for((3840.0, 2160.0), 4096);
+    low_resolution.raster = (3840, 2160);
+    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (1920, 1080));
     low_resolution.raster = (1920, 1080);
-    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (1920, 1080));
+    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (960, 540));
     low_resolution.raster = (960, 540);
-    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (1920, 1080));
+    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (480, 270));
     layer.scale = (-0.61736, 0.43290);
     layer.composition_size = Some((960.0, 540.0));
-    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (960, 540));
+    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (240, 135));
     layer.copy_background = false;
-    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (960, 540));
+    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (240, 135));
     layer.composition_size = Some((3840.0, 2160.0));
+    assert_eq!(layer_effect_dimensions(&layer, low_resolution), (960, 540));
+    low_resolution.raster = (3840, 2160);
     assert_eq!(layer_effect_dimensions(&layer, low_resolution), (2048, 1152));
     layer.composition_size = None;
     low_resolution.raster = (1920, 1080);
@@ -984,7 +991,7 @@ fn hidden_compositions_defer_authored_targets_until_a_visibility_reload() {
         ["composition"]
     );
     layer.visible = true;
-    assert_eq!(layer_effect_dimensions(&layer, dimensions), (1920, 1080));
+    assert_eq!(layer_effect_dimensions(&layer, dimensions), (960, 540));
     assert!(deferred_composition_layers(std::slice::from_ref(&layer), dimensions).is_empty());
     layer.visible = false;
     layer.effects.clear();

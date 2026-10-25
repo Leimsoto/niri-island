@@ -12,6 +12,9 @@ namespace island::engine {
 // Everything here blocks: call it from a worker.
 
 bool installed();  // niri-island-engine next to niri-island or on PATH
+// How it renders, sent with every apply: frame cap, and the largest side
+// scenes render at inside (0: no limit; they are scaled to the screen).
+void configure(int fps, int max_size);
 bool running();    // its server is up (showing something)
 
 enum class Kind { Video, Engine };  // a video file, a Wallpaper Engine folder

@@ -1,5 +1,7 @@
 #include "services/engine.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <climits>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -30,6 +32,8 @@ const std::string& binary() {
     return path;
 }
 
+std::atomic<int> g_fps{30}, g_max{0};
+
 proc::Result run(std::vector<std::string> args, int timeout_ms = 20000) {
     args.insert(args.begin(), binary());
     return proc::run(args, timeout_ms, nullptr, true);
@@ -45,6 +49,11 @@ std::string last_line(const std::string& out) {
 }  // namespace
 
 bool installed() { return !binary().empty(); }
+
+void configure(int fps, int max_size) {
+    g_fps = std::clamp(fps, 1, 240);
+    g_max = std::max(0, max_size);
+}
 
 // Its server answers on this socket while it shows something. (Any command
 // starts the server: the ones that only make sense with it running check first.)
@@ -68,7 +77,12 @@ bool apply(const std::string& path, Kind kind, bool muted, std::string* error, c
         return false;
     }
     std::vector<std::string> args = {"apply", "*", path, "--kind", kind == Kind::Engine ? "we" : "video",
-                                     "--mute", muted ? "true" : "false", "--replace-all"};
+                                     "--mute", muted ? "true" : "false", "--replace-all",
+                                     "--scene-fps", std::to_string(g_fps.load())};
+    if (g_max > 0) {
+        args.push_back("--scene-max");
+        args.push_back(std::to_string(g_max.load()));
+    }
     if (!properties.empty()) {
         args.push_back("--properties");
         args.push_back(properties);

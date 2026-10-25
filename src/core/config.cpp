@@ -124,6 +124,8 @@ void Config::load() {
         get(*m, "wallpaper_engine", c.wallpaper_engine);
         get(*m, "wallpaper_engine_audio", c.wallpaper_engine_audio);
         get(*m, "wallpaper_engine_clean", c.wallpaper_engine_clean);
+        get(*m, "wallpaper_engine_fps", c.wallpaper_engine_fps);
+        get(*m, "wallpaper_engine_quality", c.wallpaper_engine_quality);
         get(*m, "screensaver", c.screensaver);
         get(*m, "screensaver_minutes", c.screensaver_minutes);
         get(*m, "screensaver_lock_minutes", c.screensaver_lock_minutes);
@@ -209,6 +211,8 @@ std::string Config::to_json() const {
                      {"wallpaper_engine", wallpaper_engine},
                      {"wallpaper_engine_audio", wallpaper_engine_audio},
                      {"wallpaper_engine_clean", wallpaper_engine_clean},
+                     {"wallpaper_engine_fps", wallpaper_engine_fps},
+                     {"wallpaper_engine_quality", wallpaper_engine_quality},
                      {"screensaver", screensaver},
                      {"screensaver_minutes", screensaver_minutes},
                      {"screensaver_lock_minutes", screensaver_lock_minutes},

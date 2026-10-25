@@ -212,11 +212,11 @@ void App::draw_module_options(cairo_t* cr, Ui& u, const std::string& id, const R
     if (id == "perf") {
         // what it shows: pills that light up
         static const std::pair<const char*, const char*> metrics[] = {
-            {"cpu", "CPU"}, {"ram", "RAM"}, {"temp", "Temperatura"}, {"net", "Red"}, {"disk", "Disco"}, {"swap", "Swap"}};
-        static const std::vector<std::string> order = {"cpu", "ram", "temp", "net", "disk", "swap"};
+            {"cpu", "CPU"}, {"gpu", "GPU"}, {"ram", "RAM"}, {"temp", "Temp"}, {"net", "Red"}, {"disk", "Disco"}, {"swap", "Swap"}};
+        static const std::vector<std::string> order = {"cpu", "gpu", "ram", "temp", "net", "disk", "swap"};
         text(cr, area.x, area.y + 12, "Mostrar", {ui(12), p.text_dim, Align::Left});
-        float x = area.x + 86, pw = (area.right() - x - 8 - 5 * 6) / 6;
-        for (int k = 0; k < 6; ++k) {
+        float x = area.x + 86, pw = (area.right() - x - 8 - 6 * 6) / 7;
+        for (int k = 0; k < 7; ++k) {
             std::string mid = metrics[k].first;
             bool on = std::find(cfg.perf_metrics.begin(), cfg.perf_metrics.end(), mid) != cfg.perf_metrics.end();
             w::pill(c, ID("set.perf.m", k), {x + k * (pw + 6), area.y + 4, pw, 30}, metrics[k].second, nullptr,
@@ -885,6 +885,20 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
            [&, save](bool v) {
                cfg.wallpaper_engine_clean = v;
                save();
+           });
+    choice(5, "Wallpaper Engine", "Fotogramas", "Los fondos animados del motor; 60 gasta el doble de GPU", {"30 fps", "60 fps"},
+           [&] { return cfg.wallpaper_engine_fps >= 60 ? 1 : 0; },
+           [&, save](int i) {
+               cfg.wallpaper_engine_fps = i ? 60 : 30;
+               save();
+               backdrop_.engine_settings_changed();
+           });
+    choice(5, "Wallpaper Engine", "Calidad", "Resolución interna de las escenas: las pesadas (4K) pesan mucho menos en Ligera",
+           {"Completa", "Equilibrada", "Ligera"}, [&] { return cfg.wallpaper_engine_quality; },
+           [&, save](int i) {
+               cfg.wallpaper_engine_quality = i;
+               save();
+               backdrop_.engine_settings_changed();
            });
     buttons(5, "Wallpaper Engine", "Más fondos", "El Workshop también está en el selector; los fondos web necesitan su soporte",
             {{"Abrir Workshop", [] { proc::spawn({"xdg-open", "steam://url/SteamWorkshopPage/431960"}); }},

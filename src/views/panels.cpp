@@ -271,8 +271,19 @@ void App::draw_stats(cairo_t* cr, float w, float h) {
     char cpu[64];
     snprintf(cpu, sizeof(cpu), "carga %.2f%s", s.load1,
              s.temp > 0 ? ("  ·  " + std::to_string(static_cast<int>(s.temp)) + " °C").c_str() : "");
-    big({16, 62, cw, 150}, "󰍛", "Procesador", s.cpu, cpu, s.cpu_hist, s.temp > 85 ? p.bad : p.accent);
-    big({16 + cw + 10, 62, cw, 150}, "󰘚", "Memoria", s.ram, ram, s.ram_hist, p.info);
+    if (s.gpu >= 0) {
+        // three across: processor, graphics, memory
+        float tw = (w - 32 - 20) / 3;
+        char gpu[64];
+        if (s.gpu_mhz > 0) snprintf(gpu, sizeof(gpu), "%s · %d / %d MHz", s.gpu_name.c_str(), s.gpu_mhz, s.gpu_max_mhz);
+        else snprintf(gpu, sizeof(gpu), "%s", s.gpu_name.c_str());
+        big({16, 62, tw, 150}, "󰍛", "Procesador", s.cpu, cpu, s.cpu_hist, s.temp > 85 ? p.bad : p.accent);
+        big({16 + tw + 10, 62, tw, 150}, "󰢮", "Gráficos", s.gpu, gpu, s.gpu_hist, s.gpu > 90 ? p.bad : p.warn);
+        big({16 + 2 * (tw + 10), 62, tw, 150}, "󰘚", "Memoria", s.ram, ram, s.ram_hist, p.info);
+    } else {
+        big({16, 62, cw, 150}, "󰍛", "Procesador", s.cpu, cpu, s.cpu_hist, s.temp > 85 ? p.bad : p.accent);
+        big({16 + cw + 10, 62, cw, 150}, "󰘚", "Memoria", s.ram, ram, s.ram_hist, p.info);
+    }
 
     Rect net{16, 222, cw, h - 238};
     w::card(c, net, 18);

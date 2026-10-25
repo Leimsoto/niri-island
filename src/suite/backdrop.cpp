@@ -74,7 +74,20 @@ Backdrop::~Backdrop() {
     if (img_) cairo_surface_destroy(img_);
 }
 
+namespace {
+void configure_engine() {
+    static const int sizes[3] = {0, 1600, 1280};
+    engine::configure(config().wallpaper_engine_fps, sizes[std::clamp(config().wallpaper_engine_quality, 0, 2)]);
+}
+}  // namespace
+
+void Backdrop::engine_settings_changed() {
+    configure_engine();
+    if (drawer_ == Drawer::Engine) set(path_);  // they go with the apply
+}
+
 void Backdrop::init() {
+    configure_engine();
     // A previous run may have left the engine drawing: whatever comes next
     // retires it (a cheap no-op when nothing runs).
     engine_on_ = true;

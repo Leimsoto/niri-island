@@ -187,7 +187,7 @@ float App::module_w(const std::string& id) const {
 // not twitch as they change.
 
 static const char* perf_glyph(const std::string& m) {
-    return m == "cpu" ? "󰍛" : m == "ram" ? "󰘚" : m == "temp" ? "󰔏" : m == "net" ? "󰇚" : m == "disk" ? "󰋊" : "󰾴";
+    return m == "cpu" ? "󰍛" : m == "gpu" ? "󰢮" : m == "ram" ? "󰘚" : m == "temp" ? "󰔏" : m == "net" ? "󰇚" : m == "disk" ? "󰋊" : "󰾴";
 }
 
 static std::string short_rate(float bps) {
@@ -202,6 +202,7 @@ static std::pair<float, std::string> perf_value(const SysStats& s, const std::st
     auto pct = [](float v) { return std::to_string(static_cast<int>(std::lround(v))) + "%"; };
     if (m == "cpu") return {s.cpu / 100, pct(s.cpu)};
     if (m == "ram") return {s.ram / 100, pct(s.ram)};
+    if (m == "gpu") return {s.gpu < 0 ? 0 : s.gpu / 100, s.gpu < 0 ? "–" : pct(s.gpu)};
     if (m == "disk") return {s.disk / 100, pct(s.disk)};
     if (m == "swap") return {s.swap / 100, pct(s.swap)};
     if (m == "temp") return {s.temp < 0 ? 0 : s.temp / 100, s.temp < 0 ? "–" : std::to_string(static_cast<int>(std::lround(s.temp))) + "°"};

@@ -1,6 +1,8 @@
 #include "services/sysmon.hpp"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <dirent.h>
 #include <sstream>
 #include <sys/statvfs.h>
@@ -20,6 +22,7 @@ std::string fmt_bytes_rate(float bps) {
 
 SysMon::SysMon() {
     find_temp();
+    find_gpu();
     sample();
 }
 
@@ -41,6 +44,46 @@ void SysMon::find_temp() {
     closedir(d);
     std::sort(found.begin(), found.end());
     if (!found.empty()) temp_path_ = found.front().second;
+}
+
+void SysMon::find_gpu() {
+    DIR* d = opendir("/sys/class/drm");
+    if (!d) return;
+    std::vector<std::string> cards;
+    while (dirent* e = readdir(d)) {
+        std::string n = e->d_name;
+        if (starts_with(n, "card") && n.find('-') == std::string::npos) cards.push_back(n);
+    }
+    closedir(d);
+    std::sort(cards.begin(), cards.end());
+    for (auto& card : cards) {
+        std::string base = "/sys/class/drm/" + card, vendor;
+        read_file(base + "/device/vendor", vendor);
+        vendor = trim(vendor);
+        if (vendor == "0x1002" && file_exists(base + "/device/gpu_busy_percent")) {
+            gpu_kind_ = GpuKind::Busy;
+            gpu_path_ = base + "/device/gpu_busy_percent";
+            st_.gpu_name = "AMD";
+            return;
+        }
+        if (vendor == "0x8086") {
+            // i915, then xe
+            for (std::string idle : {base + "/gt/gt0/rc6_residency_ms", base + "/power/rc6_residency_ms",
+                                     base + "/device/tile0/gt0/gtidle/idle_residency_ms"}) {
+                if (!file_exists(idle)) continue;
+                gpu_kind_ = GpuKind::Idle;
+                gpu_path_ = idle;
+                st_.gpu_name = "Intel";
+                for (std::string f : {base + "/gt/gt0/rps_act_freq_mhz", base + "/gt_act_freq_mhz",
+                                      base + "/device/tile0/gt0/freq0/act_freq"})
+                    if (file_exists(f)) { gpu_freq_path_ = f; break; }
+                for (std::string f : {base + "/gt/gt0/rps_max_freq_mhz", base + "/gt_max_freq_mhz",
+                                      base + "/device/tile0/gt0/freq0/max_freq"})
+                    if (file_exists(f)) { gpu_max_path_ = f; break; }
+                return;
+            }
+        }
+    }
 }
 
 static void push(std::deque<float>& h, float v) {
@@ -127,6 +170,27 @@ void SysMon::sample() {
         prev_tx_ = tx;
     }
 
+    if (gpu_kind_ != GpuKind::None) {
+        std::string t;
+        if (read_file(gpu_path_, t)) {
+            float busy = -1;
+            if (gpu_kind_ == GpuKind::Busy) {
+                busy = static_cast<float>(std::atof(t.c_str()));
+            } else {
+                uint64_t idle = std::strtoull(t.c_str(), nullptr, 10);
+                if (prev_idle_ms_ && dt > 0.05)
+                    busy = 100.0f * (1.0f - static_cast<float>((idle - prev_idle_ms_) / (dt * 1000.0)));
+                prev_idle_ms_ = idle;
+            }
+            if (busy >= 0) {
+                busy = std::clamp(busy, 0.0f, 100.0f);
+                st_.gpu = st_.gpu < 0 ? busy : std::clamp(st_.gpu * 0.35f + busy * 0.65f, 0.0f, 100.0f);
+            }
+        }
+        if (!gpu_freq_path_.empty() && read_file(gpu_freq_path_, t)) st_.gpu_mhz = std::atoi(t.c_str());
+        if (!gpu_max_path_.empty() && read_file(gpu_max_path_, t)) st_.gpu_max_mhz = std::atoi(t.c_str());
+    }
+
     struct sysinfo si {};
     if (sysinfo(&si) == 0) {
         st_.uptime_s = si.uptime;
@@ -135,12 +199,14 @@ void SysMon::sample() {
 
     push(cpu_h_, st_.cpu / 100.0f);
     push(ram_h_, st_.ram / 100.0f);
+    if (st_.gpu >= 0) push(gpu_h_, st_.gpu / 100.0f);
     float rate = st_.net_down + st_.net_up;
     net_peak_ = std::max(net_peak_ * 0.98f, std::max(rate, 64.0f * 1024));
     push(net_h_, rate / net_peak_);
     st_.cpu_hist.assign(cpu_h_.begin(), cpu_h_.end());
     st_.ram_hist.assign(ram_h_.begin(), ram_h_.end());
     st_.net_hist.assign(net_h_.begin(), net_h_.end());
+    st_.gpu_hist.assign(gpu_h_.begin(), gpu_h_.end());
 }
 
 }  // namespace island

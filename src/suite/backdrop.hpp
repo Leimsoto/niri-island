@@ -30,6 +30,8 @@ public:
     void outputs_changed();               // a screen plugged in or out
     void set_paused(bool paused);         // a video wallpaper stops while hidden
     void set_audio(bool on);              // a Wallpaper Engine one's sound
+    // The engine's frame cap or quality changed: the wallpaper is applied again.
+    void engine_settings_changed();
     // A picture of the current wallpaper (a video's frame, an item's preview).
     std::string still() const;
 

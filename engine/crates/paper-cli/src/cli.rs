@@ -103,6 +103,10 @@ pub(crate) struct ApplyArgs {
     pub(crate) idle_seconds: Option<u32>,
     #[arg(long)]
     pub(crate) properties: Option<String>,
+    #[arg(long, help = "Frame cap for animated Wallpaper Engine scenes (default 30)")]
+    pub(crate) scene_fps: Option<u32>,
+    #[arg(long, help = "Largest side, in pixels, scenes render at inside (they are scaled to the screen)")]
+    pub(crate) scene_max: Option<u32>,
     #[arg(long, help = "Apply wallpapers together using JSON, @file, or - to read JSON from stdin", conflicts_with_all = ["output", "path", "kind", "engine", "frame_rate", "fill_mode", "mute", "volume", "layer", "transition", "transition_from", "effect", "duration_ms", "idle_seconds", "properties"])]
     pub(crate) manifest: Option<String>,
     #[arg(

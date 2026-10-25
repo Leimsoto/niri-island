@@ -98,9 +98,16 @@ fn apply_request(args: crate::cli::ApplyArgs) -> Result<ApplyRequest> {
             duration_ms: args.duration_ms,
         });
     }
-    let policy = args
-        .idle_seconds
-        .map(|seconds| RendererPolicy { idle_seconds: Some(seconds), ..Default::default() });
+    let scene = (args.scene_fps.is_some() || args.scene_max.is_some()).then(|| paper_control::ScenePolicy {
+        fps: args.scene_fps,
+        max_dimension: args.scene_max,
+        ..Default::default()
+    });
+    let policy = (args.idle_seconds.is_some() || scene.is_some()).then(|| RendererPolicy {
+        idle_seconds: args.idle_seconds,
+        scene,
+        ..Default::default()
+    });
     let mut request =
         ApplyRequest { assignments: vec![assignment], replace_all: args.replace_all, policy };
     resolve_paths(&mut request)?;

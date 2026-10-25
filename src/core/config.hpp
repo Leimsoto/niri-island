@@ -74,6 +74,8 @@ struct Config {
     bool wallpaper_engine = true;
     bool wallpaper_engine_audio = false;
     bool wallpaper_engine_clean = true;   // delete the downloads Steam keeps after unsubscribing
+    int wallpaper_engine_fps = 30;        // the engine's frame cap for animated wallpapers
+    int wallpaper_engine_quality = 0;     // scenes' inner resolution: 0 full, 1 balanced (1600), 2 light (1280)
     // The bubbles screensaver, started by the island itself when idle.
     bool screensaver = true;
     int screensaver_minutes = 5;
