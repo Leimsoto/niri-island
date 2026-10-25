@@ -80,7 +80,9 @@ impl Dispatch<wl_pointer::WlPointer, ()> for App {
     ) {
         match event {
             wl_pointer::Event::Enter { surface, surface_x, surface_y, .. } => {
-                state.pointer_focus = state.surfaces.iter().position(|ui| ui.surface == surface);
+                state.pointer_focus = state.surfaces.iter().position(|ui| ui.surface == surface).or_else(|| {
+                    state.input_surfaces.iter().find(|input| input.surface == surface).map(|input| input.index)
+                });
                 state.pointer_motion(surface_x, surface_y);
             }
             wl_pointer::Event::Motion { surface_x, surface_y, .. } => {

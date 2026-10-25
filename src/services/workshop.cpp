@@ -1,6 +1,7 @@
 #include "services/workshop.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <dirent.h>
 #include <ftw.h>
 #include <functional>
@@ -181,6 +182,127 @@ int clean_workshop() {
         }
     }
     return removed;
+}
+
+namespace {
+
+std::string values_path() { return config_dir() + "/wallpaper-properties.json"; }
+
+nlohmann::json load_values() {
+    std::string text;
+    if (!read_file(values_path(), text)) return nlohmann::json::object();
+    auto j = nlohmann::json::parse(text, nullptr, false);
+    return j.is_object() ? j : nlohmann::json::object();
+}
+
+}  // namespace
+
+std::vector<Property> properties(const std::string& dir) {
+    std::vector<Property> out;
+    std::string text;
+    if (!read_file(dir + "/project.json", text)) return out;
+    auto j = nlohmann::json::parse(text, nullptr, false);
+    if (!j.is_object() || !j.contains("general") || !j["general"].is_object()) return out;
+    const auto& props = j["general"].value("properties", nlohmann::json::object());
+    if (!props.is_object()) return out;
+    std::vector<std::pair<double, Property>> ordered;
+    for (auto& [name, e] : props.items()) {
+        if (!e.is_object()) continue;
+        Property p;
+        p.name = name;
+        p.type = lower(e.value("type", ""));
+        p.text = e.value("text", name);
+        if (p.type != "slider" && p.type != "bool" && p.type != "combo" && p.type != "color") continue;
+        if (starts_with(p.text, "ui_")) continue;  // Wallpaper Engine's own (scheme colour…)
+        p.value = e.contains("value") ? e["value"] : nlohmann::json();
+        p.min = e.value("min", 0.0);
+        p.max = e.value("max", 1.0);
+        p.step = e.value("step", 0.0);
+        p.condition = e.value("condition", "");
+        if (e.contains("options") && e["options"].is_array())
+            for (auto& o : e["options"])
+                if (o.is_object()) p.options.push_back({o.value("label", ""), o.contains("value") ? o["value"] : nlohmann::json()});
+        if (p.type == "combo" && p.options.empty()) continue;
+        // (labels can carry markup: keep the words)
+        std::string clean;
+        bool tag = false;
+        for (char ch : p.text) {
+            if (ch == '<') tag = true;
+            else if (ch == '>') tag = false;
+            else if (!tag) clean += ch;
+        }
+        p.text = trim(clean).empty() ? name : trim(clean);
+        ordered.push_back({e.value("order", 0.0), std::move(p)});
+    }
+    std::stable_sort(ordered.begin(), ordered.end(), [](auto& a, auto& b) { return a.first < b.first; });
+    for (auto& [_, p] : ordered) out.push_back(std::move(p));
+    return out;
+}
+
+nlohmann::json user_values(const std::string& dir) {
+    auto all = load_values();
+    return all.contains(dir) && all[dir].is_object() ? all[dir] : nlohmann::json::object();
+}
+
+void set_user_value(const std::string& dir, const std::string& name, const nlohmann::json& value) {
+    auto all = load_values();
+    if (!all.contains(dir) || !all[dir].is_object()) all[dir] = nlohmann::json::object();
+    all[dir][name] = value;
+    write_file_atomic(values_path(), all.dump(1));
+}
+
+nlohmann::json value_of(const Property& p, const nlohmann::json& user) {
+    return user.contains(p.name) ? user[p.name] : p.value;
+}
+
+bool visible(const Property& p, const std::vector<Property>& all, const nlohmann::json& user) {
+    // "<name>.value == <literal>" or "!=": anything else shows
+    std::string c = trim(p.condition);
+    if (c.empty()) return true;
+    bool negate = false;
+    size_t op = c.find("==");
+    if (op == std::string::npos) {
+        op = c.find("!=");
+        negate = true;
+    }
+    if (op == std::string::npos) return true;
+    std::string lhs = trim(c.substr(0, op)), rhs = trim(c.substr(op + 2));
+    if (!ends_with(lhs, ".value")) return true;
+    lhs = lhs.substr(0, lhs.size() - 6);
+    for (auto& q : all) {
+        if (q.name != lhs) continue;
+        nlohmann::json v = value_of(q, user);
+        std::string have = v.is_string() ? v.get<std::string>() : v.dump();
+        if (rhs.size() >= 2 && (rhs.front() == '\'' || rhs.front() == '"')) rhs = rhs.substr(1, rhs.size() - 2);
+        bool equal = have == rhs;
+        if (v.is_number() && !rhs.empty()) {
+            char* end = nullptr;
+            double r = strtod(rhs.c_str(), &end);
+            if (end && *end == 0) equal = std::abs(v.get<double>() - r) < 1e-9;
+        }
+        return negate ? !equal : equal;
+    }
+    return true;
+}
+
+std::string engine_overrides(const std::string& dir) {
+    auto user = user_values(dir);
+    if (user.empty()) return "";
+    nlohmann::json out = nlohmann::json::object();
+    for (auto& p : properties(dir)) {
+        if (!user.contains(p.name)) continue;
+        const auto& v = user[p.name];
+        if (p.type == "bool") out[p.name] = v.is_boolean() ? (v.get<bool>() ? 1 : 0) : (v.is_number() ? v.get<double>() : 0.0);
+        else if (p.type == "combo") {
+            bool numeric = v.is_number();
+            if (numeric) out[p.name] = v;
+            else
+                for (size_t i = 0; i < p.options.size(); ++i)
+                    if (p.options[i].second == v) out[p.name] = static_cast<int>(i);
+        } else if (p.type == "color" && v.is_string()) out[p.name] = v;
+        else if (v.is_number()) out[p.name] = v;
+    }
+    return out.empty() ? "" : out.dump();
 }
 
 }  // namespace island::workshop

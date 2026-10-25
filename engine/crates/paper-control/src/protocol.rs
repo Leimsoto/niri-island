@@ -553,6 +553,13 @@ pub struct PauseRequest {
     pub paused: bool,
 }
 
+/// New values for the running Wallpaper Engine scenes' own settings: they
+/// take them live when they can (no reload).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PropertiesSetRequest {
+    pub properties: serde_json::Map<String, serde_json::Value>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioSetRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -613,6 +620,7 @@ impl Request {
             RequestParams::AudioSet(request) => request.validate(),
             RequestParams::SurfaceSet(request) => request.validate(),
             RequestParams::Pause(_)
+            | RequestParams::PropertiesSet(_)
             | RequestParams::Status(_)
             | RequestParams::Capabilities(_)
             | RequestParams::Ready(_)
@@ -634,6 +642,8 @@ pub enum RequestParams {
     Pause(PauseRequest),
     #[serde(rename = "paper.audio.set")]
     AudioSet(AudioSetRequest),
+    #[serde(rename = "paper.properties.set")]
+    PropertiesSet(PropertiesSetRequest),
     #[serde(rename = "paper.surface.set")]
     SurfaceSet(SurfacePolicy),
     #[serde(rename = "paper.status")]
@@ -969,6 +979,7 @@ pub type ApplyResponse = Response<ApplyResult>;
 pub type StopResponse = Response<StopResult>;
 pub type PauseResponse = Response<PauseResult>;
 pub type AudioSetResponse = Response<AudioSetResult>;
+pub type PropertiesSetResponse = Response<AudioSetResult>;
 pub type StatusResponse = Response<StatusResult>;
 pub type CapabilitiesResponse = Response<CapabilitiesResult>;
 

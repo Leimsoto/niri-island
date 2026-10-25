@@ -34,6 +34,18 @@ pub(crate) fn compositor_drm_device() -> Option<libc::dev_t> {
     (device != 0).then_some(device as libc::dev_t)
 }
 
+/// User data of input surfaces' layer surfaces: this plus the visible one's index.
+pub(super) const INPUT_SURFACE: usize = 1 << 20;
+
+pub(super) struct InputSurface {
+    pub surface: wl_surface::WlSurface,
+    pub _layer: ZwlrLayerSurfaceV1,
+    pub viewport: Option<WpViewport>,
+    pub buffer: Option<wayland_client::protocol::wl_buffer::WlBuffer>,
+    /// The visible surface it stands in for.
+    pub index: usize,
+}
+
 pub struct SurfaceUi {
     pub name: String,
     pub output: wl_output::WlOutput,
@@ -97,6 +109,9 @@ pub struct App {
     pub(super) shm: Option<wl_shm::WlShm>,
     pub(super) outputs: Vec<OutputInfo>,
     pub surfaces: Vec<SurfaceUi>,
+    /// Transparent surfaces that take the pointer for the visible ones: niri
+    /// gives no input to surfaces placed within the overview backdrop.
+    pub(super) input_surfaces: Vec<InputSurface>,
     pub closed: bool,
     pub frame_fired: bool,
     pub frame_ts_ms: u32,

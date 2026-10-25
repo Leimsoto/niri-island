@@ -96,6 +96,7 @@ pub fn setup(target_output: &str, layer_arg: Option<&str>) -> Result<Target> {
         dmabuf_feedback_all: Vec::new(),
         dmabuf_feedback_score: 0,
         viewporter: None,
+        input_surfaces: Vec::new(),
         xdg_output_manager: None,
         content_type_manager: None,
         shm: None,
@@ -204,6 +205,37 @@ pub fn setup(target_output: &str, layer_arg: Option<&str>) -> Result<Target> {
         });
     }
 
+    // On the background layer the visible surfaces may sit in niri's overview
+    // backdrop, which takes no input: a transparent twin above each one
+    // catches the pointer for the scene (Wallpaper Engine's cursor scripts).
+    if !input_passthrough
+        && vk_layer == zwlr_layer_shell_v1::Layer::Background
+        && app.viewporter.is_some()
+        && app.shm.is_some()
+    {
+        let namespace = std::env::var("SKWD_PAPER_NAMESPACE").unwrap_or_else(|_| "niri-island-engine".into());
+        for (si, info) in picked.iter().enumerate() {
+            let surface = compositor.create_surface(&qh, ());
+            let layer = shell.get_layer_surface(
+                &surface,
+                Some(&info.output),
+                zwlr_layer_shell_v1::Layer::Background,
+                format!("{namespace}-input"),
+                &qh,
+                super::model::INPUT_SURFACE + si,
+            );
+            layer.set_anchor(
+                zwlr_layer_surface_v1::Anchor::Top
+                    | zwlr_layer_surface_v1::Anchor::Bottom
+                    | zwlr_layer_surface_v1::Anchor::Left
+                    | zwlr_layer_surface_v1::Anchor::Right,
+            );
+            layer.set_exclusive_zone(-1);
+            layer.set_size(0, 0);
+            surface.commit();
+            app.input_surfaces.push(super::model::InputSurface { surface, _layer: layer, viewport: None, buffer: None, index: si });
+        }
+    }
     while !app.closed && app.surfaces.iter().any(|surf| !surf.configured && !surf.closed) {
         queue.blocking_dispatch(&mut app)?;
     }

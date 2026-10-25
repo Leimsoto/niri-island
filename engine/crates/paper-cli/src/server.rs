@@ -280,6 +280,25 @@ async fn handle(
             )
             .await
         }
+        RequestParams::PropertiesSet(set) => match manager.properties(&set).await {
+            Ok((updated, assignments)) => {
+                write_response(
+                    &mut stream,
+                    &paper_control::PropertiesSetResponse::success(
+                        request.id,
+                        AudioSetResult { updated, assignments: statuses(assignments) },
+                    ),
+                )
+                .await
+            }
+            Err(error) => {
+                write_response(
+                    &mut stream,
+                    &paper_control::PropertiesSetResponse::failure(request.id, "properties_failed", error.to_string()),
+                )
+                .await
+            }
+        },
         RequestParams::AudioSet(audio) => match manager.audio(&audio).await {
             Ok((updated, assignments)) => {
                 write_response(

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,28 @@ bool is_item(const std::string& path);  // a folder holding a project.json
 // Every downloaded item still subscribed to (and anything newer than Steam's
 // list), your own projects, and the bundled ones Wallpaper Engine shows.
 std::vector<Item> items();
+// What an item lets you change (project.json general.properties): sliders,
+// switches, choices. Text-only entries and Wallpaper Engine's own UI keys
+// are left out. In the order the author gave them.
+struct Property {
+    std::string name, text, type;  // type: slider, bool, combo, color
+    nlohmann::json value;          // its default
+    double min = 0, max = 1, step = 0;
+    std::vector<std::pair<std::string, nlohmann::json>> options;  // combo: label, value
+    std::string condition;         // e.g. "followclock.value == false"
+};
+std::vector<Property> properties(const std::string& dir);
+// Your values for an item (name → value, as the property's own type).
+nlohmann::json user_values(const std::string& dir);
+void set_user_value(const std::string& dir, const std::string& name, const nlohmann::json& value);
+// The value in effect: yours, else the default.
+nlohmann::json value_of(const Property& p, const nlohmann::json& user);
+// Whether a property's condition holds with these values (unknown forms do).
+bool visible(const Property& p, const std::vector<Property>& all, const nlohmann::json& user);
+// Your values as the engine takes them (--properties): numbers only, a
+// switch as 1/0, a choice among words as its index. Empty: none set.
+std::string engine_overrides(const std::string& dir);
+
 // Deletes the Workshop downloads you are no longer subscribed to (Steam
 // leaves them behind). Returns how many went.
 int clean_workshop();

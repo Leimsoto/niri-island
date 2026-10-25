@@ -787,6 +787,29 @@ impl Manager {
         Ok((targets.len(), statuses))
     }
 
+    /// New property values to every running Wallpaper Engine scene: a swap to
+    /// the same scene, which takes them live (or reloads itself if it must).
+    pub(crate) async fn properties(
+        &mut self,
+        request: &paper_control::PropertiesSetRequest,
+    ) -> Result<(usize, Vec<WorkerStatus>)> {
+        self.refresh()?;
+        let mut targets = Vec::new();
+        for index in 0..self.workers.len() {
+            let worker = &self.workers[index];
+            if worker.assignment.source.kind != paper_control::SourceKind::WallpaperEngine || !worker.dynamic() {
+                continue;
+            }
+            let command = PaperCommand::swap_video(&worker.assignment.source.path, worker.assignment.mute, worker.assignment.volume)
+                .with_properties(Some(request.properties.clone()));
+            self.workers[index].send(&command).await.context("send scene properties")?;
+            self.workers[index].assignment.source.properties = Some(request.properties.clone());
+            targets.push(index);
+        }
+        let statuses = targets.iter().map(|index| worker_status(&self.workers[*index])).collect();
+        Ok((targets.len(), statuses))
+    }
+
     pub(crate) async fn stop(&mut self, request: &StopRequest) -> Result<usize> {
         let all =
             request.outputs.is_empty() || request.outputs.iter().any(|output| output == ALL_OUTPUT);

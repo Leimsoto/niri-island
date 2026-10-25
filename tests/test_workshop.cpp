@@ -130,3 +130,43 @@ TEST(engine_renders) {
     CHECK(!engine::renders("web"));
     CHECK(!engine::renders("application"));
 }
+
+// An item's settings: read in order, conditions, and what the engine gets.
+TEST(workshop_properties) {
+    char tmpl[] = "/tmp/niri-island-props-XXXXXX";
+    std::string home = mkdtemp(tmpl);
+    std::string old_home = home_dir();
+    const char* old_config = getenv("XDG_CONFIG_HOME");
+    std::string saved_config = old_config ? old_config : "";
+    setenv("HOME", home.c_str(), 1);
+    setenv("XDG_CONFIG_HOME", (home + "/.config").c_str(), 1);
+    make_dirs(home + "/.config/niri-island");
+    std::string dir = home + "/item";
+    make_dirs(dir);
+    write_file_atomic(dir + "/project.json", R"({"general":{"properties":{
+        "schemecolor":{"order":0,"text":"ui_browse_properties_scheme_color","type":"color","value":"0 0 0"},
+        "weather":{"order":2,"text":"Weather","type":"combo","value":"clear","options":[{"label":"Clear","value":"clear"},{"label":"Rain","value":"rain"}]},
+        "fish":{"order":1,"text":"<b>Koi</b>","type":"slider","value":18,"min":1,"max":48,"step":1},
+        "clock":{"order":3,"text":"Clock","type":"bool","value":true},
+        "hour":{"order":4,"text":"Hour","type":"slider","value":16.5,"condition":"clock.value == false"}}}})");
+    auto props = workshop::properties(dir);
+    CHECK(props.size() == 4);  // the scheme colour is Wallpaper Engine's own
+    CHECK(props[0].name == "fish" && props[0].text == "Koi");
+    CHECK(props[1].name == "weather" && props[1].options.size() == 2);
+    auto user = workshop::user_values(dir);
+    CHECK(!workshop::visible(props[3], props, user));  // hour: only with the clock off
+    CHECK(workshop::engine_overrides(dir).empty());
+
+    workshop::set_user_value(dir, "clock", false);
+    workshop::set_user_value(dir, "weather", "rain");
+    user = workshop::user_values(dir);
+    CHECK(workshop::visible(props[3], props, user));
+    auto overrides = nlohmann::json::parse(workshop::engine_overrides(dir));
+    CHECK(overrides["clock"] == 0);
+    CHECK(overrides["weather"] == 1);  // a word choice goes as its index
+
+    setenv("HOME", old_home.c_str(), 1);
+    if (old_config) setenv("XDG_CONFIG_HOME", saved_config.c_str(), 1);
+    else unsetenv("XDG_CONFIG_HOME");
+    proc::run({"rm", "-rf", home});
+}

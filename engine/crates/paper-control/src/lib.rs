@@ -18,6 +18,7 @@ pub use output_target::OutputTarget;
 pub use paper_command::{CommandClass, PaperCommand, PointerState, SceneCapture, classify_command};
 pub use protocol::{
     ApplyRequest, ApplyResponse, ApplyResult, Assignment, AssignmentStatus, AudioSetRequest,
+    PropertiesSetRequest, PropertiesSetResponse,
     AudioSetResponse, AudioSetResult, CapabilitiesRequest, CapabilitiesResponse,
     CapabilitiesResult, ControlCapabilities, DecodeCapabilities, FillMode, Layer,
     NativeSceneCapabilities, NdjsonError, PROTOCOL_NAME, PROTOCOL_VERSION, PauseRequest,

@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "services/workshop.hpp"
 #include "suite/overlay.hpp"
 
 namespace island {
@@ -187,6 +188,13 @@ private:
     void close_panel();
     void free_anim();
     void draw_panel(cairo_t* cr, float W, float H, float fade);
+    // a Wallpaper Engine item's own settings, editable in the panel
+    std::vector<workshop::Property> panel_props_;
+    nlohmann::json panel_values_;
+    uint64_t props_timer_ = 0;
+    float draw_properties(cairo_t* cr, const Rect& area, float alpha);  // returns the height used
+    float properties_height() const;
+    void set_property(const workshop::Property& p, const nlohmann::json& value);
     void panel_primary(int index);  // ✓ / ▶ / ⬇: whatever finishes it
     static constexpr float kPanelW = 360;
 

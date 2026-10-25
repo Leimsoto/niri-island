@@ -23,6 +23,7 @@
 #include "core/config.hpp"
 #include "core/loop.hpp"
 #include "core/proc.hpp"
+#include "services/engine.hpp"
 #include "services/images.hpp"
 #include "services/steam.hpp"
 #include "services/workshop.hpp"
@@ -472,6 +473,12 @@ void WallPicker::open_panel(int vis) {
     panel_index_ = index;
     free_anim();
     const Wallpaper& w = walls_[index];
+    panel_props_.clear();
+    panel_values_ = nlohmann::json::object();
+    if (steam_ && !w.remote && w.engine) {
+        panel_props_ = workshop::properties(w.path);
+        panel_values_ = workshop::user_values(w.path);
+    }
     // wallhaven: the full picture, for the panel, for trying and keeping
     if (w.remote && !steam_) {
         std::string full = wh_full_path(w), url = w.path;
@@ -544,7 +551,7 @@ void WallPicker::draw_panel(cairo_t* cr, float W, float H, float fade) {
     std::string title = steam_ ? w.name : (w.resolution.empty() ? w.name : w.resolution);
     Text tt{ui(15, "SemiBold"), p.text.with_alpha(a), Align::Left, kPanelW - 36, 2, false, true};
     float pic_h = std::round((kPanelW - 32) * 9 / 16), title_h = measure(title, tt).h;
-    float content = 16 + pic_h + 16 + title_h + 10 + 24 + 22 + 52 + 16;
+    float content = 16 + pic_h + 16 + title_h + 10 + 24 + 22 + properties_height() + 52 + 16;
     Rect box{W - kPanelW - 24 + (1 - pt) * 60, 128, kPanelW, std::min(content, H - 128 - 24)};
     (void)H;
     fill(cr, box, 22, p.island.with_alpha(0.92f * a));
@@ -596,6 +603,8 @@ void WallPicker::draw_panel(cairo_t* cr, float W, float H, float fade) {
         if (file_exists(wh_full_path(w))) chip("󰄬", "", p.accent);
     }
     if (w.mature) chip("󰒘", "", Color{0.92f, 0.26f, 0.26f, 1});
+    y += 24 + 14;
+    if (!panel_props_.empty()) draw_properties(cr, {box.x + 18, y, box.w - 36, properties_height()}, a);
 
     // what to do: the main action big, the rest round
     float by = box.bottom() - 16 - 52;
@@ -657,6 +666,89 @@ void WallPicker::draw_panel(cairo_t* cr, float W, float H, float fade) {
     fill(cr, xr, 14, Color{0, 0, 0, 0.45f * a});
     glyph(cr, xr.cx(), xr.cy(), "󰅖", 13, Color{1, 1, 1, 0.9f * a});
     ui_.add(ID("pn.close"), xr).click([this] { close_panel(); });
+}
+
+// ── an item's own settings ────────────────────────────────────────────────
+
+namespace {
+constexpr float kPropRow = 38;
+}
+
+float WallPicker::properties_height() const {
+    int rows = 0;
+    for (auto& p : panel_props_)
+        if (workshop::visible(p, panel_props_, panel_values_)) ++rows;
+    return rows ? rows * kPropRow + 4 : 0;
+}
+
+void WallPicker::set_property(const workshop::Property& p, const nlohmann::json& value) {
+    if (panel_index_ < 0 || panel_index_ >= static_cast<int>(walls_.size())) return;
+    std::string path = walls_[panel_index_].path;
+    panel_values_[p.name] = value;
+    workshop::set_user_value(path, p.name, value);
+    // on screen: the engine takes it (live where the scene allows), a moment
+    // after the last change so a slider does not reload it at every step
+    if (path != current_) return;
+    Loop::get().cancel(props_timer_);
+    props_timer_ = Loop::get().after(0.3, [this, path] {
+        props_timer_ = 0;
+        auto ok = std::make_shared<bool>(false);
+        std::string props = workshop::engine_overrides(path);
+        Loop::get().async([props, ok] { *ok = engine::set_properties(props); },
+                          [this, path, ok] {
+                              if (!*ok && on_apply) on_apply(path);  // not running it: apply it whole
+                          });
+    });
+    request();
+}
+
+float WallPicker::draw_properties(cairo_t* cr, const Rect& area, float a) {
+    const auto& p = T();
+    w::Ctx c{cr, ui_};
+    float y = area.y;
+    int n = 0;
+    for (auto& prop : panel_props_) {
+        if (!workshop::visible(prop, panel_props_, panel_values_)) continue;
+        uint64_t id = ID("pn.prop", n++);
+        nlohmann::json v = workshop::value_of(prop, panel_values_);
+        Text label{ui(12, "Medium"), p.text_dim.with_alpha(a), Align::Left, 130};
+        text(cr, area.x, y + kPropRow / 2 - 8, prop.text, label);
+        Rect ctl{area.x + 138, y + 6, area.w - 138, kPropRow - 12};
+        if (prop.type == "bool") {
+            bool on = v.is_boolean() ? v.get<bool>() : (v.is_number() && v.get<double>() != 0);
+            w::toggle(c, id, {ctl.right() - 44, ctl.cy() - 12, 44, 24}, on, [this, prop, on] { set_property(prop, !on); });
+        } else if (prop.type == "slider") {
+            double val = v.is_number() ? v.get<double>() : prop.min;
+            double span = std::max(1e-9, prop.max - prop.min);
+            bool whole = prop.step >= 1 || (prop.step == 0 && prop.max - prop.min > 10);
+            char buf[32];
+            snprintf(buf, sizeof(buf), whole ? "%.0f" : "%.1f", val);
+            w::slider(c, id, ctl, static_cast<float>((val - prop.min) / span), nullptr,
+                      [this, prop, span, whole](float f) {
+                          double x = prop.min + f * span;
+                          if (prop.step > 0) x = prop.min + std::round((x - prop.min) / prop.step) * prop.step;
+                          if (whole) x = std::round(x);
+                          set_property(prop, x);
+                      },
+                      {}, buf);
+        } else if (prop.type == "combo") {
+            size_t at = 0;
+            for (size_t i = 0; i < prop.options.size(); ++i)
+                if (prop.options[i].second == v) at = i;
+            std::string shown = prop.options[at].first.empty() ? (prop.options[at].second.is_string() ? prop.options[at].second.get<std::string>() : prop.options[at].second.dump()) : prop.options[at].first;
+            size_t count = prop.options.size();
+            w::pill(c, id, ctl, shown, nullptr, w::Style::Tonal, 12)
+                .click([this, prop, at, count] { set_property(prop, prop.options[(at + 1) % count].second); })
+                .right([this, prop, at, count] { set_property(prop, prop.options[(at + count - 1) % count].second); });
+        } else if (prop.type == "color" && v.is_string()) {
+            float r = 0, g = 0, b = 0;
+            sscanf(v.get<std::string>().c_str(), "%f %f %f", &r, &g, &b);
+            fill(cr, {ctl.right() - 44, ctl.cy() - 11, 44, 22}, 11, Color{r, g, b, a});
+            stroke(cr, {ctl.right() - 44, ctl.cy() - 11, 44, 22}, 11, p.text.with_alpha(0.2f * a));
+        }
+        y += kPropRow;
+    }
+    return y - area.y;
 }
 
 // ── trying it on the desktop ──────────────────────────────────────────────

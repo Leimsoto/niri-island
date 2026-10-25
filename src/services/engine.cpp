@@ -62,20 +62,29 @@ bool running() {
     return ok;
 }
 
-bool apply(const std::string& path, Kind kind, bool muted, std::string* error) {
+bool apply(const std::string& path, Kind kind, bool muted, std::string* error, const std::string& properties) {
     if (!installed()) {
         if (error) *error = "Falta niri-island-engine";
         return false;
     }
-    auto r = run({"apply", "*", path, "--kind", kind == Kind::Engine ? "we" : "video", "--mute", muted ? "true" : "false",
-                  "--replace-all"},
-                 30000);
+    std::vector<std::string> args = {"apply", "*", path, "--kind", kind == Kind::Engine ? "we" : "video",
+                                     "--mute", muted ? "true" : "false", "--replace-all"};
+    if (!properties.empty()) {
+        args.push_back("--properties");
+        args.push_back(properties);
+    }
+    auto r = run(args, 30000);
     if (!r.ok() && error) *error = last_line(r.out).empty() ? "El motor no pudo mostrar el fondo" : last_line(r.out);
     return r.ok();
 }
 
 void stop() {
     if (installed() && running()) run({"stop"}, 8000);
+}
+
+bool set_properties(const std::string& properties) {
+    if (!installed() || !running() || properties.empty()) return false;
+    return run({"properties", properties}, 8000).ok();
 }
 
 void set_paused(bool paused) {

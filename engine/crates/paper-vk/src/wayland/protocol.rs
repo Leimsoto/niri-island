@@ -533,6 +533,33 @@ impl Dispatch<ZwlrLayerShellV1, ()> for App {
     }
 }
 
+impl App {
+    // An input surface sized: a transparent 1×1 buffer stretched over it.
+    fn configure_input(&mut self, index: usize, width: u32, height: u32, qh: &QueueHandle<Self>) {
+        let (Some(shm), Some(viewporter)) = (self.shm.clone(), self.viewporter.clone()) else { return };
+        let Some(input) = self.input_surfaces.iter_mut().find(|i| i.index == index) else { return };
+        if input.buffer.is_none() {
+            // SAFETY: a fresh memfd, sized and closed here; the pool keeps its own reference
+            let fd = unsafe { libc::memfd_create(c"engine-input".as_ptr(), libc::MFD_CLOEXEC) };
+            if fd < 0 || unsafe { libc::ftruncate(fd, 4) } < 0 {
+                return;
+            }
+            let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+            let pool = shm.create_pool(borrowed, 4, qh, ());
+            input.buffer = Some(pool.create_buffer(0, 1, 1, 4, wl_shm::Format::Argb8888, qh, (usize::MAX, 0)));
+            pool.destroy();
+            unsafe { libc::close(fd) };
+        }
+        let viewport = input.viewport.get_or_insert_with(|| viewporter.get_viewport(&input.surface, qh, ()));
+        if width > 0 && height > 0 {
+            viewport.set_destination(width as i32, height as i32);
+        }
+        input.surface.attach(input.buffer.as_ref(), 0, 0);
+        input.surface.damage_buffer(0, 0, 1, 1);
+        input.surface.commit();
+    }
+}
+
 impl Dispatch<ZwlrLayerSurfaceV1, usize> for App {
     fn event(
         state: &mut Self,
@@ -540,8 +567,15 @@ impl Dispatch<ZwlrLayerSurfaceV1, usize> for App {
         event: zwlr_layer_surface_v1::Event,
         si: &usize,
         _: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
     ) {
+        if *si >= super::model::INPUT_SURFACE {
+            if let zwlr_layer_surface_v1::Event::Configure { serial, width, height } = event {
+                layer.ack_configure(serial);
+                state.configure_input(*si - super::model::INPUT_SURFACE, width, height, qh);
+            }
+            return;
+        }
         match event {
             zwlr_layer_surface_v1::Event::Configure { serial, width, height } => {
                 layer.ack_configure(serial);

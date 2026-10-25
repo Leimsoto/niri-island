@@ -127,7 +127,17 @@ impl PropertyBindings {
                 .cloned()
                 .unwrap_or_else(|| key.clone());
             let entry = values.entry(name).or_insert_with(|| json!({}));
-            entry["value"] = if entry["type"] == "bool" {
+            // a combo of words (weather: clear, rain…) takes its choice by index:
+            // properties are numbers on this side
+            let word = (entry["type"] == "combo" && numbers.len() == 1)
+                .then(|| entry["options"].as_array())
+                .flatten()
+                .filter(|options| options.iter().any(|o| o["value"].is_string() && o["value"].as_str().and_then(|v| v.parse::<f64>().ok()).is_none()))
+                .and_then(|options| options.get(numbers[0].max(0.0) as usize))
+                .map(|option| option["value"].clone());
+            entry["value"] = if let Some(word) = word {
+                word
+            } else if entry["type"] == "bool" {
                 Value::Bool(numbers.first().is_some_and(|number| *number != 0.0))
             } else if numbers.len() == 1 {
                 Value::from(numbers[0])

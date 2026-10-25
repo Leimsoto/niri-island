@@ -17,8 +17,12 @@ bool running();    // its server is up (showing something)
 enum class Kind { Video, Engine };  // a video file, a Wallpaper Engine folder
 
 // Shows `path` on every screen, replacing whatever it showed.
-bool apply(const std::string& path, Kind kind, bool muted, std::string* error = nullptr);
+// `properties`: a Wallpaper Engine item's values (JSON, see workshop::engine_overrides).
+bool apply(const std::string& path, Kind kind, bool muted, std::string* error = nullptr,
+           const std::string& properties = "");
 void stop();  // nothing shown any more; the server exits
+// New values for the shown Wallpaper Engine scene's settings: live when it can.
+bool set_properties(const std::string& properties);
 void set_paused(bool paused);
 void set_muted(bool muted);
 

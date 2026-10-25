@@ -25,6 +25,9 @@ pub(crate) fn run() -> Result<()> {
             mute: args.mute,
             volume: args.volume,
         })),
+        Command::Properties(args) => send(RequestParams::PropertiesSet(paper_control::PropertiesSetRequest {
+            properties: parse_properties(&args.properties)?,
+        })),
         Command::Status => send(RequestParams::Status(StatusRequest {})),
         Command::Outputs => {
             println!("{}", serde_json::to_string_pretty(&crate::outputs::query()?)?);

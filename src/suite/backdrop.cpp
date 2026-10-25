@@ -244,7 +244,8 @@ void Backdrop::set(const std::string& path) {
         bool muted = !item || !config().wallpaper_engine_audio;
         auto err = std::make_shared<std::string>();
         engine::Kind kind = item ? engine::Kind::Engine : engine::Kind::Video;
-        Loop::get().async([path, kind, muted, err] { engine::apply(path, kind, muted, err.get()); },
+        std::string props = item ? workshop::engine_overrides(path) : "";
+        Loop::get().async([path, kind, muted, err, props] { engine::apply(path, kind, muted, err.get(), props); },
                           [this, gen, path, err] {
                               if (!err->empty()) {
                                   if (gen == gen_ && on_error) on_error(*err);

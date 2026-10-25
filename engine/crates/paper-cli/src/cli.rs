@@ -25,6 +25,8 @@ pub(crate) enum Command {
     Resume,
     #[command(about = "Change wallpaper mute or volume on the named monitors")]
     Audio(AudioArgs),
+    #[command(about = "Give the running Wallpaper Engine scenes new property values (JSON object), live where they can")]
+    Properties(PropertiesArgs),
     #[command(about = "Show current wallpapers and available renderers as JSON")]
     Status,
     #[command(about = "List monitor names, resolutions and scale as JSON")]
@@ -124,6 +126,11 @@ pub(crate) struct AudioArgs {
     pub(crate) mute: Option<bool>,
     #[arg(long)]
     pub(crate) volume: Option<u32>,
+}
+
+#[derive(Args)]
+pub(crate) struct PropertiesArgs {
+    pub(crate) properties: String,
 }
 
 #[derive(Args)]
