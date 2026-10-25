@@ -98,6 +98,16 @@ después de cerrar (`release_timer_`).
 - **Workshop en línea** (`services/steam.*` + `engine/crates/island-steam`): ver el protocolo en
   [07 · El motor](07-motor.md#niri-island-steam). Suscribirse descarga con progreso; al terminar
   (`done`) se puede aplicar solo (`ws_apply_after_`). Desuscribirse borra también la carpeta.
+- **Cancelar una descarga**: con el puntero sobre la barra de progreso del panel aparece ✕; `ws_cancel` manda
+  `cancel` (el ayudante deja de seguirla y desuscribe) y, al llegar `unsubscribed`, la isla borra lo que hubiera
+  llegado en `<workshop>/<id>`. Los `progress`/`done` que aún vengan de ese id se ignoran (`ws_cancelled_`).
+- **Autor**: los resultados del Workshop traen la cuenta (`owner`) y el nombre (`author`); para las descargas,
+  `project.json` no lo dice, así que al abrir el panel se pide `details` de todas a la vez (una vez por visita a
+  Steam, sin aviso si Steam está cerrado: `ws_quiet_`). Mapas `ws_owner_of_` (id → cuenta) y `ws_names_`
+  (cuenta → nombre); el panel muestra «por …» bajo el título.
+- **Buscador**: el espacio escribe un espacio cuando ya hay texto; con el buscador vacío no hace nada en el
+  Workshop ni en wallhaven (antes aplicaba, es decir, descargaba, la primera tarjeta). En las descargas y las
+  carpetas, con el buscador vacío, sigue aplicando.
 
 ### Panel lateral y propiedades
 

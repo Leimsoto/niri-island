@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cmath>
 #include <dirent.h>
+#include <filesystem>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <sys/stat.h>
 #include <thread>
@@ -175,6 +176,7 @@ void WallPicker::set_steam(bool on) {
     ws_loading_ = false;
     if (on) {
         ws_browse_ = false;
+        ws_details_asked_ = false;
         ws_query_.clear();
         local_walls_ = std::move(walls_);
         walls_.clear();
@@ -247,6 +249,7 @@ bool WallPicker::ws_helper() {
         steam_proc_->on_event = [this](const json& ev) { ws_event(ev); };
         steam_proc_->on_exit = [this] {
             ws_loading_ = false;
+            ws_cancelled_.clear();
             for (auto& w : walls_) w.progress = -1;
             if (steam_ && ws_error_.empty() && exists()) ws_error_ = "closed";
             request();
@@ -313,6 +316,9 @@ void WallPicker::ws_event(const json& ev) {
             w.subscribed = it.value("subscribed", false);
             w.installed = it.value("installed", false);
             if (w.ws_id.empty()) continue;
+            std::string owner = it.value("owner", ""), author = it.value("author", "");
+            if (!owner.empty()) ws_owner_of_[w.ws_id] = owner;
+            if (!owner.empty() && !author.empty()) ws_names_[owner] = author;
             for (auto& d : dirs)  // on disk already: an ordinary item
                 if (w.installed && file_exists(d + "/" + w.ws_id + "/project.json")) {
                     w.remote = false;
@@ -324,6 +330,22 @@ void WallPicker::ws_event(const json& ev) {
             visible_.push_back(static_cast<int>(walls_.size()) - 1);
         }
         ws_thumbs(ws_gen_);
+    } else if ((kind == "progress" || kind == "done") && ws_cancelled_.count(id)) {
+        return;  // stopped: what was still on its way does not count
+    } else if (kind == "details" || kind == "author") {
+        // who made them: an account per item, a name per account (maybe later)
+        if (kind == "author") {
+            std::string owner = ev.value("owner", ""), name = ev.value("name", "");
+            if (!owner.empty() && !name.empty()) ws_names_[owner] = name;
+        } else if (ev.contains("items") && ev["items"].is_array()) {
+            for (const auto& it : ev["items"]) {
+                if (!it.is_object()) continue;
+                std::string iid = it.value("id", ""), owner = it.value("owner", ""), author = it.value("author", "");
+                if (iid.empty() || owner.empty()) continue;
+                ws_owner_of_[iid] = owner;
+                if (!author.empty()) ws_names_[owner] = author;
+            }
+        }
     } else if (kind == "progress") {
         float p = ev.value("progress", 0.0f);
         if (Wallpaper* w = find(walls_)) w->progress = p;
@@ -345,6 +367,19 @@ void WallPicker::ws_event(const json& ev) {
         }
         scan();  // the folders' list takes it in
     } else if (kind == "unsubscribed") {
+        if (ws_cancelled_.erase(id) && !id.empty() &&
+            id.find_first_not_of("0123456789") == std::string::npos) {
+            // a stopped download may have left part of it where the items live
+            std::vector<std::string> dirs = workshop::workshop_dirs();
+            Loop::get().async(
+                [dirs, id] {
+                    for (const auto& d : dirs) {
+                        std::error_code ec;
+                        std::filesystem::remove_all(d + "/" + id, ec);
+                    }
+                },
+                [] {});
+        }
         if (!ws_browse_) {
             for (size_t i = 0; i < walls_.size(); ++i)
                 if (walls_[i].ws_id == id) {
@@ -366,9 +401,10 @@ void WallPicker::ws_event(const json& ev) {
             ws_error_ = msg.find("sesión") != std::string::npos ? "signin" : "closed";
             ws_loading_ = false;
             // (the Workshop shows why; elsewhere, a word)
-            if (!ws_browse_ && on_toast) on_toast(ws_error_ == "signin" ? "Inicia sesión en Steam" : "Steam está cerrado");
+            if (!ws_browse_ && !ws_quiet_ && on_toast) on_toast(ws_error_ == "signin" ? "Inicia sesión en Steam" : "Steam está cerrado");
         } else {
             if (Wallpaper* w = find(walls_)) w->progress = -1;
+            ws_cancelled_.erase(id);
             if (id == ws_apply_after_) ws_apply_after_.clear();
             if (on_toast && !msg.empty()) on_toast(msg);
             ws_loading_ = false;
@@ -385,6 +421,8 @@ void WallPicker::ws_get(int index, bool apply_after) {
         request();
         return;
     }
+    ws_quiet_ = false;
+    ws_cancelled_.erase(w.ws_id);
     w.progress = 0;
     if (apply_after) ws_apply_after_ = w.ws_id;
     steam_proc_->subscribe(w.ws_id);
@@ -399,8 +437,57 @@ void WallPicker::ws_unsubscribe(int index) {
         request();
         return;
     }
+    ws_quiet_ = false;
     walls_[index].ws_id = id;
     steam_proc_->unsubscribe(id);
+}
+
+// Stop a download going. Steam is left subscribed by then, so the item goes
+// exactly as an unsubscribe would (whatever arrived of it, deleted).
+void WallPicker::ws_cancel(int index) {
+    if (index < 0 || index >= static_cast<int>(walls_.size())) return;
+    Wallpaper& w = walls_[index];
+    if (w.ws_id.empty() || w.progress < 0 || !steam_proc_ || !steam_proc_->running()) {
+        request();
+        return;
+    }
+    ws_quiet_ = false;
+    ws_cancelled_.insert(w.ws_id);
+    if (ws_apply_after_ == w.ws_id) ws_apply_after_.clear();
+    w.progress = -1;
+    w.subscribed = w.installed = false;
+    steam_proc_->cancel(w.ws_id);
+    if (on_toast) on_toast("Descarga cancelada");
+    request();
+}
+
+std::string WallPicker::ws_item_id(const Wallpaper& w) const {
+    std::string id = !w.ws_id.empty() ? w.ws_id : (w.engine ? base_name(w.path) : "");
+    return !id.empty() && id.find_first_not_of("0123456789") == std::string::npos ? id : "";
+}
+
+std::string WallPicker::ws_author(const Wallpaper& w) const {
+    auto o = ws_owner_of_.find(ws_item_id(w));
+    if (o == ws_owner_of_.end()) return "";
+    auto n = ws_names_.find(o->second);
+    return n == ws_names_.end() ? "" : n->second;
+}
+
+// The downloads come from disk, and project.json does not say who made them:
+// Steam does, once per visit, for all of them at once (one helper started).
+void WallPicker::ws_ask_authors() {
+    if (ws_details_asked_ || ws_browse_) return;
+    std::vector<std::string> ids;
+    for (const auto& w : walls_) {
+        std::string id = ws_item_id(w);
+        if (!id.empty() && !ws_owner_of_.count(id)) ids.push_back(id);
+    }
+    if (ids.empty()) return;
+    ws_details_asked_ = true;
+    bool was = steam_proc_ && steam_proc_->running();
+    if (!ws_helper()) return;
+    if (!was) ws_quiet_ = true;  // only for this: Steam closed is no news
+    steam_proc_->details(ids);
 }
 
 // The Workshop's previews, fetched to disk in parallel (the grid reads files).
@@ -438,7 +525,17 @@ void WallPicker::ws_type_key(xkb_keysym_t sym, const std::string& utf8, bool& us
     } else if (sym == XKB_KEY_Escape && !ws_query_.empty()) {
         ws_query_.clear();
         used = true;
-    } else if (!utf8.empty() && static_cast<unsigned char>(utf8[0]) >= 0x20 && sym != XKB_KEY_space) {
+    } else if (sym == XKB_KEY_space) {
+        // a word break while typing; with nothing typed in the Workshop, nothing
+        // (not "apply": that would download the first card)
+        if (!ws_query_.empty()) ws_query_ += ' ';
+        else if (!ws_browse_) return;  // the downloads: space applies, as in the folders
+        else {
+            used = true;
+            return;
+        }
+        used = true;
+    } else if (!utf8.empty() && static_cast<unsigned char>(utf8[0]) >= 0x20) {
         ws_query_ += utf8;
         used = true;
     }
@@ -479,6 +576,7 @@ void WallPicker::open_panel(int vis) {
         panel_props_ = workshop::properties(w.path);
         panel_values_ = workshop::user_values(w.path);
     }
+    if (steam_ && !ws_item_id(w).empty() && !ws_owner_of_.count(ws_item_id(w))) ws_ask_authors();
     // wallhaven: the full picture, for the panel, for trying and keeping
     if (w.remote && !steam_) {
         std::string full = wh_full_path(w), url = w.path;
@@ -551,7 +649,9 @@ void WallPicker::draw_panel(cairo_t* cr, float W, float H, float fade) {
     std::string title = steam_ ? w.name : (w.resolution.empty() ? w.name : w.resolution);
     Text tt{ui(15, "SemiBold"), p.text.with_alpha(a), Align::Left, kPanelW - 36, 2, false, true};
     float pic_h = std::round((kPanelW - 32) * 9 / 16), title_h = measure(title, tt).h;
-    float content = 16 + pic_h + 16 + title_h + 10 + 24 + 22 + properties_height() + 52 + 16;
+    std::string author = steam_ ? ws_author(w) : "";
+    float author_h = author.empty() ? 0 : 22;
+    float content = 16 + pic_h + 16 + title_h + author_h + 10 + 24 + 22 + properties_height() + 52 + 16;
     Rect box{W - kPanelW - 24 + (1 - pt) * 60, 128, kPanelW, std::min(content, H - 128 - 24)};
     (void)H;
     fill(cr, box, 22, p.island.with_alpha(0.92f * a));
@@ -583,7 +683,14 @@ void WallPicker::draw_panel(cairo_t* cr, float W, float H, float fade) {
     // what it is: a title and a few chips
     float y = pic.bottom() + 16;
     text(cr, box.x + 18, y, title, tt);
-    y += title_h + 10;
+    y += title_h;
+    if (!author.empty()) {  // who made it
+        Text at{ui(12, "Medium"), p.text_dim.with_alpha(a), Align::Left, kPanelW - 60, 1, false, true};
+        glyph(cr, box.x + 25, y + 13, "󰀄", 12, p.text_dim.with_alpha(a));
+        text(cr, box.x + 38, y + 5, "por " + author, at);
+        y += author_h;
+    }
+    y += 10;
     float cx = box.x + 18;
     auto chip = [&](const char* g, const std::string& label, Color col) {
         Text tt{ui(11.5f, "Medium"), col.with_alpha(0.9f * a)};
@@ -616,14 +723,22 @@ void WallPicker::draw_panel(cairo_t* cr, float W, float H, float fade) {
     Rect main{box.x + 16, by, box.w - 32 - nsec * 58, 52};
     const char* mg = steam_ ? (here ? "󰐊" : "󰇚") : "󰄬";
     if (w.progress >= 0) {
+        // downloading: the bar fills; under the pointer it offers to stop
+        uint64_t cid = ID("pn.cancel");
+        float hv = ui_.hover(cid);
+        Color red{0.92f, 0.36f, 0.36f, 1};
         fill(cr, main, 26, p.accent.with_alpha(0.25f * a));
         Rect bar{main.x, main.y, main.w * std::max(0.04f, w.progress), main.h};
         cairo_save(cr);
         rrect(cr, main, 26);
         cairo_clip(cr);
         fill(cr, bar, 0, p.accent.with_alpha(0.9f * a));
+        fill(cr, main, 0, red.with_alpha(0.85f * hv * a));
         cairo_restore(cr);
-        glyph(cr, main.cx(), main.cy(), "󰇚", 20, p.on_accent.with_alpha(a));
+        glyph(cr, main.cx(), main.cy(), "󰇚", 20, p.on_accent.with_alpha((1 - hv) * a));
+        glyph(cr, main.cx(), main.cy(), "󰅖", 20, Color{1, 1, 1, hv * a});
+        int index = panel_index_;
+        ui_.add(cid, main).click([this, index] { ws_cancel(index); });
     } else {
         uint64_t mid = ID("pn.main");
         float hv = ui_.hover(mid);

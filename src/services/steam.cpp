@@ -62,6 +62,10 @@ void Steam::subscribe(const std::string& id) { send({{"op", "subscribe"}, {"id",
 
 void Steam::unsubscribe(const std::string& id) { send({{"op", "unsubscribe"}, {"id", id}}); }
 
+void Steam::cancel(const std::string& id) { send({{"op", "cancel"}, {"id", id}}); }
+
+void Steam::details(const std::vector<std::string>& ids) { send({{"op", "details"}, {"ids", ids}}); }
+
 void Steam::readable() {
     char chunk[8192];
     for (;;) {

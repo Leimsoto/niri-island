@@ -894,7 +894,12 @@ void WallPicker::key_slices(xkb_keysym_t sym, const std::string& utf8) {
         } else if (sym == XKB_KEY_Escape && !wh_query_.empty()) {
             wh_query_.clear();
             edit = true;
-        } else if (!utf8.empty() && static_cast<unsigned char>(utf8[0]) >= 0x20 && sym != XKB_KEY_space) {
+        } else if (sym == XKB_KEY_space) {
+            // a word break while typing; never "apply" (that downloads the first card)
+            if (wh_query_.empty()) return;
+            wh_query_ += ' ';
+            edit = true;
+        } else if (!utf8.empty() && static_cast<unsigned char>(utf8[0]) >= 0x20) {
             wh_query_ += utf8;
             edit = true;
         }

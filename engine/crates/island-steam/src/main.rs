@@ -9,19 +9,26 @@
 //!   {"op":"search","query":"…","sort":0..4,"page":1,"mature":false}
 //!   {"op":"subscribe","id":"123"}      subscribes, downloads, reports progress
 //!   {"op":"unsubscribe","id":"123"}    unsubscribes and deletes the download
+//!   {"op":"cancel","id":"123"}         stops a download going, then as unsubscribe
+//!   {"op":"details","ids":["123",…]}   who made each item (for the downloads)
 //!   {"op":"state"}                      subscribed ids
-//! Events: {"ev":"ready"|"results"|"progress"|"done"|"unsubscribed"|"state"|"error", …}
+//! Events: {"ev":"ready"|"results"|"progress"|"done"|"unsubscribed"|"details"|"author"|"state"|"error", …}
+//!
+//! Items carry their author's account ("owner") and name ("author"). Steam may
+//! not know a name yet: it is asked for, and comes later as
+//! {"ev":"author","owner":"…","name":"…"}.
 //!
 //! Search and download follow skwd-steam (skwd-deck, MIT).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use steamworks::{
-    AppIDs, AppId, Client, ItemState, PublishedFileId, UGCQueryType, UGCStatisticType, UGCType,
+    AppIDs, AppId, Client, ItemState, PersonaStateChange, PublishedFileId, SteamId, UGCQueryType,
+    UGCStatisticType, UGCType,
 };
 
 const APP_ID: u32 = 431_960;
@@ -68,6 +75,61 @@ enum Reply {
     Results(String, Result<Vec<Value>, String>),
     Subscribed(String, Result<(), String>),
     Unsubscribed(String, String, Result<(), String>),
+    Details(Result<Vec<Value>, String>),
+    Persona(u64),
+}
+
+/// What the main loop keeps between requests.
+struct State {
+    downloads: HashMap<String, Download>,
+    cancelled: HashSet<String>,  // downloads stopped: their subscription is going
+    names_due: HashSet<u64>,     // authors whose name Steam is fetching
+}
+
+// The author's name if Steam has it; else it is asked for (an "author" event
+// follows) and the name stays empty.
+fn fill_author(client: &Client, item: &mut Value, due: &mut HashSet<u64>) {
+    let Some(owner) = item["owner"].as_str().and_then(|o| o.parse::<u64>().ok()) else { return };
+    let id = SteamId::from_raw(owner);
+    if client.friends().request_user_information(id, true) {
+        due.insert(owner);
+    } else {
+        item["author"] = Value::String(client.friends().get_friend(id).name());
+    }
+}
+
+// Who made these items: details queries, 50 at a time (Steam's page size).
+fn details(client: &Client, request: &Value, replies: &mpsc::Sender<Reply>) {
+    let ids: Vec<PublishedFileId> = request["ids"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str()?.parse::<u64>().ok()).map(PublishedFileId).collect())
+        .unwrap_or_default();
+    for chunk in ids.chunks(50) {
+        let handle = match client.ugc().query_items(chunk.to_vec()) {
+            Ok(handle) => handle.set_return_long_description(false).set_return_metadata(false),
+            Err(e) => {
+                let _ = replies.send(Reply::Details(Err(format!("{e:?}"))));
+                continue;
+            }
+        };
+        let tx = replies.clone();
+        handle.fetch(move |result| {
+            let mapped = result.map_err(|e| format!("{e:?}")).map(|results| {
+                results
+                    .iter()
+                    .flatten()
+                    .map(|item| {
+                        json!({
+                            "id": item.published_file_id.0.to_string(),
+                            "owner": item.owner.raw().to_string(),
+                            "author": "",
+                        })
+                    })
+                    .collect()
+            });
+            let _ = tx.send(Reply::Details(mapped));
+        });
+    }
 }
 
 struct Download {
@@ -133,6 +195,8 @@ fn search(client: &Client, request: &Value, tag: String, replies: mpsc::Sender<R
                     "mature": mature(&item.tags),
                     "subscribed": state.contains(ItemState::SUBSCRIBED),
                     "installed": state.contains(ItemState::INSTALLED),
+                    "owner": item.owner.raw().to_string(),
+                    "author": "",
                 }));
             }
             out
@@ -170,32 +234,46 @@ fn main() {
         }
     });
     let (replies_tx, replies) = mpsc::channel::<Reply>();
-    let mut downloads: HashMap<String, Download> = HashMap::new();
+    let mut st = State { downloads: HashMap::new(), cancelled: HashSet::new(), names_due: HashSet::new() };
     let mut last_progress = Instant::now();
+    // names Steam fetched for us
+    let persona_tx = replies_tx.clone();
+    let _persona = client.register_callback(move |p: PersonaStateChange| {
+        let _ = persona_tx.send(Reply::Persona(p.steam_id.raw()));
+    });
 
     loop {
         client.run_callbacks();
         loop {
             match lines.try_recv() {
-                Ok(line) => handle(&client, &line, &replies_tx),
+                Ok(line) => handle(&client, &line, &replies_tx, &mut st),
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => return,  // the picker is gone
             }
         }
         while let Ok(reply) = replies.try_recv() {
             match reply {
-                Reply::Results(tag, Ok(items)) => emit(&json!({"ev": "results", "tag": tag, "items": items})),
+                Reply::Results(tag, Ok(mut items)) => {
+                    for item in &mut items {
+                        fill_author(&client, item, &mut st.names_due);
+                    }
+                    emit(&json!({"ev": "results", "tag": tag, "items": items}));
+                }
                 Reply::Results(tag, Err(e)) => error(&tag, format!("búsqueda: {e}")),
                 Reply::Subscribed(id, Ok(())) => {
                     let Ok(raw) = id.parse::<u64>() else { continue };
+                    if st.cancelled.contains(&id) {
+                        continue;  // stopped before it began: the unsubscribe is queued
+                    }
                     if client.ugc().download_item(PublishedFileId(raw), true) {
-                        downloads.insert(id, Download { started: Instant::now(), idle_since: None, last: (0, 0) });
+                        st.downloads.insert(id, Download { started: Instant::now(), idle_since: None, last: (0, 0) });
                     } else {
                         error(&id, "Steam rechazó la descarga");
                     }
                 }
                 Reply::Subscribed(id, Err(e)) => error(&id, format!("suscripción: {e}")),
                 Reply::Unsubscribed(id, folder, Ok(())) => {
+                    let cancelled = st.cancelled.remove(&id);
                     // Steam leaves the files behind for a while: they go now
                     let path = std::path::Path::new(&folder);
                     if path.parent().and_then(|p| p.file_name()).is_some_and(|n| n == "431960")
@@ -203,15 +281,31 @@ fn main() {
                     {
                         let _ = std::fs::remove_dir_all(path);
                     }
-                    emit(&json!({"ev": "unsubscribed", "id": id}));
+                    emit(&json!({"ev": "unsubscribed", "id": id, "cancelled": cancelled}));
                 }
-                Reply::Unsubscribed(id, _, Err(e)) => error(&id, format!("desuscripción: {e}")),
+                Reply::Unsubscribed(id, _, Err(e)) => {
+                    st.cancelled.remove(&id);
+                    error(&id, format!("desuscripción: {e}"));
+                }
+                Reply::Details(Ok(mut items)) => {
+                    for item in &mut items {
+                        fill_author(&client, item, &mut st.names_due);
+                    }
+                    emit(&json!({"ev": "details", "items": items}));
+                }
+                Reply::Details(Err(e)) => eprintln!("details: {e}"),  // the panel just shows no author
+                Reply::Persona(owner) => {
+                    if st.names_due.remove(&owner) {
+                        let name = client.friends().get_friend(SteamId::from_raw(owner)).name();
+                        emit(&json!({"ev": "author", "owner": owner.to_string(), "name": name}));
+                    }
+                }
             }
         }
         // downloads: progress a few times a second, done when installed
-        if !downloads.is_empty() && last_progress.elapsed() > Duration::from_millis(250) {
+        if !st.downloads.is_empty() && last_progress.elapsed() > Duration::from_millis(250) {
             last_progress = Instant::now();
-            downloads.retain(|id, d| {
+            st.downloads.retain(|id, d| {
                 let item = PublishedFileId(id.parse().unwrap_or(0));
                 let state = client.ugc().item_state(item);
                 let (current, total) = client.ugc().item_download_info(item).unwrap_or((0, 0));
@@ -249,7 +343,7 @@ fn main() {
     }
 }
 
-fn handle(client: &Client, line: &str, replies: &mpsc::Sender<Reply>) {
+fn handle(client: &Client, line: &str, replies: &mpsc::Sender<Reply>, st: &mut State) {
     let Ok(request) = serde_json::from_str::<Value>(line) else { return };
     let id = request["id"].as_str().unwrap_or("").to_string();
     match request["op"].as_str().unwrap_or("") {
@@ -262,8 +356,14 @@ fn handle(client: &Client, line: &str, replies: &mpsc::Sender<Reply>) {
                 let _ = tx.send(Reply::Subscribed(tag, r.map_err(|e| format!("{e:?}"))));
             });
         }
-        "unsubscribe" => {
+        "details" => details(client, &request, replies),
+        "unsubscribe" | "cancel" => {
             let Ok(raw) = id.parse::<u64>() else { return error(&id, "id no válido") };
+            if request["op"] == "cancel" {
+                // no more progress for it; Steam drops the download with the subscription
+                st.downloads.remove(&id);
+                st.cancelled.insert(id.clone());
+            }
             let folder = client.ugc().item_install_info(PublishedFileId(raw)).map(|i| i.folder).unwrap_or_default();
             let tx = replies.clone();
             let tag = id.clone();

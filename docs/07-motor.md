@@ -289,12 +289,16 @@ necesita **Steam abierto** y la cuenta con Wallpaper Engine. Protocolo por líne
 → {"op":"search","query":"…","sort":0..4,"page":1,"mature":false,"tag":"…"}
 → {"op":"subscribe","id":"123"}        suscribe, Steam descarga, informa del progreso
 → {"op":"unsubscribe","id":"123"}      desuscribe y borra la carpeta
+→ {"op":"cancel","id":"123"}           para una descarga en curso y desuscribe (como unsubscribe)
+→ {"op":"details","ids":["123",…]}     autor de cada elemento (para las descargas), de 50 en 50
 → {"op":"state"}                        ids suscritos
 ← {"ev":"ready","account":"…"}
-← {"ev":"results","tag":"…","items":[{id,title,preview,size,subs,score,type,mature,subscribed,installed}]}
+← {"ev":"results","tag":"…","items":[{id,title,preview,size,subs,score,type,mature,subscribed,installed,owner,author}]}
+← {"ev":"details","items":[{id,owner,author}]}
+← {"ev":"author","owner":"…","name":"…"}   nombre que Steam aún no tenía (llega tras PersonaStateChange)
 ← {"ev":"progress","id":"…","progress":N,"total":N}
 ← {"ev":"done","id":"…","folder":"…"}
-← {"ev":"unsubscribed","id":"…"} · {"ev":"state","subscribed":[…]} · {"ev":"error","id":"…","message":"…"}
+← {"ev":"unsubscribed","id":"…","cancelled":bool} · {"ev":"state","subscribed":[…]} · {"ev":"error","id":"…","message":"…"}
 ```
 
 `sort`: 1 más nuevos, 2 votos, 3 suscriptores; cualquier otro valor, tendencia. `type` sale de las etiquetas

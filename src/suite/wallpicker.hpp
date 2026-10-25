@@ -5,6 +5,7 @@
 #include <nlohmann/json_fwd.hpp>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "services/workshop.hpp"
@@ -163,6 +164,15 @@ private:
     void ws_event(const nlohmann::json& ev);
     void ws_get(int index, bool apply_after);
     void ws_unsubscribe(int index);
+    void ws_cancel(int index);    // a download going: stop it and unsubscribe
+    std::unordered_set<std::string> ws_cancelled_;  // stopped downloads, until Steam says unsubscribed
+    bool ws_quiet_ = false;       // the helper runs for authors only: no toast if Steam is closed
+    // who made each item: item id → author's account → name (kept while the picker lives)
+    std::unordered_map<std::string, std::string> ws_owner_of_, ws_names_;
+    bool ws_details_asked_ = false;  // the downloads' authors, asked once per visit to Steam
+    std::string ws_item_id(const Wallpaper& w) const;  // its Workshop id ("" when it has none)
+    std::string ws_author(const Wallpaper& w) const;   // "" while unknown
+    void ws_ask_authors();
     void ws_thumbs(int gen);
     void ws_type_key(xkb_keysym_t sym, const std::string& utf8, bool& used);
     // wallhaven and the Workshop show as a grid; Steam's downloads, like the

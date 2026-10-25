@@ -3,6 +3,7 @@
 #include <functional>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <vector>
 
 #include "core/proc.hpp"
 
@@ -22,8 +23,10 @@ public:
     void search(const std::string& query, int sort, int page, bool mature, const std::string& tag);
     void subscribe(const std::string& id);    // and download: progress, then done
     void unsubscribe(const std::string& id);  // and delete the download
+    void cancel(const std::string& id);       // a download going: stop it, and unsubscribe
+    void details(const std::vector<std::string>& ids);  // who made them: details, then author events
 
-    // {"ev": ready | results | progress | done | unsubscribed | state | error, …}
+    // {"ev": ready | results | progress | done | unsubscribed | details | author | state | error, …}
     std::function<void(const nlohmann::json&)> on_event;
     std::function<void()> on_exit;  // it went (Steam closed, crashed, or stopped)
 
