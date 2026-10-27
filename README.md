@@ -110,6 +110,42 @@ temporizador y cronómetro con vueltas, **notificaciones** (historial y No moles
   Sistema: espera, bloquear también tras un tiempo, cantidad y velocidad de las burbujas, y probarlo.
 - **Pantalla de bloqueo** propia sobre `ext-session-lock`: fondo difuminado, fecha, reloj grande, avatar
   (`~/.face`) y contraseña comprobada con PAM. Si la isla se cerrara, la sesión sigue bloqueada.
+- **Modo Gaming Pro** (`niri-island gaming [on|off|toggle|status]`, botón `󰊴` en el Centro de Control, acción en el
+  lanzador y sección en Ajustes → Sistema): un modo de rendimiento nativo que actúa sobre el compositor, la shell, el
+  motor de fondos y el kernel, con **restauración exacta** del estado previo al desactivarlo:
+  - **Optimizaciones universales (cualquier equipo con niri)**:
+    - *Compositor cero-latencia*: conmuta `~/.config/niri/cfg/mode.kdl` a `gaming-mode.kdl` (sin desenfoque, sin
+      shaders GLSL ni sombras), retira las regiones `ext-background-effect-v1` de la barra e isla y recarga niri por IPC.
+    - *Suspensión total del fondo animado*: pausa `niri-island-engine-vk`, `WebWall` y `mpvpaper` y silencia su audio
+      incluso si el juego corre en ventana flotante.
+    - *Shell ultra-ligera*: detiene `cava` y la subsuperficie de espectro a 30 fps, desactiva sombras Cairo, cristal y
+      animaciones de muelles (`Spring::speed = 0`), e inhibe el protector de pantalla de burbujas y el bloqueo por
+      inactividad (para sesiones con mando/gamepad).
+    - *Prioridad de procesos y energía*: activa el perfil `performance` por D-Bus (`power-profiles-daemon`), activa
+      `No molestar (Total)`, eleva la prioridad I/O NVMe (`ioprio` Best-Effort nivel `0`) de los procesos del juego y
+      los registra en `com.feralinteractive.GameMode` (`gamemoded`).
+    - *Detección interactiva opcional* (`"gaming_detect": false` por defecto en Ajustes → Sistema): al abrir un juego
+      (Steam, Proton, Wine, Gamescope, Lutris, Heroic, PrismLauncher o emuladores), pregunta en la isla si deseas
+      activar el Modo Gaming Pro (`[ Activar ]` / `[ Ignorar ]`).
+  - **Filtro adaptativo de hardware y kernel** (`src/views/control.cpp` + `scripts/setup-gaming-kernel.sh`):
+    las optimizaciones de bajo nivel comprueban dinámicamente qué subsistemas existen en la máquina anfitriona y **solo
+    se activan si el hardware o kernel compatible está presente** (omitiéndose de forma segura en otros equipos):
+    - **Arquitecturas híbridas Intel (12.ª Gen Alder Lake-P y posteriores — 4 P-Cores + 4 E-Cores)**: detecta la
+      asimetría de frecuencias en `cpufreq/cpuinfo_max_freq`, mueve todos los hilos de `niri-island` a los **E-Cores**
+      y fija los procesos/hilos del juego en los **P-Cores** mediante `sched_setaffinity`. En CPUs homogéneas no
+      restringe núcleos.
+    - **Driver `intel_pstate` con HWP**: activa `hwp_dynamic_boost=1` para respuesta inmediata tras esperas de I/O o GPU.
+    - **Gráficos integrados Intel UHD / Iris Xe (`i915` / `xe`, vendor `0x8086`)**: eleva la frecuencia mínima
+      `gt_min_freq_mhz` al piso eficiente `gt_RP1_freq_mhz` (ej. 300 MHz en Alder Lake GT1) para eliminar micro-tirones
+      por caída de reloj entre fotogramas, restaurando `gt_RPn_freq_mhz` al salir.
+    - **Firmware ACPI (`platform_profile`, ej. Lenovo IdeaPad `ideapad_acpi`)**: desbloquea los límites de potencia RAPL
+      (PL1/PL2) y curva térmica al conmutar a `performance`.
+    - **Kernel Linux XanMod (`x64v3`, `MGLRU`, `PREEMPT_DYNAMIC`)**: protege el working-set de texturas en RAM con
+      `lru_gen/min_ttl_ms=1000`, desactiva la compactación proactiva en segundo plano (`vm.compaction_proactiveness=0`,
+      `vm.watermark_boost_factor=0`), pasa `Transparent HugePages` a `madvise`, desactiva `sched_autogroup_enabled` y
+      conmuta la preempción dinámica a `full`.
+    - Para habilitar el helper Polkit sin contraseña y las reglas de `gamemode` una sola vez:
+      `sudo ./scripts/setup-gaming-kernel.sh`.
 
 ## Compilar
 
@@ -158,6 +194,7 @@ Mod+W       { spawn-sh "niri-island wallpapers"; }
 Mod+L       { spawn-sh "niri-island lock"; }
 Mod+Shift+E { spawn-sh "niri-island session"; }
 Mod+S       { spawn-sh "niri-island capture"; }          # congela la pantalla y abre la burbuja
+Mod+G       { spawn-sh "niri-island gaming toggle"; }    # Modo Gaming Pro
 Print       { spawn-sh "niri-island screenshot region"; }
 Mod+Print   { spawn-sh "niri-island capture record"; }
 XF86MonBrightnessUp   { spawn-sh "niri-island brightness-up"; }
@@ -177,7 +214,7 @@ suite     wallpapers [wallhaven|engine] | wallpaper [current|next|prev|set <ruta
           screenshot [region|screen|window] | record [...] | screensaver [stop] | lock [--preview <s>] | lock-state
 media     play-pause next prev
 niveles   volume-up volume-down volume <n> mute mic-mute brightness-up brightness-down
-toggles   toggle-wifi toggle-bluetooth dnd [off|discreet|total|cycle] toggle-airplane power-profile [nombre]
+toggles   gaming [on|off|toggle|status] toggle-wifi toggle-bluetooth dnd [off|discreet|total|cycle] toggle-airplane power-profile [nombre]
 otros     notify <app> <resumen> <cuerpo> notifications-clear battery tray-list reload status
 ```
 

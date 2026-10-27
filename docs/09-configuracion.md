@@ -87,6 +87,7 @@ al final de la lista guardada, para que aparezcan en el editor.
 | `screensaver_lock_minutes` | `0` | 0 = no bloquear |
 | `screensaver_bubbles` | `1` | 0 pocas, 1 normal, 2 muchas |
 | `screensaver_speed` | `1.0` | 0,5 … 2 |
+| `gaming_detect` | `false` | detectar juegos abiertos (Steam, Proton, Wine, Lutris, Heroic…) y preguntar en la isla si activar Modo Gaming Pro |
 
 ### `suite`
 

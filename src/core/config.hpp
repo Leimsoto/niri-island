@@ -82,6 +82,7 @@ struct Config {
     int screensaver_lock_minutes = 0;        // idle this long: lock too (0 = never)
     int screensaver_bubbles = 1;             // 0 few, 1 normal, 2 many
     float screensaver_speed = 1.0f;          // 0.5 .. 2            // video wallpapers pause while a window covers the screen
+    bool gaming_detect = false;              // detect running games and ask on the island before enabling Gaming Mode
     std::string wallpaper_picker_style = "slices";   // slices (carousel, like skwd-wall) | grid (honeycomb)
 
     // Suite

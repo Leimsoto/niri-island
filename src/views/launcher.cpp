@@ -78,6 +78,8 @@ void App::refresh_launcher() {
          [this] { notifs_.set_dnd(!notifs_.dnd()); }, true},
         {"󰀝", airplane() ? "Desactivar modo avión" : "Activar modo avión", "avion airplane",
          [this] { set_airplane(!airplane()); }, true},
+        {"󰊴", gaming_mode_ ? "Desactivar Modo Gaming" : "Activar Modo Gaming", "gaming juego modo pro rendimiento fps boost",
+         [this] { set_gaming_mode(!gaming_mode_); }, true},
         {"󰖔", "Luz nocturna", "luz nocturna night light", [] { proc::spawn_shell(config().cmd_night_light); }, true},
         {"󰸉", "Siguiente fondo", "fondo wallpaper siguiente", [this] { wallpaper_next(); }, true},
         {"󰋩", "Elegir fondo", "fondo wallpaper selector picker", [this] { open_wallpaper_picker(); }, true},

@@ -510,6 +510,13 @@ private:
     void open_picker(int task_id);
     void run_session(const std::string& action);
     void set_airplane(bool on);
+    bool gaming_mode_ = false;
+    std::string gaming_prev_profile_;
+    int gaming_prev_dnd_ = 0;
+    std::set<uint64_t> gaming_prompted_wins_;
+    std::set<int> gaming_boosted_pids_;
+    void set_gaming_mode(bool on);
+    void check_gaming_windows();
     void open_wallpaper_picker();
     // `counted`: the capture already went through the limit (from the bubble).
     void take_screenshot(int mode, int delay, uint64_t window_id = 0, bool edit = true, bool counted = false);

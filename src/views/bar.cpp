@@ -37,7 +37,7 @@ Rect App::cap_geom(float x, float w) const {
 
 Color App::glass_body() const {
     const auto& p = T();
-    if (!config().glass) return p.island;
+    if (!config().glass || gaming_mode_) return p.island;
     // Plain transparency; blur and the rest are niri's business.
     return p.island.with_alpha(config().island_opacity);
 }
@@ -70,7 +70,7 @@ void App::island_outline(cairo_t* cr, const Rect& r, float radius, bool docked) 
 
 void App::island_shadow(cairo_t* cr, const Rect& r, float radius, bool docked, float strength) {
     const auto& cfg = config();
-    if (!cfg.shadows || cfg.shadow_opacity <= 0.005f) return;
+    if (gaming_mode_ || !cfg.shadows || cfg.shadow_opacity <= 0.005f) return;
     float alpha = cfg.shadow_opacity * strength;
     // Softer under a see-through body (a dark halo round glass looks odd).
     if (cfg.glass) alpha *= 0.35f + 0.65f * cfg.island_opacity;
@@ -541,10 +541,11 @@ void App::paint_edge(cairo_t* cr, Ui& u, float w, float h, bool left, std::vecto
 
 // niri's own outer gap ("gaps N" in its layout), which it adds below any
 // reserved zone. Read from its config so the island's gap means what it says.
-static int niri_gaps() {
-    std::vector<std::string> files = {home_dir() + "/.config/niri/config.kdl"};
+static int niri_gaps(bool gaming_mode) {
+    std::vector<std::string> files;
+    if (gaming_mode) files.push_back(home_dir() + "/.config/niri/cfg/gaming-mode.kdl");
+    files.push_back(home_dir() + "/.config/niri/config.kdl");
     for (const char* f : {"layout.kdl", "cfg/layout.kdl"}) files.push_back(home_dir() + "/.config/niri/" + f);
-    files.push_back(home_dir() + "/.config/niri/cfg/layout.kdl");
     for (auto& f : files) {
         std::string text;
         if (!read_file(f, text)) continue;
@@ -560,7 +561,7 @@ static int niri_gaps() {
 
 // The island's own niri rules (xray for the blur behind it), in a file niri
 // includes. Written only when it changes: each write makes niri reload.
-static void write_niri_rules() {
+static void write_niri_rules(bool gaming_mode) {
     std::string path = home_dir() + "/.config/niri/cfg/niri-island.kdl";
     std::string body = "// Generado por niri-island. Se reescribe solo.\n"
         // The wallpaper, still or animated (our engine, web, mpvpaper), is one backdrop behind
@@ -572,7 +573,7 @@ static void write_niri_rules() {
         "    match namespace=\"^niri-island-web$\"\n"
         "    place-within-backdrop true\n"
         "}\n";
-    if (config().compositor_blur) {
+    if (config().compositor_blur && !gaming_mode) {
         // Only the island and its strips: a rule on every niri-island-* surface
         // blurred the full-screen settings window too, until it was destroyed.
         body +=
@@ -595,6 +596,7 @@ static void write_niri_rules() {
 void App::apply_layout() {
     bool spread = bar_layout() == "spread";
     for (EdgeBar* b : {&bar_left_, &bar_right_}) {
+        b->blur_off = gaming_mode_;
         if (spread) {
             b->open();
             b->restyle();  // margins follow the style (a reused surface kept the old ones)
@@ -603,12 +605,12 @@ void App::apply_layout() {
         }
     }
     layout_key_ = config().island_style;
-    write_niri_rules();
+    write_niri_rules(gaming_mode_);
     if (!island_) return;
     island_->set_margin(attached() ? 0 : config().margin_top);
     // Windows start at margin + zone + niri's gap (niri counts the margin for
     // a surface anchored to three edges); the island ends at margin + its height.
-    int zone = std::max(1, config().bar_height + config().window_gap - niri_gaps());
+    int zone = std::max(1, config().bar_height + config().window_gap - niri_gaps(gaming_mode_));
     island_->set_exclusive_zone(config().reserve_space ? zone : 0);
     request();
 }

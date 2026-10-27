@@ -42,7 +42,7 @@ void EdgeBar::draw(cairo_t* cr, float w, float h, float) {
         surf_->set_input_rects(input);
         input_ = input;
         std::vector<LayerSurface::BlurShape> blur;
-        if (config().glass && config().compositor_blur && wl_.can_blur())
+        if (!blur_off && config().glass && config().compositor_blur && wl_.can_blur())
             for (auto& r : input) blur.push_back({r, r.h / 2, config().island_style == "attached" && config().dock_sides});
         surf_->set_blur(blur);
     }

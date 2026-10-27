@@ -307,7 +307,7 @@ void Notifications::present(NotificationPtr n) {
     save();
 
     bool critical = n->urgency >= 2;
-    bool show = !(dnd_ && !critical) && !(current_ && current_->urgency >= 2 && !critical && current_->id != n->id);
+    bool show = !(dnd_ && !critical && !n->on_action) && !(current_ && current_->urgency >= 2 && !critical && current_->id != n->id);
     if (show) {
         current_ = n;
         schedule_expiry(n);

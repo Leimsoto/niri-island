@@ -18,6 +18,7 @@ public:
     // Draws the modules and reports where they are (the input region).
     std::function<void(cairo_t*, Ui&, float w, float h, bool left, std::vector<Rect>& input)> painter;
     std::function<bool()> moving;
+    bool blur_off = false;
     void restyle();
     static int edge_inset();  // how far the pills sit from the screen edge
 

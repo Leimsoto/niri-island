@@ -926,6 +926,17 @@ void App::draw_settings(cairo_t* cr, Ui& u, float w, float h, float dt) {
                                                        }}});
 
     // Sistema
+    toggle(6, "Modo Gaming", "Modo Gaming Pro",
+           "Fija juegos en P-Cores, suspende blur/animaciones/fondo y activa máximo rendimiento",
+           [this] { return gaming_mode_; },
+           [this](bool v) { set_gaming_mode(v); });
+    toggle(6, "Modo Gaming", "Detectar juegos y preguntar",
+           "Al abrir un juego (Steam, Proton, Wine, Lutris, Heroic…), pregunta en la isla si quieres activarlo",
+           [&] { return cfg.gaming_detect; },
+           [&, save](bool v) {
+               cfg.gaming_detect = v;
+               save();
+           });
     // The bubbles screensaver
     toggle(6, "Protector de pantalla", "Protector de pantalla", "Burbujas cuando no usas el equipo un rato",
            [&] { return cfg.screensaver; },

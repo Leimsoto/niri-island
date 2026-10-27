@@ -153,7 +153,7 @@ void App::draw_rest_inner(cairo_t* cr, float w, float h) {
         return;
     }
 
-    // Leading slot: the track's art, or the microphone in use.
+    // Leading slot: the track's art, the microphone in use, timer, or Gaming Mode.
     Rect lead{9, (h - 22) / 2, 22, 22};
     if (m.active) {
         draw_art(cr, lead, 6.5f);
@@ -164,9 +164,12 @@ void App::draw_rest_inner(cairo_t* cr, float w, float h) {
     } else if (tm) {
         bool paused = sw ? stopwatch_.paused() : timer_.paused();
         glyph(cr, lead.cx(), lead.cy(), paused ? "󰏤" : sw ? "󱫠" : "󱎫", 15, p.accent);
+    } else if (gaming_mode_) {
+        fill(cr, lead, 11, p.accent.with_alpha(0.18f));
+        glyph(cr, lead.cx(), lead.cy(), "󰊴", 13, p.accent);
     }
 
-    // Trailing slot: the countdown, else the spectrum, else who is recording.
+    // Trailing slot: the countdown, Gaming Mode indicator, spectrum, or who is recording.
     Rect trail{w - 9 - 64, 0, 64, h};
     if (tm) {
         double rem = sw ? stopwatch_.elapsed() : timer_.remaining();
@@ -175,6 +178,9 @@ void App::draw_rest_inner(cairo_t* cr, float w, float h) {
         std::string t = fmt_duration(static_cast<int64_t>(sw ? rem : std::ceil(rem)));
         text(cr, w - 12, h / 2 - 8.5f, t, {mono(13, "Bold"), tint, Align::Right});
         w::hit(c, ID("rest.timer"), trail).click([this] { open(View::Timer); });
+    } else if (gaming_mode_) {
+        text(cr, w - 12, h / 2 - 8, m.active || mic ? "󰊴 PRO" : "PRO", {mono(11.5f, "Bold"), p.accent, Align::Right});
+        w::hit(c, ID("rest.gaming"), trail).click([this] { set_gaming_mode(false); });
     } else if (m.active) {
         draw_spectrum(cr, {w - 11 - 22, h / 2 - 8, 22, 16}, 4, m.playing, media_accent());
     } else if (mic) {

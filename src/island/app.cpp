@@ -138,7 +138,7 @@ bool App::init() {
     files_.watch(expand_home(config().weather_cache), [this] { weather_.reload(); });
     files_.watch(Config::path(), [this] {
         config().load();
-        Spring::speed = config().motion;
+        Spring::speed = gaming_mode_ ? 0.0f : config().motion;
         paint::reset_fonts();
         Theme::get().load();
         ++config_gen_;
@@ -359,6 +359,7 @@ void App::wire_services() {
     niri_.on_change = [this] {
         request();
         update_wallpaper_pause();
+        check_gaming_windows();
     };
     // the output's size, to tell when a window covers it
     {
@@ -616,7 +617,7 @@ void App::sizes_for(View v, float& w, float& h) {
             bool media = m.active;
             bool tm = clock_active();
             bool mic = audio_.mic_in_use();
-            if (media || tm || mic) w = 204;
+            if (media || tm || mic || gaming_mode_) w = 204;
             if (tm && (media || mic)) w = 226;
             if (recorder_.active()) w = 226;
             w += 2 * one_island_side();
@@ -822,11 +823,12 @@ std::vector<Overlay*> App::screensavers() {
 void App::setup_idle() {
     const auto& c = config();
     std::string key = std::to_string(c.screensaver) + "/" + std::to_string(c.screensaver_minutes) + "/" +
-                      std::to_string(c.screensaver_lock_minutes);
+                      std::to_string(c.screensaver_lock_minutes) + "/" + std::to_string(gaming_mode_);
     if (key == idle_key_) return;
     idle_key_ = key;
     idle_saver_.reset();
     idle_lock_.reset();
+    if (gaming_mode_) return;
     if (c.screensaver && c.screensaver_minutes > 0)
         idle_saver_ = wl_.watch_idle(static_cast<uint32_t>(c.screensaver_minutes) * 60000u,
                                      [this] {
@@ -856,9 +858,9 @@ void App::stop_screensaver() {
     for (auto& s : savers_) s->stop();
 }
 
-// Video wallpapers stop while a window covers the screen (like skwd-wall).
+// Video wallpapers stop while a window covers the screen (like skwd-wall) or in Gaming Mode.
 void App::update_wallpaper_pause() {
-    backdrop_.set_paused(config().wallpaper_pause_covered && niri_.screen_covered(screen_w_, screen_h_));
+    backdrop_.set_paused(gaming_mode_ || (config().wallpaper_pause_covered && niri_.screen_covered(screen_w_, screen_h_)));
 }
 
 // Our own lock screen (ext-session-lock), or the configured command.
@@ -1341,7 +1343,7 @@ void App::render() {
         cairo_translate(cr, ox, oy);
         cairo_scale(cr, sc, sc);
         ui_.push(ox, oy, sc);
-        spec_capture_ = shown_ == View::Rest && spec_sub_ && !morphing;
+        spec_capture_ = !gaming_mode_ && shown_ == View::Rest && spec_sub_ && !morphing;
         spec_seen_ = false;
         draw_view(cr, shown_, target_w_, target_h_);
         spec_capture_ = false;
@@ -1351,7 +1353,7 @@ void App::render() {
     cairo_restore(cr);
     // The bars on their own surface (placed now: it takes effect with this commit).
     bool was_live = spec_live_;
-    spec_live_ = morph_ >= 1.0f && spec_seen_;
+    spec_live_ = !gaming_mode_ && morph_ >= 1.0f && spec_seen_;
     if (spec_sub_) {
         if (spec_live_) {
             spec_sub_->place(spec_rect_.x, spec_rect_.y);
@@ -1383,7 +1385,7 @@ void App::render() {
     }
 
     // Compositor blur behind the island and its capsules.
-    if (config().glass && config().compositor_blur && wl_.can_blur()) {
+    if (!gaming_mode_ && config().glass && config().compositor_blur && wl_.can_blur()) {
         std::vector<LayerSurface::BlurShape> blur{{ir, radius, docked}};
         for (bool left : {true, false})
             if ((left ? ws_alpha_ : st_alpha_).value > 0.5f)
@@ -1402,12 +1404,12 @@ void App::render() {
     // What keeps moving without springs: spectrum bars, marquees, progress.
     bool playing = mpris_.info().playing;
     bool ambient = recorder_.active() ||
-                   (playing && ((shown_ == View::Rest && !spec_live_) || shown_ == View::Music || shown_ == View::Control)) ||
+                   (!gaming_mode_ && playing && ((shown_ == View::Rest && !spec_live_) || shown_ == View::Music || shown_ == View::Control)) ||
                    (shown_ == View::Wifi && net_.state().scanning) || (shown_ == View::Bluetooth && bt_.state().discovering) ||
                    (shown_ == View::Timer && clock_active()) || shown_ == View::Glance ||
                    ((shown_ == View::Rest || shown_ == View::Music) && stopwatch_.running() && !stopwatch_.paused()) ||
                    (shown_ == View::Notification && notifs_.current() && notifs_.current()->timeout_ms != 0);
-    cava_.set_running(playing && (shown_ == View::Rest || shown_ == View::Music));
+    cava_.set_running(!gaming_mode_ && playing && (shown_ == View::Rest || shown_ == View::Music));
 
     if (anim || ui_.dragging() || morph_ < 1.0f) {
         request();

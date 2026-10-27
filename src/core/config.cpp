@@ -131,6 +131,7 @@ void Config::load() {
         get(*m, "screensaver_lock_minutes", c.screensaver_lock_minutes);
         get(*m, "screensaver_bubbles", c.screensaver_bubbles);
         get(*m, "screensaver_speed", c.screensaver_speed);
+        get(*m, "gaming_detect", c.gaming_detect);
         get(*m, "terminal", c.terminal);
     }
     if (auto su = j.find("suite"); su != j.end() && su->is_object()) {
@@ -218,6 +219,7 @@ std::string Config::to_json() const {
                      {"screensaver_lock_minutes", screensaver_lock_minutes},
                      {"screensaver_bubbles", screensaver_bubbles},
                      {"screensaver_speed", screensaver_speed},
+                     {"gaming_detect", gaming_detect},
                      {"terminal", terminal}};
     json mods = json::array();
     for (auto& m : modules) mods.push_back({{"id", m.id}, {"side", m.side}, {"on", m.on}});

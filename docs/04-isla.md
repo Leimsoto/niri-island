@@ -109,8 +109,8 @@ llamada `toggle(...)`, `choice(...)`, `slider(...)` en `draw_settings` con su se
 `mute` / `toggle-mute`, `mic-mute` / `toggle-mic`; `brightness-up [n]`, `brightness-down [n]`.
 
 ### Interruptores
-`toggle-wifi`, `toggle-bluetooth` / `toggle-bt`, `dnd` / `toggle-dnd [off|discreet|total|cycle]`,
-`toggle-airplane` / `airplane`, `power-profile [nombre]`.
+`gaming [on|off|toggle|status]` / `gaming-mode` / `toggle-gaming`, `toggle-wifi`, `toggle-bluetooth` / `toggle-bt`,
+`dnd` / `toggle-dnd [off|discreet|total|cycle]`, `toggle-airplane` / `airplane`, `power-profile [nombre]`.
 
 ### Wi-Fi, tareas, temporizador
 `wifi-list`, `wifi-scan` / `rescan-wifi`, `wifi-status`, `wifi-connect <ssid> [clave]`, `wifi-password <ssid>`,

@@ -319,6 +319,14 @@ std::string App::command(const std::string& line) {
         return std::string("dnd ") + Notifications::dnd_label(notifs_.dnd_mode());
     }
     if (c == "toggle-airplane" || c == "airplane") return set_airplane(!airplane()), "ok";
+    if (c == "gaming" || c == "gaming-mode" || c == "toggle-gaming") {
+        std::string sub = a.size() > 1 ? a[1] : "toggle";
+        if (sub == "on" || sub == "enable" || sub == "1") set_gaming_mode(true);
+        else if (sub == "off" || sub == "disable" || sub == "0") set_gaming_mode(false);
+        else if (sub == "status") return gaming_mode_ ? "on" : "off";
+        else set_gaming_mode(!gaming_mode_);
+        return gaming_mode_ ? "gaming on" : "gaming off";
+    }
     if (c == "power-profile") {
         if (a.size() > 1) power_.set_profile(a[1]);
         else power_.cycle_profile();
@@ -432,6 +440,8 @@ std::string App::command(const std::string& line) {
         ss << "notifications: " << notifs_.mode_label() << ", " << notifs_.history().size() << " in history"
            << (notifs_.dnd() ? ", dnd" : "") << "\n";
         ss << "workspaces: " << niri_.output_workspaces().size() << (niri_.connected() ? "" : " (niri not connected)") << "\n";
+        ss << "reload: " << (gaming_mode_ ? "gaming" : "normal") << "\n";
+        ss << "gaming: " << (gaming_mode_ ? "on" : "off") << "\n";
         ss << "timer: " << (timer_.running() ? fmt_duration((int64_t)timer_.remaining()) : "off") << "\n";
         ss << "weather: " << (weather_.data().valid ? std::to_string(weather_.data().temp) + "° " + weather_.data().condition +
                                                           " (" + weather_.source() + ")"
@@ -464,7 +474,7 @@ std::string App::command(const std::string& line) {
                "suite: wallpapers wallpaper [current|next|prev|set <path>] screenshot record screensaver [stop] lock [--preview <s>] lock-state night-light\n"
                "media: play-pause next prev\n"
                "levels: volume-up [n] volume-down [n] volume <n> mute mic-mute brightness-up [n] brightness-down [n]\n"
-               "toggles: toggle-wifi toggle-bluetooth toggle-dnd [off|discreet|total|cycle] toggle-airplane power-profile [name]\n"
+               "toggles: gaming [on|off|toggle|status] toggle-wifi toggle-bluetooth toggle-dnd [off|discreet|total|cycle] toggle-airplane power-profile [name]\n"
                "timer: timer <25m|1h30|5:00> [label] | timer pause | timer cancel\n"
                "wifi: wifi-list wifi-scan wifi-connect <ssid> [pass] wifi-password <ssid> wifi-disconnect wifi-forget <ssid>\n"
                "tasks: task-add [--date YYYY-MM-DD] <title>\n"

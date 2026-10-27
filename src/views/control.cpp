@@ -1,7 +1,12 @@
 // The control centre: quick tiles and levels, the player, weather and month,
 // and the notification history.
 
+#include <climits>
+#include <dirent.h>
 #include <nlohmann/json.hpp>
+#include <sched.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #include "core/config.hpp"
 #include "core/proc.hpp"
@@ -109,6 +114,7 @@ void App::draw_control(cairo_t* cr, float w, float h) {
              lock_screen();
          }},
         {"cc.night", "󰖔", [] { proc::spawn_shell(config().cmd_night_light); }},
+        {"cc.gaming", "󰊴", [this] { set_gaming_mode(!gaming_mode_); }, gaming_mode_},
         {"cc.settings", "󰒓", [this] { open_settings(); }},
         {"cc.capture", "󰄀", [this] {
              // the panel goes first: it is not wanted in the frozen screen
@@ -157,8 +163,8 @@ void App::draw_control(cairo_t* cr, float w, float h) {
         }
     std::string wifi_sub = !ns.wifi_enabled ? "Apagado" : !ns.ssid.empty() ? (demo_ ? "Mi Wi-Fi" : ns.ssid) : ns.ethernet ? "Ethernet" : "Sin conexión";
     std::string pp = power_.profile();
-    const char* pp_glyph = pp == "performance" ? "󰓅" : pp == "power-saver" ? "󰾆" : "󰾅";
-    std::string pp_sub = pp == "performance" ? "Rendimiento" : pp == "power-saver" ? "Ahorro" : "Equilibrado";
+    const char* pp_glyph = gaming_mode_ ? "󰊴" : pp == "performance" ? "󰓅" : pp == "power-saver" ? "󰾆" : "󰾅";
+    std::string pp_sub = gaming_mode_ ? "Gaming Pro" : pp == "performance" ? "Rendimiento" : pp == "power-saver" ? "Ahorro" : "Equilibrado";
     bool mic_on = !audio_.state().source.muted;
 
     struct Tile {
@@ -174,7 +180,12 @@ void App::draw_control(cairo_t* cr, float w, float h) {
          [this] { open(View::Wifi); }},
         {"tile.bt", bs.powered ? "󰂯" : "󰂲", "Bluetooth", bt_sub, bs.powered,
          [this] { bt_.set_powered(!bt_.state().powered); }, [this] { open(View::Bluetooth); }},
-        {"tile.power", pp_glyph, "Energía", pp_sub, pp != "balanced", [this] { power_.cycle_profile(); }, {}},
+        {"tile.power", pp_glyph, gaming_mode_ ? "Modo Gaming" : "Energía", pp_sub, gaming_mode_ || pp != "balanced",
+         [this] {
+             if (gaming_mode_) set_gaming_mode(false);
+             else power_.cycle_profile();
+         },
+         [this] { set_gaming_mode(!gaming_mode_); }},
         {"tile.dnd", notifs_.dnd_mode() == Notifications::DndTotal ? "󰂛" : notifs_.dnd() ? "󱏧" : "󰂚", "No molestar",
          Notifications::dnd_label(notifs_.dnd_mode()), notifs_.dnd(), [this] { notifs_.cycle_dnd(); }, {}},
         {"tile.mic", mic_on ? "󰍬" : "󰍭", "Micrófono", mic_on ? (audio_.mic_in_use() ? "En uso" : "Activo") : "Silenciado",
@@ -464,6 +475,344 @@ bool App::airplane() const {
 void App::set_airplane(bool on) {
     net_.set_wifi(!on);
     if (bt_.state().available) bt_.set_powered(!on);
+}
+
+// ── Gaming Mode Pro: hybrid CPU affinity, I/O priority, kernel/GPU & niri ──
+
+namespace {
+
+struct CpuTopology {
+    cpu_set_t p_cores;
+    cpu_set_t e_cores;
+    cpu_set_t all_cores;
+    bool hybrid = false;
+    int total = 0;
+};
+
+// Detects Intel/AMD hybrid core layouts (P-Cores vs E-Cores) via cpufreq max_freq.
+const CpuTopology& cpu_topology() {
+    static CpuTopology topo = [] {
+        CpuTopology t;
+        CPU_ZERO(&t.p_cores);
+        CPU_ZERO(&t.e_cores);
+        CPU_ZERO(&t.all_cores);
+        std::vector<std::pair<int, long>> freqs;
+        long max_f = 0, min_f = LONG_MAX;
+        for (int cpu = 0; cpu < 128; ++cpu) {
+            std::string s;
+            if (!read_file("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/cpuinfo_max_freq", s)) continue;
+            long f = std::atol(s.c_str());
+            if (f <= 0) continue;
+            freqs.push_back({cpu, f});
+            CPU_SET(cpu, &t.all_cores);
+            max_f = std::max(max_f, f);
+            min_f = std::min(min_f, f);
+        }
+        t.total = static_cast<int>(freqs.size());
+        if (t.total > 0 && min_f < max_f * 9 / 10) {
+            t.hybrid = true;
+            for (auto& [cpu, f] : freqs) {
+                if (f >= max_f * 9 / 10) CPU_SET(cpu, &t.p_cores);
+                else CPU_SET(cpu, &t.e_cores);
+            }
+        } else {
+            t.p_cores = t.all_cores;
+            t.e_cores = t.all_cores;
+        }
+        return t;
+    }();
+    return topo;
+}
+
+// Applies CPU affinity and Best-Effort I/O priority to all threads of a process
+// (and optionally its child processes).
+void tune_process_tree(int root_pid, const cpu_set_t& mask, int ioprio_level, bool include_children) {
+    if (root_pid <= 1) return;
+    std::vector<int> pids{root_pid};
+    if (include_children) {
+        for (size_t idx = 0; idx < pids.size() && pids.size() < 64; ++idx) {
+            int p = pids[idx];
+            std::string task_dir = "/proc/" + std::to_string(p) + "/task";
+            DIR* d = opendir(task_dir.c_str());
+            if (!d) continue;
+            while (struct dirent* e = readdir(d)) {
+                if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+                std::string ch;
+                if (!read_file(task_dir + "/" + e->d_name + "/children", ch)) continue;
+                for (auto& tok : split(ch, ' ')) {
+                    int cpid = std::atoi(tok.c_str());
+                    if (cpid > 1 && std::find(pids.begin(), pids.end(), cpid) == pids.end() && pids.size() < 64)
+                        pids.push_back(cpid);
+                }
+            }
+            closedir(d);
+        }
+    }
+    for (int p : pids) {
+        std::string task_dir = "/proc/" + std::to_string(p) + "/task";
+        DIR* d = opendir(task_dir.c_str());
+        if (!d) {
+            sched_setaffinity(p, sizeof(cpu_set_t), &mask);
+            continue;
+        }
+        while (struct dirent* e = readdir(d)) {
+            int tid = std::atoi(e->d_name);
+            if (tid <= 0) continue;
+            sched_setaffinity(tid, sizeof(cpu_set_t), &mask);
+#ifdef SYS_ioprio_set
+            if (ioprio_level >= 0) {
+                // IOPRIO_WHO_PROCESS = 1, IOPRIO_CLASS_BE = 2
+                syscall(SYS_ioprio_set, 1, tid, (2 << 13) | (ioprio_level & 7));
+            }
+#endif
+        }
+        closedir(d);
+    }
+}
+
+bool is_game_window(const Window& win) {
+    std::string app = lower(win.app_id);
+    std::string title = lower(win.title);
+    if (app.empty() && title.empty()) return false;
+    static const char* kIgnore[] = {
+        "steam", "lutris", "heroic", "com.heroicgameslauncher.hgl", "net.lutris.lutris",
+        "discord", "vesktop", "brave", "firefox", "chromium", "chrome", "ghostty",
+        "com.mitchellh.ghostty", "kitty", "alacritty", "wezterm", "nautilus", "org.gnome.",
+        "code", "codium", "agy", "antigravity", "spotify", "obs", "vlc", "mpv", "pavucontrol"
+    };
+    for (const char* ig : kIgnore) {
+        if (app == ig || starts_with(app, ig)) return false;
+    }
+    if (starts_with(app, "steam_app_") || starts_with(app, "steam_proton") ||
+        starts_with(app, "gamescope") || ends_with(app, ".exe") ||
+        app.find("wine") != std::string::npos || app.find("proton") != std::string::npos ||
+        app.find("minecraft") != std::string::npos || app.find("prismlauncher") != std::string::npos ||
+        app.find("retroarch") != std::string::npos || app.find("dolphin-emu") != std::string::npos ||
+        app.find("pcsx2") != std::string::npos || app.find("rpcs3") != std::string::npos ||
+        app.find("ryujinx") != std::string::npos || app.find("yuzu") != std::string::npos ||
+        app.find("citra") != std::string::npos || app.find("cemu") != std::string::npos ||
+        app.find("ppsspp") != std::string::npos || app.find("duckstation") != std::string::npos ||
+        app.find("flycast") != std::string::npos || app.find("mgba") != std::string::npos) {
+        return true;
+    }
+    if (win.pid > 1) {
+        std::string env;
+        if (read_file("/proc/" + std::to_string(win.pid) + "/environ", env)) {
+            if (env.find("SteamAppId=") != std::string::npos ||
+                env.find("STEAM_COMPAT_DATA_PATH=") != std::string::npos ||
+                env.find("LUTRIS_GAME_UUID=") != std::string::npos ||
+                env.find("WINEPREFIX=") != std::string::npos) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void write_sysfs(const char* path, const char* val) {
+    FILE* f = fopen(path, "w");
+    if (!f) return;
+    fwrite(val, 1, strlen(val), f);
+    fclose(f);
+}
+
+// Detects which hardware and kernel subsystems are present on this machine so
+// hardware-specific gaming tunables only activate on compatible hardware.
+struct HardwareCaps {
+    bool intel_hwp = false;
+    std::string intel_gt_card;
+    std::string intel_gt_rp1;
+    std::string intel_gt_rpn;
+    bool mglru = false;
+    bool sched_autogroup = false;
+    bool dynamic_preempt = false;
+};
+
+const HardwareCaps& hardware_caps() {
+    static HardwareCaps caps = [] {
+        HardwareCaps c;
+        std::string status;
+        if (read_file("/sys/devices/system/cpu/intel_pstate/status", status) && trim(status) == "active" &&
+            file_exists("/sys/devices/system/cpu/intel_pstate/hwp_dynamic_boost")) {
+            c.intel_hwp = true;
+        }
+        for (int i = 0; i < 4; ++i) {
+            std::string card = "/sys/class/drm/card" + std::to_string(i);
+            std::string vendor, rp1, rpn;
+            if (read_file(card + "/device/vendor", vendor) && trim(vendor) == "0x8086" &&
+                read_file(card + "/gt_RP1_freq_mhz", rp1) && read_file(card + "/gt_RPn_freq_mhz", rpn) &&
+                file_exists(card + "/gt_min_freq_mhz")) {
+                c.intel_gt_card = card;
+                c.intel_gt_rp1 = trim(rp1) + "\n";
+                c.intel_gt_rpn = trim(rpn) + "\n";
+                break;
+            }
+        }
+        std::string lru;
+        if (read_file("/sys/kernel/mm/lru_gen/enabled", lru) && trim(lru) != "0" && trim(lru) != "0x0000" &&
+            file_exists("/sys/kernel/mm/lru_gen/min_ttl_ms")) {
+            c.mglru = true;
+        }
+        c.sched_autogroup = file_exists("/proc/sys/kernel/sched_autogroup_enabled");
+        c.dynamic_preempt = file_exists("/sys/kernel/debug/sched/preempt");
+        return c;
+    }();
+    return caps;
+}
+
+void apply_kernel_gaming_tunables(bool on) {
+    // Try privileged helper via non-interactive pkexec if installed.
+    if (file_exists("/usr/local/libexec/niri-island-gaming-helper")) {
+        proc::run_quiet({"pkexec", "--disable-internal-agent", "/usr/local/libexec/niri-island-gaming-helper", on ? "on" : "off"},
+                        nullptr, 3000);
+    }
+    // Direct fallback writes gated by detected hardware capabilities.
+    const auto& caps = hardware_caps();
+    if (caps.intel_hwp) write_sysfs("/sys/devices/system/cpu/intel_pstate/hwp_dynamic_boost", on ? "1\n" : "0\n");
+    if (!caps.intel_gt_card.empty())
+        write_sysfs((caps.intel_gt_card + "/gt_min_freq_mhz").c_str(),
+                    on ? caps.intel_gt_rp1.c_str() : caps.intel_gt_rpn.c_str());
+    write_sysfs("/proc/sys/vm/compaction_proactiveness", on ? "0\n" : "20\n");
+    write_sysfs("/proc/sys/vm/watermark_boost_factor", on ? "0\n" : "15000\n");
+    write_sysfs("/sys/kernel/mm/transparent_hugepage/enabled", on ? "madvise\n" : "always\n");
+    if (caps.mglru) write_sysfs("/sys/kernel/mm/lru_gen/min_ttl_ms", on ? "1000\n" : "0\n");
+    if (caps.sched_autogroup) write_sysfs("/proc/sys/kernel/sched_autogroup_enabled", on ? "0\n" : "1\n");
+    if (caps.dynamic_preempt) write_sysfs("/sys/kernel/debug/sched/preempt", on ? "full\n" : "lazy\n");
+}
+
+}  // namespace
+
+void App::set_gaming_mode(bool on) {
+    const auto& topo = cpu_topology();
+    std::string active_detail = topo.hybrid ? "P-Cores · 0 blur · Fondo en pausa · Máx rendimiento"
+                                            : "0 blur · Fondo en pausa · Máx rendimiento";
+    if (gaming_mode_ == on) {
+        OsdInfo o;
+        o.kind = OsdInfo::Message;
+        o.value = -1;
+        o.glyph = "󰊴";
+        o.muted = !on;
+        o.label = on ? "Modo Gaming Pro activo" : "Modo Gaming desactivado";
+        o.detail = on ? active_detail : "Efectos, fondo y energía normales";
+        show_osd(o, 2.2);
+        return;
+    }
+    gaming_mode_ = on;
+
+    // 1. Save or restore power profile & Do Not Disturb mode
+    if (on) {
+        gaming_prev_profile_ = power_.profile();
+        gaming_prev_dnd_ = notifs_.dnd_mode();
+        power_.set_profile("performance");
+        notifs_.set_dnd_mode(Notifications::DndTotal);
+    } else {
+        power_.set_profile(gaming_prev_profile_.empty() ? "balanced" : gaming_prev_profile_);
+        notifs_.set_dnd_mode(gaming_prev_dnd_);
+    }
+
+    // 2. Shell ultra-light mode: zero springs, stop cava & spectrum, inhibit screensaver
+    Spring::speed = on ? 0.0f : config().motion;
+    if (on) {
+        cava_.set_running(false);
+        spec_live_ = false;
+        if (spec_sub_) spec_sub_->hide();
+        stop_screensaver();
+    }
+    setup_idle();
+
+    // 3. Suspend animated wallpapers (Vulkan Engine, WebWall, mpvpaper) & mute wallpaper audio
+    update_wallpaper_pause();
+    if (config().wallpaper_engine_audio) backdrop_.set_audio(!on);
+
+    // 4. Switch niri compositor mode.kdl + remove blur rules in niri-island.kdl
+    std::string mode_kdl = home_dir() + "/.config/niri/cfg/mode.kdl";
+    std::string gaming_kdl = home_dir() + "/.config/niri/cfg/gaming-mode.kdl";
+    if (file_exists(gaming_kdl)) {
+        std::string body = on ? "// Modo Gaming Activo\ninclude \"gaming-mode.kdl\"\n"
+                              : "// Modo Normal Activo\ninclude \"layout.kdl\"\ninclude \"appearance.kdl\"\ninclude \"animations.kdl\"\n";
+        write_file_atomic(mode_kdl, body);
+    }
+    apply_layout();
+    niri_.reload_config();
+
+    // 5. Hybrid CPU affinity (shell on E-Cores, games on P-Cores), NVMe I/O priority & kernel tunables
+    if (on) {
+        if (topo.hybrid) tune_process_tree(getpid(), topo.e_cores, -1, false);
+        check_gaming_windows();
+    } else {
+        if (topo.total > 0) tune_process_tree(getpid(), topo.all_cores, -1, false);
+        for (int pid : gaming_boosted_pids_) {
+            if (topo.total > 0) tune_process_tree(pid, topo.all_cores, 4, true);
+            if (user_bus_.get()) {
+                sd_bus_call_method_async(user_bus_.get(), nullptr, "com.feralinteractive.GameMode",
+                                         "/com/feralinteractive/GameMode", "com.feralinteractive.GameMode",
+                                         "UnregisterGame", nullptr, nullptr, "i", pid);
+            }
+        }
+        gaming_boosted_pids_.clear();
+    }
+    loop_.async([on] { apply_kernel_gaming_tunables(on); });
+
+    // 6. Native OSD banner (shown even when DND Total is active)
+    OsdInfo o;
+    o.kind = OsdInfo::Message;
+    o.value = -1;
+    o.glyph = "󰊴";
+    o.muted = !on;
+    o.label = on ? "Modo Gaming Pro activado" : "Modo Gaming desactivado";
+    o.detail = on ? active_detail : "Efectos, fondo y energía restaurados";
+    show_osd(o, 2.4);
+    request();
+}
+
+void App::check_gaming_windows() {
+    const auto& wins = niri_.windows();
+    // Prune closed windows from our prompted set
+    for (auto it = gaming_prompted_wins_.begin(); it != gaming_prompted_wins_.end();) {
+        if (wins.find(*it) == wins.end()) it = gaming_prompted_wins_.erase(it);
+        else ++it;
+    }
+
+    if (gaming_mode_) {
+        const auto& topo = cpu_topology();
+        for (const auto& [id, win] : wins) {
+            if (win.pid <= 1 || gaming_boosted_pids_.count(win.pid)) continue;
+            if (!is_game_window(win)) continue;
+            gaming_boosted_pids_.insert(win.pid);
+            int pid = win.pid;
+            loop_.async([pid, &topo] {
+                if (topo.total > 0) tune_process_tree(pid, topo.p_cores, 0, true);
+            });
+            if (user_bus_.get()) {
+                sd_bus_call_method_async(user_bus_.get(), nullptr, "com.feralinteractive.GameMode",
+                                         "/com/feralinteractive/GameMode", "com.feralinteractive.GameMode",
+                                         "RegisterGame", nullptr, nullptr, "i", pid);
+            }
+        }
+        return;
+    }
+
+    // Interactive prompt when gaming_detect is enabled by the user in Settings
+    if (!config().gaming_detect) return;
+    for (const auto& [id, win] : wins) {
+        if (gaming_prompted_wins_.count(id)) continue;
+        if (!is_game_window(win)) continue;
+        gaming_prompted_wins_.insert(id);
+        auto n = std::make_shared<Notification>();
+        n->app = "Modo Gaming";
+        n->summary = "Juego detectado";
+        n->body = (win.title.empty() ? win.app_id : win.title) + " — ¿Activar Modo Gaming Pro?";
+        n->image = "icon:" + (win.app_id.empty() ? std::string("applications-games") : win.app_id);
+        n->urgency = 1;
+        n->timeout_ms = 10000;
+        n->transient = true;
+        n->actions = {{"on", "Activar"}, {"ignore", "Ignorar"}};
+        n->on_action = [this](const std::string& act) {
+            if (act == "on" || act == "default") set_gaming_mode(true);
+        };
+        notifs_.post(n);
+        break;
+    }
 }
 
 }  // namespace island

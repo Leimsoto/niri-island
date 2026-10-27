@@ -19,6 +19,7 @@ struct Workspace {
 
 struct Window {
     uint64_t id = 0;
+    int pid = 0;
     std::string title, app_id;
     uint64_t workspace = 0;
     bool focused = false, urgent = false;
@@ -49,6 +50,7 @@ public:
     void focus_workspace(uint64_t id);
     void focus_workspace_relative(int delta);
     void focus_window(uint64_t id);
+    void reload_config();
     void action(const std::string& json_action);  // raw {"Action":{...}}
     // Focuses a window whose app id or title matches, else returns false.
     bool focus_app(const std::string& hint);

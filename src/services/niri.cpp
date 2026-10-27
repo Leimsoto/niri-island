@@ -141,6 +141,7 @@ static void parse_layout(Window& win, const json& l) {
 static Window parse_win(const json& w) {
     Window win;
     win.id = w.value("id", (uint64_t)0);
+    if (w.contains("pid") && w["pid"].is_number()) win.pid = w["pid"].get<int>();
     if (w.contains("title") && w["title"].is_string()) win.title = w["title"];
     if (w.contains("app_id") && w["app_id"].is_string()) win.app_id = w["app_id"];
     if (w.contains("workspace_id") && w["workspace_id"].is_number()) win.workspace = w["workspace_id"].get<uint64_t>();
@@ -297,6 +298,8 @@ void Niri::focus_workspace_relative(int delta) {
 }
 
 void Niri::focus_window(uint64_t id) { action(json{{"Action", {{"FocusWindow", {{"id", id}}}}}}.dump()); }
+
+void Niri::reload_config() { action(json{{"Action", {{"LoadConfigFile", json::object()}}}}.dump()); }
 
 bool Niri::focus_app(const std::string& hint) {
     if (hint.empty()) return false;
