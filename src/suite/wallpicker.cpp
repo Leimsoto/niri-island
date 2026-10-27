@@ -433,7 +433,7 @@ void WallPicker::refilter() {
             continue;
         }
         if (steam_) {  // the downloads: by name, as typed
-            if (!ws_query_.empty() && lower(w.name).find(lower(ws_query_)) == std::string::npos) continue;
+            if (!ws_query_.text.empty() && lower(w.name).find(lower(ws_query_.text)) == std::string::npos) continue;
             visible_.push_back(static_cast<int>(i));
             continue;
         }
@@ -499,7 +499,7 @@ bool WallPicker::animating() const {
            now_mono() - open_t0_ < 1.3 || (filter_t0_ > 0 && now_mono() - filter_t0_ < 0.4);
 }
 
-void WallPicker::key(xkb_keysym_t sym, const std::string& utf8, uint32_t) { key_slices(sym, utf8); }
+void WallPicker::key(xkb_keysym_t sym, const std::string& utf8, uint32_t mods) { key_slices(sym, utf8, mods); }
 
 void WallPicker::draw(cairo_t* cr, float w, float h, float dt) { draw_slices(cr, w, h, dt); }
 

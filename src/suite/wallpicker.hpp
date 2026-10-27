@@ -10,6 +10,7 @@
 
 #include "services/workshop.hpp"
 #include "suite/overlay.hpp"
+#include "ui/textfield.hpp"
 
 namespace island {
 
@@ -115,7 +116,11 @@ private:
     void request_big();
     void draw_slices(cairo_t* cr, float w, float h, float dt);
     void draw_filter_bar(cairo_t* cr, float W, float H, float t_in);
-    void key_slices(xkb_keysym_t sym, const std::string& utf8);
+    void key_slices(xkb_keysym_t sym, const std::string& utf8, uint32_t mods);
+    // The search box (wallhaven and Steam): typing, a caret moved with the
+    // arrows, Ctrl+V. true when the key was the box's.
+    bool search_key(TextField& f, xkb_keysym_t sym, const std::string& utf8, uint32_t mods, bool space_applies);
+    void search_edited();  // the Workshop and wallhaven search after a pause; the downloads filter now
     void slices_move(int delta);
     void slices_close(bool apply);
     void set_filter(int kind, int hue);
@@ -127,7 +132,7 @@ private:
     int wh_mature_ = 0;                   // 0 SFW, 1 + sketchy, 2 + NSFW (needs an API key)                     // 0 top, 1 latest, 2 random, 3 views
     int wh_page_ = 0, wh_last_page_ = 1, wh_gen_ = 0;
     bool wh_loading_ = false, wh_failed_ = false;
-    std::string wh_query_;
+    TextField wh_query_;
     uint64_t wh_timer_ = 0;
     std::string wh_seed_;
     bool downloading_ = false;
@@ -152,7 +157,8 @@ private:
     bool ws_browse_ = false;  // the Workshop's results rather than the downloads
     int ws_sort_ = 0, ws_page_ = 0, ws_gen_ = 0;  // trend, newest, votes, subscribers
     bool ws_mature_ = false, ws_loading_ = false, ws_more_ = true;
-    std::string ws_query_, ws_error_;
+    TextField ws_query_;
+    std::string ws_error_;
     uint64_t ws_timer_ = 0;
     std::string ws_apply_after_;  // to apply once it is downloaded
     std::unique_ptr<Steam> steam_proc_;
@@ -174,7 +180,6 @@ private:
     std::string ws_author(const Wallpaper& w) const;   // "" while unknown
     void ws_ask_authors();
     void ws_thumbs(int gen);
-    void ws_type_key(xkb_keysym_t sym, const std::string& utf8, bool& used);
     // wallhaven and the Workshop show as a grid; Steam's downloads, like the
     // folders, in the chosen style (the panel comes with a right click)
     bool grid_mode() const { return remote_ || (steam_ && ws_browse_); }

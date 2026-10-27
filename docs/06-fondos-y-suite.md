@@ -105,9 +105,12 @@ después de cerrar (`release_timer_`).
   `project.json` no lo dice, así que al abrir el panel se pide `details` de todas a la vez (una vez por visita a
   Steam, sin aviso si Steam está cerrado: `ws_quiet_`). Mapas `ws_owner_of_` (id → cuenta) y `ws_names_`
   (cuenta → nombre); el panel muestra «por …» bajo el título.
-- **Buscador**: el espacio escribe un espacio cuando ya hay texto; con el buscador vacío no hace nada en el
-  Workshop ni en wallhaven (antes aplicaba, es decir, descargaba, la primera tarjeta). En las descargas y las
-  carpetas, con el buscador vacío, sigue aplicando.
+- **Buscador** (wallhaven y Steam, `search_key`): es un `TextField` con cursor. Con texto escrito, ← → (Ctrl: por
+  palabras), Inicio/Fin mueven el cursor y Supr borra delante; con el buscador vacío, las flechas vuelven a mover
+  la selección. Ctrl+V pega con `wl-paste` (los saltos de línea pasan a espacios). El espacio escribe un espacio
+  cuando ya hay texto; con el buscador vacío no hace nada en el Workshop ni en wallhaven (antes aplicaba, es
+  decir, descargaba, la primera tarjeta) y en las descargas sigue aplicando. Si el texto no cabe, se desplaza
+  para que el cursor siga a la vista.
 
 ### Panel lateral y propiedades
 

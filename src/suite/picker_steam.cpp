@@ -278,7 +278,7 @@ void WallPicker::ws_fetch(bool more) {
     }
     ws_loading_ = true;
     int page = ws_page_ + 1;
-    steam_proc_->search(ws_query_, ws_sort_, page, ws_mature_, std::to_string(ws_gen_) + ":" + std::to_string(page));
+    steam_proc_->search(ws_query_.text, ws_sort_, page, ws_mature_, std::to_string(ws_gen_) + ":" + std::to_string(page));
     request();
 }
 
@@ -515,38 +515,86 @@ void WallPicker::ws_thumbs(int gen) {
         }).detach();
 }
 
-// Typing in the Steam source: the Workshop searches (after a short pause),
-// the downloads filter at once.
-void WallPicker::ws_type_key(xkb_keysym_t sym, const std::string& utf8, bool& used) {
-    used = false;
-    if (sym == XKB_KEY_BackSpace && !ws_query_.empty()) {
-        ws_query_.erase(utf8_prev(ws_query_, ws_query_.size()));
-        used = true;
-    } else if (sym == XKB_KEY_Escape && !ws_query_.empty()) {
-        ws_query_.clear();
-        used = true;
-    } else if (sym == XKB_KEY_space) {
-        // a word break while typing; with nothing typed in the Workshop, nothing
-        // (not "apply": that would download the first card)
-        if (!ws_query_.empty()) ws_query_ += ' ';
-        else if (!ws_browse_) return;  // the downloads: space applies, as in the folders
-        else {
-            used = true;
-            return;
-        }
-        used = true;
-    } else if (!utf8.empty() && static_cast<unsigned char>(utf8[0]) >= 0x20) {
-        ws_query_ += utf8;
-        used = true;
+// The search box: wallhaven's and the Steam source's. Text goes in at the
+// caret; the arrows move it while there is text (with nothing typed they are
+// the pictures'); Ctrl+V pastes. Space is a word break; with nothing typed it
+// is nobody's in the grids (not "apply": that would download the first card)
+// and applies in the downloads, as in the folders.
+bool WallPicker::search_key(TextField& f, xkb_keysym_t sym, const std::string& utf8, uint32_t mods,
+                            bool space_applies) {
+    bool ctrl = mods & Wayland::MOD_CTRL;
+    bool has = !f.text.empty();
+    auto moved = [this] {
+        request();
+        return true;
+    };
+    auto edited = [this] {
+        search_edited();
+        return true;
+    };
+    if (ctrl && (sym == XKB_KEY_v || sym == XKB_KEY_V)) {
+        if (!proc::has("wl-paste")) return true;
+        auto out = std::make_shared<std::string>();
+        bool steam = steam_, browse = ws_browse_, remote = remote_;
+        Loop::get().async([out] { *out = proc::run({"wl-paste", "--no-newline", "--type", "text/plain"}, 2000).out; },
+                          [this, out, &f, steam, browse, remote] {
+                              // still the same box (the source may have changed meanwhile)
+                              if (out->empty() || steam != steam_ || browse != ws_browse_ || remote != remote_) return;
+                              f.insert(*out);
+                              search_edited();
+                          });
+        return true;
     }
-    if (!used) return;
-    if (ws_browse_) {
+    switch (sym) {
+        case XKB_KEY_BackSpace: return has && f.backspace(ctrl) ? edited() : false;
+        case XKB_KEY_Delete: return has && f.del() ? edited() : false;
+        case XKB_KEY_Escape:
+            if (!has) return false;
+            f.clear();
+            return edited();
+        case XKB_KEY_Left:
+            if (!has) return false;
+            f.left(ctrl);
+            return moved();
+        case XKB_KEY_Right:
+            if (!has) return false;
+            f.right(ctrl);
+            return moved();
+        case XKB_KEY_Home:
+            if (!has) return false;
+            f.home();
+            return moved();
+        case XKB_KEY_End:
+            if (!has) return false;
+            f.end();
+            return moved();
+        case XKB_KEY_space:
+            if (has) {
+                f.insert(" ");
+                return edited();
+            }
+            return !space_applies;
+        default: break;
+    }
+    if (ctrl || utf8.empty() || static_cast<unsigned char>(utf8[0]) < 0x20 || utf8[0] == 0x7f) return false;
+    f.insert(utf8);
+    return edited();
+}
+
+void WallPicker::search_edited() {
+    if (remote_) {
+        Loop::get().cancel(wh_timer_);
+        wh_timer_ = Loop::get().after(0.55, [this] {
+            wh_timer_ = 0;
+            if (remote_) wh_fetch(false);
+        });
+    } else if (steam_ && ws_browse_) {
         Loop::get().cancel(ws_timer_);
         ws_timer_ = Loop::get().after(0.55, [this] {
             ws_timer_ = 0;
             if (steam_ && ws_browse_) ws_fetch(false);
         });
-    } else {
+    } else if (steam_) {
         refilter();
     }
     request();

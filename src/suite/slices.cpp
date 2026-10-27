@@ -688,7 +688,7 @@ void WallPicker::wh_fetch(bool more) {
     if (last_w_ > 0)
         url += "&atleast=" + std::to_string(static_cast<int>(last_w_ * std::max(1, scale()))) + "x" +
                std::to_string(static_cast<int>(last_h_ * std::max(1, scale())));
-    if (!wh_query_.empty()) url += "&q=" + url_encode(wh_query_);
+    if (!wh_query_.text.empty()) url += "&q=" + url_encode(wh_query_.text);
     if (hue_ >= 0 && hue_ < 13) url += std::string("&colors=") + kWhColors[hue_];
     if (wh_sort_ == 2 && !wh_seed_.empty()) url += "&seed=" + wh_seed_;
     if (!cfg.wallhaven_key.empty()) url += "&apikey=" + cfg.wallhaven_key;
@@ -860,7 +860,7 @@ void WallPicker::slices_close(bool apply_it) {
     request();
 }
 
-void WallPicker::key_slices(xkb_keysym_t sym, const std::string& utf8) {
+void WallPicker::key_slices(xkb_keysym_t sym, const std::string& utf8, uint32_t mods) {
     if (trying_) {  // only yes or no
         if (sym == XKB_KEY_Escape) try_end(false);
         else if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) try_end(true);
@@ -871,9 +871,7 @@ void WallPicker::key_slices(xkb_keysym_t sym, const std::string& utf8) {
         return;
     }
     if (steam_) {
-        bool used = false;
-        ws_type_key(sym, utf8, used);
-        if (used) return;
+        if (search_key(ws_query_, sym, utf8, mods, !ws_browse_)) return;
         if (sym == XKB_KEY_Escape) {
             if (ws_browse_) ws_set_browse(false);
             else set_steam(false);
@@ -885,34 +883,8 @@ void WallPicker::key_slices(xkb_keysym_t sym, const std::string& utf8) {
             return;
         }
     }
-    if (remote_) {
-        // typing searches wallhaven (after a short pause)
-        bool edit = false;
-        if (sym == XKB_KEY_BackSpace && !wh_query_.empty()) {
-            wh_query_.erase(utf8_prev(wh_query_, wh_query_.size()));
-            edit = true;
-        } else if (sym == XKB_KEY_Escape && !wh_query_.empty()) {
-            wh_query_.clear();
-            edit = true;
-        } else if (sym == XKB_KEY_space) {
-            // a word break while typing; never "apply" (that downloads the first card)
-            if (wh_query_.empty()) return;
-            wh_query_ += ' ';
-            edit = true;
-        } else if (!utf8.empty() && static_cast<unsigned char>(utf8[0]) >= 0x20) {
-            wh_query_ += utf8;
-            edit = true;
-        }
-        if (edit) {
-            Loop::get().cancel(wh_timer_);
-            wh_timer_ = Loop::get().after(0.55, [this] {
-                wh_timer_ = 0;
-                if (remote_) wh_fetch(false);
-            });
-            request();
-            return;
-        }
-    }
+    // typing searches wallhaven (after a short pause)
+    if (remote_ && search_key(wh_query_, sym, utf8, mods, false)) return;
     switch (sym) {
         case XKB_KEY_Escape:
             if (remote_) set_remote(false);
@@ -1050,15 +1022,24 @@ void WallPicker::draw_filter_bar(cairo_t* cr, float W, float H, float t_in) {
             // the search: type anywhere
             sep();
             if (paint) {
-                const std::string& q = steam_ ? ws_query_ : wh_query_;
+                const TextField& f = steam_ ? ws_query_ : wh_query_;
+                const std::string& q = f.text;
                 Rect sr{x, bar.y + 6, search_w, bh - 12};
                 fill(cr, sr, sr.h / 2, p.text.with_alpha(0.07f * ca));
                 glyph(cr, sr.x + 15, sr.cy(), "󰍉", 13, p.text_dim.with_alpha(ca));
-                Size ts = measure(q, {ui(12.5f)});
-                if (!q.empty()) text(cr, sr.x + 30, sr.cy() - 8, q, {ui(12.5f), p.text.with_alpha(ca), Align::Left, sr.w - 40});
+                // the text slides left when the caret would leave the box
+                float room = sr.w - 40;
+                float cx = q.empty() ? 0.0f : caret_x(q, {ui(12.5f)}, std::min(f.caret, q.size()));
+                float shift = std::max(0.0f, cx - room);
+                if (!q.empty()) {
+                    cairo_save(cr);
+                    cairo_rectangle(cr, sr.x + 28, sr.y, room + 4, sr.h);
+                    cairo_clip(cr);
+                    text(cr, sr.x + 30 - shift, sr.cy() - 8, q, {ui(12.5f), p.text.with_alpha(ca)});
+                    cairo_restore(cr);
+                }
                 if (std::fmod(now_mono(), 1.1) < 0.7)
-                    fill(cr, {sr.x + 31 + std::min(q.empty() ? 0.0f : ts.w, sr.w - 40), sr.cy() - 8, 1.5f, 16}, 0,
-                         p.accent.with_alpha(ca));
+                    fill(cr, {sr.x + 31 + cx - shift, sr.cy() - 8, 1.5f, 16}, 0, p.accent.with_alpha(ca));
             }
             x += search_w;
         }
@@ -1295,8 +1276,8 @@ void WallPicker::draw_wh_grid(cairo_t* cr, float W, float H, float ie) {
             }
         } else if (!ws_browse_) {
             g = "󰉍";
-            msg = ws_query_.empty() ? "Aún no tienes fondos de Wallpaper Engine" : "Nada con ese nombre";
-            if (ws_query_.empty()) {
+            msg = ws_query_.text.empty() ? "Aún no tienes fondos de Wallpaper Engine" : "Nada con ese nombre";
+            if (ws_query_.text.empty()) {
                 act = "Workshop";
                 ag = "󰖟";
                 fn = [this] { ws_set_browse(true); };
