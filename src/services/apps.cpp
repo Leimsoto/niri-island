@@ -4,6 +4,10 @@
 #include <dirent.h>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <poll.h>
+#include <sys/inotify.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <unordered_set>
 
 #include "core/config.hpp"
@@ -72,6 +76,18 @@ static bool parse_desktop(const std::string& path, const std::string& id, AppEnt
     return !out.name.empty() && !out.exec.empty();
 }
 
+static std::vector<std::string> app_dirs() {
+    std::vector<std::string> dirs;
+    const char* dh = getenv("XDG_DATA_HOME");
+    dirs.push_back((dh && *dh ? std::string(dh) : home_dir() + "/.local/share") + "/applications");
+    const char* dd = getenv("XDG_DATA_DIRS");
+    for (auto& d : split(dd && *dd ? dd : "/usr/local/share:/usr/share", ':'))
+        if (!d.empty()) dirs.push_back(d + "/applications");
+    dirs.push_back("/var/lib/flatpak/exports/share/applications");
+    dirs.push_back(home_dir() + "/.local/share/flatpak/exports/share/applications");
+    return dirs;
+}
+
 static void scan_dir(const std::string& dir, const std::string& prefix, std::vector<AppEntry>& out,
                      std::unordered_set<std::string>& seen) {
     DIR* d = opendir(dir.c_str());
@@ -80,7 +96,12 @@ static void scan_dir(const std::string& dir, const std::string& prefix, std::vec
         std::string n = e->d_name;
         if (n == "." || n == "..") continue;
         std::string full = dir + "/" + n;
-        if (e->d_type == DT_DIR) {
+        bool is_directory = e->d_type == DT_DIR;
+        if (e->d_type == DT_UNKNOWN) {
+            struct stat st;
+            if (stat(full.c_str(), &st) == 0) is_directory = S_ISDIR(st.st_mode);
+        }
+        if (is_directory) {
             scan_dir(full, prefix + n + "-", out, seen);
             continue;
         }
@@ -94,19 +115,110 @@ static void scan_dir(const std::string& dir, const std::string& prefix, std::vec
     closedir(d);
 }
 
+Apps::Apps() = default;
+
+Apps::~Apps() {
+    if (debounce_timer_) {
+        Loop::get().cancel(debounce_timer_);
+        debounce_timer_ = 0;
+    }
+    if (inotify_fd_ >= 0) {
+        Loop::get().unwatch(inotify_fd_);
+        close(inotify_fd_);
+        inotify_fd_ = -1;
+    }
+}
+
 void Apps::init() {
     load_usage();
+    setup_watch();
+    rescan();
+}
+
+void Apps::setup_watch() {
+    if (inotify_fd_ < 0) {
+        inotify_fd_ = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+        if (inotify_fd_ < 0) return;
+        Loop::get().watch(inotify_fd_, POLLIN, [this](short) { on_inotify(); });
+    }
+    for (auto& dir : app_dirs()) {
+        struct stat st;
+        if (stat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        dir_mtimes_[dir] = static_cast<int64_t>(st.st_mtime);
+        if (watch_dirs_.count(dir)) continue;
+        int wd = inotify_add_watch(inotify_fd_, dir.c_str(),
+                                   IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM | IN_CLOSE_WRITE);
+        if (wd >= 0) {
+            watch_dirs_[dir] = wd;
+            watch_wds_[wd] = dir;
+        }
+    }
+}
+
+void Apps::on_inotify() {
+    alignas(inotify_event) char buf[8192];
+    bool relevant = false;
+    for (;;) {
+        ssize_t n = read(inotify_fd_, buf, sizeof(buf));
+        if (n <= 0) break;
+        for (char* p = buf; p < buf + n;) {
+            auto* ev = reinterpret_cast<inotify_event*>(p);
+            p += sizeof(inotify_event) + ev->len;
+            if (ev->len > 0) {
+                std::string name = ev->name;
+                if (ends_with(name, ".desktop") || (ev->mask & IN_ISDIR)) {
+                    relevant = true;
+                }
+            } else {
+                relevant = true;
+            }
+        }
+    }
+    if (relevant) {
+        Loop::get().cancel(debounce_timer_);
+        debounce_timer_ = Loop::get().after(0.4, [this] {
+            debounce_timer_ = 0;
+            setup_watch();
+            rescan();
+        });
+    }
+}
+
+void Apps::check_rescan() {
+    bool changed = false;
+    for (auto& dir : app_dirs()) {
+        struct stat st;
+        if (stat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        auto it = dir_mtimes_.find(dir);
+        if (it == dir_mtimes_.end() || it->second != static_cast<int64_t>(st.st_mtime)) {
+            changed = true;
+            dir_mtimes_[dir] = static_cast<int64_t>(st.st_mtime);
+        }
+        if (!watch_dirs_.count(dir) && inotify_fd_ >= 0) {
+            int wd = inotify_add_watch(inotify_fd_, dir.c_str(),
+                                       IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM | IN_CLOSE_WRITE);
+            if (wd >= 0) {
+                watch_dirs_[dir] = wd;
+                watch_wds_[wd] = dir;
+            }
+        }
+    }
+    if (changed) {
+        rescan();
+    }
+}
+
+void Apps::rescan() {
+    if (scanning_) {
+        dirty_ = true;
+        return;
+    }
+    scanning_ = true;
+    dirty_ = false;
     auto list = std::make_shared<std::vector<AppEntry>>();
     Loop::get().async(
         [list] {
-            std::vector<std::string> dirs;
-            const char* dh = getenv("XDG_DATA_HOME");
-            dirs.push_back((dh && *dh ? std::string(dh) : home_dir() + "/.local/share") + "/applications");
-            const char* dd = getenv("XDG_DATA_DIRS");
-            for (auto& d : split(dd && *dd ? dd : "/usr/local/share:/usr/share", ':'))
-                if (!d.empty()) dirs.push_back(d + "/applications");
-            dirs.push_back("/var/lib/flatpak/exports/share/applications");
-            dirs.push_back(home_dir() + "/.local/share/flatpak/exports/share/applications");
+            std::vector<std::string> dirs = app_dirs();
             std::unordered_set<std::string> seen;
             for (auto& d : dirs) scan_dir(d, "", *list, seen);
             std::sort(list->begin(), list->end(),
@@ -115,7 +227,18 @@ void Apps::init() {
         [this, list] {
             apps_ = std::move(*list);
             ready_ = true;
+            scanning_ = false;
+            for (auto& dir : app_dirs()) {
+                struct stat st;
+                if (stat(dir.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+                    dir_mtimes_[dir] = static_cast<int64_t>(st.st_mtime);
+                }
+            }
             if (on_change) on_change();
+            if (dirty_) {
+                dirty_ = false;
+                rescan();
+            }
         });
 }
 
@@ -165,15 +288,15 @@ std::vector<Apps::Match> Apps::search(const std::string& query, size_t limit) co
         if (q.empty()) {
             s = 1 + uses(a.id) * 50;
         } else {
-            s = std::max({fuzzy(a.name, q) * 3, fuzzy(a.generic, q), fuzzy(a.keywords, q), fuzzy(a.id, q),
-                          fuzzy(a.exec.substr(0, a.exec.find(' ')), q)});
+            s = std::max({fuzzy(a.name, q) * 3, fuzzy(a.generic, q), fuzzy(a.keywords, q), fuzzy(a.comment, q),
+                          fuzzy(a.id, q), fuzzy(a.exec.substr(0, a.exec.find(' ')), q)});
             if (s <= 0) continue;
             s += std::min(uses(a.id), 40) * 12;
         }
         out.push_back({&a, s});
     }
     std::stable_sort(out.begin(), out.end(), [](const Match& a, const Match& b) { return a.score > b.score; });
-    if (out.size() > limit) out.resize(limit);
+    if (limit > 0 && out.size() > limit) out.resize(limit);
     return out;
 }
 

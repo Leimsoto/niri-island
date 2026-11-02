@@ -223,7 +223,7 @@ void App::refresh_launcher() {
             // Maths typed straight in ("12*7") answers first.
             bool mathy = q.find_first_of("+-*/^%") != std::string::npos && q.find_first_of("0123456789") != std::string::npos;
             if (mathy) add_calc(q);
-            for (auto& m : apps_.search(q, 24)) {
+            for (auto& m : apps_.search(q)) {
                 const AppEntry* a = m.app;
                 LauncherItem it;
                 it.icon = a->icon.empty() ? "" : "icon:" + a->icon;
@@ -242,7 +242,7 @@ void App::refresh_launcher() {
             }
             if (!q.empty())
                 for (auto& a : actions)
-                    if (match(a.title + " " + a.keywords, q) && results_.size() < 40) results_.push_back(action_item(a));
+                    if (match(a.title + " " + a.keywords, q)) results_.push_back(action_item(a));
             if (!apps_.ready() && results_.empty()) {
                 LauncherItem it;
                 it.glyph = "󰔟";

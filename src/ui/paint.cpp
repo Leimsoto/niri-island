@@ -2,6 +2,7 @@
 
 #include <pango/pangocairo.h>
 #include <algorithm>
+#include <cmath>
 #include <unordered_map>
 #include <vector>
 
@@ -321,6 +322,74 @@ void image(cairo_t* cr, cairo_surface_t* img, const Rect& r, float radius, float
     if (alpha >= 0.999f) cairo_paint(cr);
     else cairo_paint_with_alpha(cr, alpha);
     cairo_restore(cr);
+}
+
+void image_mono(cairo_t* cr, cairo_surface_t* img, const Rect& r, float radius, const Color& tint, float alpha) {
+    if (!img || r.empty()) return;
+    int iw = cairo_image_surface_get_width(img), ih = cairo_image_surface_get_height(img);
+    if (iw <= 0 || ih <= 0) return;
+
+    cairo_surface_t* src_surf = img;
+    bool free_src = false;
+    if (cairo_surface_get_type(img) != CAIRO_SURFACE_TYPE_IMAGE || cairo_image_surface_get_data(img) == nullptr) {
+        src_surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, iw, ih);
+        cairo_t* tmp_cr = cairo_create(src_surf);
+        cairo_set_source_surface(tmp_cr, img, 0, 0);
+        cairo_paint(tmp_cr);
+        cairo_destroy(tmp_cr);
+        free_src = true;
+    }
+    cairo_surface_flush(src_surf);
+
+    int src_stride = cairo_image_surface_get_stride(src_surf);
+    const unsigned char* src_data = cairo_image_surface_get_data(src_surf);
+    if (!src_data) {
+        if (free_src) cairo_surface_destroy(src_surf);
+        return;
+    }
+
+    cairo_surface_t* mono = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, iw, ih);
+    int dst_stride = cairo_image_surface_get_stride(mono);
+    unsigned char* dst_data = cairo_image_surface_get_data(mono);
+
+    for (int y = 0; y < ih; ++y) {
+        const uint32_t* src_row = reinterpret_cast<const uint32_t*>(src_data + y * src_stride);
+        uint32_t* dst_row = reinterpret_cast<uint32_t*>(dst_data + y * dst_stride);
+        for (int x = 0; x < iw; ++x) {
+            uint32_t px = src_row[x];
+            uint32_t a = (px >> 24) & 0xff;
+            if (a == 0) {
+                dst_row[x] = 0;
+                continue;
+            }
+            float pr = float((px >> 16) & 0xff);
+            float pg = float((px >> 8) & 0xff);
+            float pb = float(px & 0xff);
+            float lum = (0.2126f * pr + 0.7152f * pg + 0.0722f * pb) / float(a);
+            float shade = 0.32f + 0.68f * lum;
+            uint32_t nr = std::clamp(int(std::lround(a * shade * tint.r)), 0, int(a));
+            uint32_t ng = std::clamp(int(std::lround(a * shade * tint.g)), 0, int(a));
+            uint32_t nb = std::clamp(int(std::lround(a * shade * tint.b)), 0, int(a));
+            dst_row[x] = (a << 24) | (nr << 16) | (ng << 8) | nb;
+        }
+    }
+    cairo_surface_mark_dirty(mono);
+
+    cairo_save(cr);
+    rrect(cr, r, radius);
+    cairo_clip(cr);
+    double s = std::max(r.w / iw, r.h / ih);  // cover
+    double dw = iw * s, dh = ih * s;
+    cairo_translate(cr, r.x + (r.w - dw) / 2.0, r.y + (r.h - dh) / 2.0);
+    cairo_scale(cr, s, s);
+    cairo_set_source_surface(cr, mono, 0, 0);
+    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+    if (alpha >= 0.999f) cairo_paint(cr);
+    else cairo_paint_with_alpha(cr, alpha);
+    cairo_restore(cr);
+
+    cairo_surface_destroy(mono);
+    if (free_src) cairo_surface_destroy(src_surf);
 }
 
 void ring(cairo_t* cr, float cx, float cy, float radius, float width, float frac, const Color& fg, const Color& track) {

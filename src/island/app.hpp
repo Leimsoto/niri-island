@@ -415,6 +415,10 @@ private:
     std::vector<Cap> side_caps(bool left) const;
     float caps_span(const std::vector<Cap>& caps, float gap) const;
     std::vector<Rect> side_rects(bool left) const;
+    std::vector<Window> open_windows() const;
+    std::string window_icon_key(const Window& w) const;
+    mutable bool apps_hovered_ = false;
+    mutable Rect apps_hit_area_{};
     void draw_module(cairo_t* cr, Ui& u, const std::string& id, const Rect& r, float origin);
     void draw_cap(cairo_t* cr, Ui& u, const Rect& r, const Cap& c, float origin, bool background);
     void draw_side(cairo_t* cr, bool left);

@@ -179,6 +179,15 @@ float App::module_w(const std::string& id) const {
     }
     if (id == "notifications" || id == "network" || id == "volume") return 26;
     if (starts_with(id, "perf")) return perf_width(perf_metrics_of(id));
+    if (starts_with(id, "apps:")) return bar_h();
+    if (id == "apps") {
+        auto wins = open_windows();
+        if (wins.empty()) return 0;
+        size_t limit = static_cast<size_t>(std::max(1, config().apps_limit));
+        bool expand = apps_hovered_ || wins.size() <= limit;
+        size_t shown = expand ? wins.size() : std::min(wins.size(), limit);
+        return shown * 24.0f + (shown > 0 ? (shown - 1) * 6.0f : 0.0f) + 18.0f;
+    }
     return 0;
 }
 
@@ -284,6 +293,26 @@ std::vector<App::Cap> App::side_caps(bool left) const {
             }
             continue;
         }
+        if (m.id == "apps") {
+            auto wins = open_windows();
+            if (wins.empty()) {
+                apps_hovered_ = false;
+                apps_hit_area_ = {};
+                continue;
+            }
+            size_t limit = static_cast<size_t>(std::max(1, config().apps_limit));
+            bool expand = apps_hovered_ || wins.size() <= limit;
+            if (config().apps_split) {
+                size_t count = expand ? wins.size() : std::min(wins.size(), limit);
+                for (size_t i = 0; i < count; ++i) {
+                    std::string sub = "apps:" + std::to_string(wins[i].id);
+                    caps.push_back({{sub}, false, module_w(sub)});
+                }
+            } else {
+                caps.push_back({{"apps"}, false, module_w("apps")});
+            }
+            continue;
+        }
         float w = module_w(m.id);
         if (w <= 0) continue;
         if (joined_module(m.id)) {
@@ -338,6 +367,84 @@ void App::draw_module(cairo_t* cr, Ui& u, const std::string& id, const Rect& r, 
         else glyph(cr, r.x + 22, r.cy(), "󰣆", 13, p.text_dim);
         text(cr, r.x + 40, r.cy() - 8, title, {ui(12, "SemiBold"), p.text, Align::Left, r.w - 54});
         u.add(ID("mod.window"), r).click([this] { niri_.action(R"({"Action":{"ToggleOverview":{}}})"); });
+        return;
+    }
+    if (id == "apps" || starts_with(id, "apps:")) {
+        if (!apps_hovered_) {
+            apps_hit_area_ = apps_hit_area_.empty() ? r : apps_hit_area_.unite(r);
+            if (u.inside() && r.inset(-2, -2).contains(u.px(), u.py())) {
+                apps_hovered_ = true;
+                request();
+            }
+        } else {
+            apps_hit_area_ = apps_hit_area_.empty() ? r : apps_hit_area_.unite(r);
+            if (!u.inside() || !apps_hit_area_.inset(-10, -8).contains(u.px(), u.py())) {
+                apps_hovered_ = false;
+                apps_hit_area_ = {};
+                request();
+            }
+        }
+
+        auto draw_win_slot = [&](const Window& win, const Rect& box_r, float rad, bool is_capsule) {
+            Rect icon_rect{box_r.cx() - 9.0f, box_r.cy() - 9.0f, 18.0f, 18.0f};
+            uint64_t mid = ID("mod.app", static_cast<int64_t>(win.id));
+            float hv = u.hover(mid);
+            auto fill_bg = [&](const Color& c) {
+                if (c.a <= 0.001f || box_r.empty()) return;
+                if (is_capsule && sides_docked()) {
+                    island_outline(cr, box_r, rad, true);
+                    set(cr, c);
+                    cairo_fill(cr);
+                } else {
+                    fill(cr, box_r, rad, c);
+                }
+            };
+            if (win.focused) {
+                fill_bg(p.text.with_alpha(0.12f));
+                fill(cr, {box_r.cx() - 4.0f, box_r.bottom() - 3.0f, 8.0f, 2.0f}, 1.0f, p.accent);
+            }
+            if (hv > 0.01f) fill_bg(p.text.with_alpha(0.08f * hv));
+            cairo_surface_t* icon = win.app_id.empty() ? nullptr : ImageCache::get().request(window_icon_key(win), 40);
+            if (icon) {
+                paint::image_mono(cr, icon, icon_rect, 4, win.focused ? p.text : mix(p.text_dim, p.text, hv),
+                                  win.focused ? 1.0f : (0.75f + 0.25f * hv));
+            } else {
+                glyph(cr, icon_rect.cx(), icon_rect.cy(), "󰣆", 14, win.focused ? p.text : p.text_dim);
+            }
+            u.add(mid, box_r)
+                .click([this, wid = win.id] { niri_.focus_window(wid); })
+                .middle([this, wid = win.id] {
+                    niri_.action("{\"Action\":{\"CloseWindow\":{\"id\":" + std::to_string(wid) + "}}}");
+                })
+                .right([this] { niri_.action(R"({"Action":{"ToggleOverview":{}}})"); });
+        };
+
+        if (id == "apps") {
+            auto wins = open_windows();
+            if (wins.empty()) return;
+            size_t limit = static_cast<size_t>(std::max(1, config().apps_limit));
+            bool expand = apps_hovered_ || wins.size() <= limit;
+            size_t count = expand ? wins.size() : std::min(wins.size(), limit);
+            float x = r.x + 9.0f;
+            for (size_t i = 0; i < count; ++i) {
+                Rect slot_r{x, r.cy() - 12.0f, 24.0f, 24.0f};
+                draw_win_slot(wins[i], slot_r, 6.0f, false);
+                x += 24.0f + 6.0f;
+            }
+            return;
+        }
+
+        uint64_t wid = 0;
+        try {
+            wid = std::stoull(id.substr(5));
+        } catch (...) {
+            return;
+        }
+        const auto& wins_map = niri_.windows();
+        auto it = wins_map.find(wid);
+        if (it == wins_map.end()) return;
+        float rad = corner(r.h, false);
+        draw_win_slot(it->second, r, rad, true);
         return;
     }
     if (starts_with(id, "perf")) {

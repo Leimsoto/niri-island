@@ -177,6 +177,8 @@ static size_t left_count(const std::vector<ModuleConf>& ms) {
 
 // What the options inside a module's card are called, for the search.
 std::string App::module_option_words(const std::string& id) const {
+    if (id == "apps")
+        return "aplicaciones abiertas ventanas iconos incoloros monocromo cápsulas juntas separadas límite";
     if (id == "perf")
         return "monitor rendimiento procesador cpu memoria ram temperatura red disco swap intercambio estilo números "
                "anillos cápsulas juntas separadas";
@@ -185,6 +187,7 @@ std::string App::module_option_words(const std::string& id) const {
 }
 
 float App::module_options_h(const std::string& id) const {
+    if (id == "apps") return 88.0f;
     if (id == "perf") return 140;
     if (id == "battery") return 44;
     return 0;
@@ -255,6 +258,35 @@ void App::draw_module_options(cairo_t* cr, Ui& u, const std::string& id, const R
                     save_config_soon();
                 });
         }
+        return;
+    }
+    if (id == "apps") {
+        text(cr, area.x, area.y + 12, "Cápsulas", {ui(12), p.text_dim, Align::Left});
+        const char* split[2] = {"Juntas", "Separadas"};
+        for (int k = 0; k < 2; ++k) {
+            bool on = cfg.apps_split == (k == 1);
+            w::pill(c, ID("set.apps.split", k), {area.x + 86 + k * 106, area.y + 4, 100, 30}, split[k], nullptr,
+                    on ? w::Style::Accent : w::Style::Plain, 11.5f)
+                .click([this, k] {
+                    config().apps_split = k == 1;
+                    save_config_soon();
+                });
+        }
+        text(cr, area.x, area.y + 54, "Límite", {ui(12), p.text_dim, Align::Left});
+        static const int limits[] = {3, 4, 5, 6, 8};
+        float x = area.x + 86;
+        for (int k = 0; k < 5; ++k) {
+            int lim = limits[k];
+            bool on = cfg.apps_limit == lim;
+            std::string label = std::to_string(lim);
+            w::pill(c, ID("set.apps.lim", k), {x + k * 46, area.y + 46, 40, 30}, label.c_str(), nullptr,
+                    on ? w::Style::Accent : w::Style::Plain, 11.5f)
+                .click([this, lim] {
+                    config().apps_limit = lim;
+                    save_config_soon();
+                });
+        }
+        return;
     }
 }
 
@@ -266,6 +298,7 @@ void App::draw_modules_editor(cairo_t* cr, Ui& u, const Rect& card) {
     for (auto& [id, sp] : mod_open_) sp.update(1.0f / 60.0f);
     static const std::map<std::string, std::pair<const char*, const char*>> names = {
         {"workspaces", {"󰕰", "Espacios de trabajo"}}, {"window", {"󰖯", "Ventana activa"}},
+        {"apps", {"󰀻", "Aplicaciones abiertas"}},
         {"search", {"󰍉", "Buscador"}},                {"tray", {"󰀻", "Bandeja del sistema"}},
         {"perf", {"󰓅", "Monitor de rendimiento"}},
         {"notifications", {"󰂚", "Notificaciones"}},   {"network", {"󰤨", "Red"}},

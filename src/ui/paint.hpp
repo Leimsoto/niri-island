@@ -58,6 +58,7 @@ size_t index_at_xy(std::string_view s, const Text& t, float x, float y);
 void glyph(cairo_t* cr, float cx, float cy, std::string_view g, float size, const Color& c);
 
 void image(cairo_t* cr, cairo_surface_t* img, const Rect& r, float radius, float alpha = 1.0f);
+void image_mono(cairo_t* cr, cairo_surface_t* img, const Rect& r, float radius, const Color& tint, float alpha = 1.0f);
 void ring(cairo_t* cr, float cx, float cy, float radius, float width, float frac, const Color& fg, const Color& track);
 void bar(cairo_t* cr, const Rect& r, float frac, const Color& fg, const Color& track);
 void sparkline(cairo_t* cr, const Rect& r, const std::vector<float>& values, const Color& c, bool filled = true);

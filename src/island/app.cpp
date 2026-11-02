@@ -534,6 +534,7 @@ void App::on_view_enter(View v) {
             sel_ = 0;
             clip_items_.clear();
             launcher_scroll_.reset(0);
+            apps_.check_rescan();
             refresh_launcher();
             break;
         case View::Stats: sysmon_.sample(); break;
@@ -773,6 +774,52 @@ void App::anchor_at(float screen_x) {
     anchor_pending_ = true;
 }
 
+std::vector<Window> App::open_windows() const {
+    std::vector<Window> wins;
+    wins.reserve(niri_.windows().size());
+    for (const auto& [id, win] : niri_.windows()) {
+        if (id == 0 || win.id == 0) continue;
+        wins.push_back(win);
+    }
+    std::map<uint64_t, int> ws_order;
+    for (const auto& ws : niri_.output_workspaces()) {
+        ws_order[ws.id] = ws.idx;
+    }
+    auto ws_idx = [&](uint64_t wsid) -> int {
+        auto it = ws_order.find(wsid);
+        return it != ws_order.end() ? it->second : 999999;
+    };
+    std::sort(wins.begin(), wins.end(), [&](const Window& a, const Window& b) {
+        int ia = ws_idx(a.workspace);
+        int ib = ws_idx(b.workspace);
+        if (ia != ib) return ia < ib;
+        return a.id < b.id;
+    });
+    return wins;
+}
+
+std::string App::window_icon_key(const Window& w) const {
+    if (w.app_id.empty()) return "";
+    std::string app_low = lower(w.app_id);
+    std::string app_tail = app_low;
+    auto dot = app_low.rfind('.');
+    if (dot != std::string::npos && dot + 1 < app_low.size()) {
+        app_tail = app_low.substr(dot + 1);
+    }
+    for (const auto& e : apps_.all()) {
+        std::string eid = lower(e.id);
+        std::string etail = eid;
+        auto edot = eid.rfind('.');
+        if (edot != std::string::npos && edot + 1 < eid.size()) {
+            etail = eid.substr(edot + 1);
+        }
+        if (eid == app_low || etail == app_low || eid == app_tail || etail == app_tail) {
+            if (!e.icon.empty()) return "icon:" + e.icon;
+        }
+    }
+    return "icon:" + w.app_id;
+}
+
 std::string App::bar_signature() const {
     if (bar_layout() != "spread") return "";
     std::string s;
@@ -795,6 +842,12 @@ std::string App::bar_signature() const {
     s += buf;
     for (auto& m : config().modules) s += m.id + m.side + (m.on ? "1" : "0");
     if (fullscreen_hide()) s += "|fs";
+    auto wins = open_windows();
+    s += "|apps:" + std::to_string(wins.size()) + (apps_hovered_ ? "h" : "") + (config().apps_split ? "s" : "j") +
+         std::to_string(config().apps_limit) + ":";
+    for (const auto& w : wins) {
+        s += std::to_string(w.id) + (w.focused ? "f" : "") + ",";
+    }
     if (perf_on()) {
         const auto& st = sysmon_.stats();
         snprintf(buf, sizeof(buf), "|%d,%d,%d,%d,%d,%d,%d", static_cast<int>(st.cpu), static_cast<int>(st.gpu), static_cast<int>(st.ram),

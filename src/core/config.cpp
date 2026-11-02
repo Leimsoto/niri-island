@@ -63,6 +63,8 @@ void Config::load() {
         get(*a, "perf_metrics", c.perf_metrics);
         get(*a, "perf_style", c.perf_style);
         get(*a, "perf_split", c.perf_split);
+        get(*a, "apps_split", c.apps_split);
+        get(*a, "apps_limit", c.apps_limit);
         if (auto m = a->find("modules"); m != a->end() && m->is_array()) {
             std::vector<ModuleConf> mods;
             for (auto& e : *m) {
@@ -158,14 +160,16 @@ void Config::load() {
     c.shadow_softness = std::clamp(c.shadow_softness, 2.0f, 48.0f);
     c.shadow_distance = std::clamp(c.shadow_distance, 0.0f, 24.0f);
     c.island_opacity = std::clamp(c.island_opacity, 0.3f, 1.0f);
+    c.apps_limit = std::clamp(c.apps_limit, 1, 20);
     *this = c;
 }
 
 std::vector<ModuleConf> Config::default_modules() {
-    return {{"workspaces", "left", true},   {"window", "left", true},     {"search", "left", false},
-            {"perf", "right", false},       {"tray", "right", true},      {"notifications", "right", true},
-            {"network", "right", true},
-            {"bluetooth", "right", true},   {"volume", "right", true},    {"battery", "right", true}};
+    return {{"workspaces", "left", true},   {"window", "left", true},     {"apps", "left", true},
+            {"search", "left", false},      {"perf", "right", false},     {"tray", "right", true},
+            {"notifications", "right", true},
+            {"network", "right", true},     {"bluetooth", "right", true}, {"volume", "right", true},
+            {"battery", "right", true}};
 }
 
 std::string Config::to_json() const {
@@ -228,6 +232,8 @@ std::string Config::to_json() const {
     j["appearance"]["perf_metrics"] = perf_metrics;
     j["appearance"]["perf_style"] = perf_style;
     j["appearance"]["perf_split"] = perf_split;
+    j["appearance"]["apps_split"] = apps_split;
+    j["appearance"]["apps_limit"] = apps_limit;
     j["suite"] = {{"wallpaper_dirs", wallpaper_dirs},
                   {"screenshot_dir", screenshot_dir},
                   {"wallhaven_dir", wallhaven_dir},

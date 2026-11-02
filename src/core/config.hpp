@@ -33,6 +33,8 @@ struct Config {
     std::vector<std::string> perf_metrics = {"cpu", "ram", "temp"};  // cpu ram temp net disk swap
     std::string perf_style = "numbers";      // numbers | rings
     bool perf_split = false;                 // one capsule per metric
+    bool apps_split = true;                  // true: one capsule per open app; false: one shared capsule
+    int apps_limit = 5;                      // max open apps shown before hover expands the rest
     static std::vector<ModuleConf> default_modules();
     std::string bar_layout = "grouped";      // grouped (round the island) | spread (to the edges) | island (one capsule)
     std::string island_style = "floating";
